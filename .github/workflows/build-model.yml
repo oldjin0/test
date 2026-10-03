@@ -1,0 +1,43 @@
+name: Build colorizer model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ccr-4d8e098a-xfwocj]
+    paths: [tools/model/**, .github/workflows/build-model.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install converters
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install tensorflow-cpu pillow scikit-image numpy ipython matplotlib
+      - name: Fetch official ECCV16 code
+        run: git clone --depth 1 https://github.com/richzhang/colorization /tmp/colorization
+      - name: Convert and verify against PyTorch
+        working-directory: tools/model
+        env:
+          PYTHONPATH: /tmp/colorization
+        run: python convert.py --official --out ../../assets/models/colorizer.tflite
+      - name: Preview on sample images
+        working-directory: tools/model
+        run: |
+          python fetch_samples.py /tmp/samples
+          mkdir -p ../../docs
+          python preview.py ../../assets/models/colorizer.tflite ../../docs/colorize_preview.png /tmp/samples/*
+      - name: Commit model
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/models/colorizer.tflite docs/colorize_preview.png
+          git diff --cached --quiet || git commit -m "Add converted ECCV16 colorizer.tflite and preview"
+          git push
