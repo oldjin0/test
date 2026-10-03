@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'colorizer.dart';
 import 'comic_loader.dart';
 
 class ViewerPage extends StatefulWidget {
@@ -16,8 +17,38 @@ class _ViewerPageState extends State<ViewerPage> {
   bool _rtl = true;
   bool _dual = false;
   bool _loading = false;
+  bool _colorize = false;
+  int _current = 0;
   String? _title;
+  Uint8List? _modelBytes;
+  ColorizeCache? _cache;
   final _controller = PageController();
+
+  @override
+  void initState() {
+    super.initState();
+    loadModelBytes().then((b) => _modelBytes = b);
+  }
+
+  /// Colorizes the visible spread and prefetches the next one in the background.
+  void _warm() {
+    final cache = _cache;
+    if (!_colorize || cache == null) return;
+    final sp = _spreads;
+    for (final s in [_current, _current + 1]) {
+      if (s < sp.length) cache.prefetch(sp[s]);
+    }
+    cache.evictOutside(sp[(_current - 2).clamp(0, sp.length - 1)].first,
+        sp[(_current + 3).clamp(0, sp.length - 1)].last);
+  }
+
+  void _toggleColorize() {
+    setState(() {
+      _colorize = !_colorize;
+      _cache ??= _pages.isEmpty ? null : ColorizeCache(_pages, _modelBytes);
+    });
+    _warm();
+  }
 
   /// Page groups: one image per spread in single mode, two in dual mode.
   List<List<int>> get _spreads {
@@ -45,7 +76,10 @@ class _ViewerPageState extends State<ViewerPage> {
         setState(() {
           _pages = pages;
           _title = file.name;
+          _current = 0;
+          _cache = ColorizeCache(pages, _modelBytes);
         });
+        _warm();
         if (_controller.hasClients) _controller.jumpToPage(0);
       }
     } catch (e) {
@@ -59,8 +93,12 @@ class _ViewerPageState extends State<ViewerPage> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   void _toggleDual() {
-    setState(() => _dual = !_dual);
+    setState(() {
+      _dual = !_dual;
+      _current = 0;
+    });
     if (_controller.hasClients) _controller.jumpToPage(0);
+    _warm();
   }
 
   @override
@@ -86,6 +124,11 @@ class _ViewerPageState extends State<ViewerPage> {
             onPressed: _toggleDual,
           ),
           IconButton(
+            tooltip: _colorize ? '컬러링 ON' : '컬러링 OFF',
+            icon: Icon(_colorize ? Icons.palette : Icons.palette_outlined),
+            onPressed: _toggleColorize,
+          ),
+          IconButton(
             tooltip: '파일 열기',
             icon: const Icon(Icons.folder_open),
             onPressed: _pick,
@@ -100,12 +143,29 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
+  Widget _pageImage(int p) {
+    final original = _pages[p];
+    Widget img(Uint8List b) =>
+        Image.memory(b, fit: BoxFit.contain, gaplessPlayback: true);
+    final cache = _cache;
+    if (!_colorize || cache == null) return img(original);
+    // Show the original until the colorized page is ready.
+    return FutureBuilder<Uint8List>(
+      future: cache.get(p),
+      builder: (context, snap) => img(snap.data ?? original),
+    );
+  }
+
   Widget _buildPager() {
     final spreads = _spreads;
     return PageView.builder(
       controller: _controller,
       reverse: _rtl,
       itemCount: spreads.length,
+      onPageChanged: (i) {
+        _current = i;
+        _warm();
+      },
       itemBuilder: (context, i) {
         var idx = spreads[i];
         // In RTL dual mode the first page sits on the right side.
@@ -115,7 +175,7 @@ class _ViewerPageState extends State<ViewerPage> {
             children: [
               for (final p in idx)
                 Expanded(
-                  child: Image.memory(_pages[p], fit: BoxFit.contain, gaplessPlayback: true),
+                  child: _pageImage(p),
                 ),
             ],
           ),
