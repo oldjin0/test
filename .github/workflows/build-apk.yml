@@ -69,11 +69,12 @@ jobs:
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           OUT=$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1) || { echo "$OUT"; exit 1; }
           echo "$OUT" | grep -iE "verifies|certificate (DN|SHA-256)" || echo "$OUT"
-          norm() { tr -d ': ' | tr 'A-F' 'a-f'; }
-          APK_FP=$(echo "$OUT" | grep -m1 -i "certificate SHA-256 digest" | sed 's/^[^:]*: *//' | norm)
+          # The 64 hex digits of a SHA-256 digest, whatever text or colons surround them.
+          hex64() { tr -d ':' | grep -oiE '[0-9a-f]{64}' | head -1 | tr 'A-F' 'a-f'; }
+          APK_FP=$(echo "$OUT" | grep -m1 -i "SHA-256 digest" | hex64)
           KEY_FP=$(keytool -list -keystore android/app/upload-keystore.jks \
             -storepass "$(grep '^storePassword=' android/key.properties | cut -d= -f2-)" \
-            | grep -m1 "SHA-256" | sed 's/^[^:]*: *//' | norm)
+            | grep -m1 "SHA-256" | hex64)
           echo "APK signer SHA-256: $APK_FP"
           echo "Stored key SHA-256: $KEY_FP"
           test -n "$APK_FP" && test "$APK_FP" = "$KEY_FP"
