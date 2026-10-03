@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import 'package:integration_test/integration_test.dart';
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/colorizer.dart';
+import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
 import 'package:manga_viewer/viewer_page.dart';
@@ -115,17 +116,25 @@ void main() {
     final first = await service.colorize(ColorizeService.keyFor(path, 0), samplePage(0));
     expect(first.mode, ColorizeMode.ai);
 
-    // Default reading direction is right-to-left: swipe right for the next page.
-    await tester.fling(find.byType(PageView), const Offset(600, 0), 2000);
-    await tester.pumpAndSettle(const Duration(milliseconds: 300));
+    // Defaults: right-to-left with the page-curl effect. Dragging right turns forward.
+    expect(store.curl, isTrue);
+    await tester.drag(find.byType(CurlPageView), const Offset(250, 0));
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
     expect(store.progressOf(path)!.page, 1);
 
     await tester.tap(find.byTooltip('북마크'));
     await tester.pump();
     expect(store.isBookmarked(path, 1), isTrue);
 
+    // Slide mode still works after switching effects.
+    store.setCurl(false);
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    await tester.fling(find.byType(PageView), const Offset(250, 0), 2000);
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    expect(store.progressOf(path)!.page, 2);
+
     final reopened = await LibraryStore.load();
-    expect(reopened.progressOf(path)!.page, 1);
+    expect(reopened.progressOf(path)!.page, 2);
     expect(reopened.bookmarksOf(path).single.page, 1);
   });
 }

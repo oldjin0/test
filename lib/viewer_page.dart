@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'colorize_service.dart';
 import 'colorizer.dart';
 import 'comic_loader.dart';
+import 'curl_page_view.dart';
 import 'library_store.dart';
 import 'storage.dart';
 
@@ -97,14 +98,26 @@ class _ViewerPageState extends State<ViewerPage> {
 
   void _jumpTo(int page) {
     final spread = page ~/ _step;
-    _controller?.jumpToPage(spread);
+    if (!_store.curl && (_controller?.hasClients ?? false)) _controller!.jumpToPage(spread);
     _onPageChanged(spread);
+  }
+
+  /// The slide view's controller must start at the current page when the
+  /// view is (re)created, e.g. after switching away from the curl effect.
+  void _resetController() {
+    _controller?.dispose();
+    _controller = PageController(initialPage: _page ~/ _step);
+  }
+
+  void _toggleCurl() {
+    _store.setCurl(!_store.curl);
+    setState(_resetController);
   }
 
   void _toggleDual() {
     _store.setDual(!_store.dual);
     _page -= _page % _step;
-    _controller?.jumpToPage(_page ~/ _step);
+    setState(_resetController);
     _warm();
   }
 
@@ -231,23 +244,34 @@ class _ViewerPageState extends State<ViewerPage> {
                   onPressed: _showBookmarks,
                 ),
                 IconButton(
-                  tooltip: _store.rtl ? '우→좌 (RTL)' : '좌→우 (LTR)',
-                  icon: Icon(
-                    _store.rtl
-                        ? Icons.format_textdirection_r_to_l
-                        : Icons.format_textdirection_l_to_r,
-                  ),
-                  onPressed: () => _store.setRtl(!_store.rtl),
-                ),
-                IconButton(
-                  tooltip: _store.dual ? '양면 보기' : '단면 보기',
-                  icon: Icon(_store.dual ? Icons.menu_book : Icons.crop_portrait),
-                  onPressed: _toggleDual,
-                ),
-                IconButton(
                   tooltip: _store.colorize ? '자동 채색 ON' : '자동 채색 OFF',
                   icon: Icon(_store.colorize ? Icons.palette : Icons.palette_outlined),
                   onPressed: _toggleColorize,
+                ),
+                PopupMenuButton<String>(
+                  tooltip: '보기 설정',
+                  onSelected: (v) => switch (v) {
+                    'rtl' => _store.setRtl(!_store.rtl),
+                    'dual' => _toggleDual(),
+                    _ => _toggleCurl(),
+                  },
+                  itemBuilder: (context) => [
+                    CheckedPopupMenuItem(
+                      value: 'rtl',
+                      checked: _store.rtl,
+                      child: const Text('우→좌 읽기 (일본 만화식)'),
+                    ),
+                    CheckedPopupMenuItem(
+                      value: 'dual',
+                      checked: _store.dual,
+                      child: const Text('양면 보기'),
+                    ),
+                    CheckedPopupMenuItem(
+                      value: 'curl',
+                      checked: _store.curl,
+                      child: const Text('책 넘김 효과'),
+                    ),
+                  ],
                 ),
               ],
             )
@@ -272,25 +296,39 @@ class _ViewerPageState extends State<ViewerPage> {
     }
     if (_pages == null) return const Center(child: CircularProgressIndicator());
     final spreads = _spreads;
+    Widget spread(int i) {
+      var idx = spreads[i];
+      // In right-to-left dual mode the first page sits on the right.
+      if (_store.rtl) idx = idx.reversed.toList();
+      return ColoredBox(
+        color: Colors.black,
+        child: Row(children: [for (final p in idx) Expanded(child: _pageImage(p))]),
+      );
+    }
+
+    void toggleUi() => setState(() => _showUi = !_showUi);
+    final pager = _store.curl
+        ? CurlPageView(
+            index: _page ~/ _step,
+            itemCount: spreads.length,
+            rtl: _store.rtl,
+            onPageChanged: _onPageChanged,
+            onTapCenter: toggleUi,
+            itemBuilder: (context, i) => spread(i),
+          )
+        : GestureDetector(
+            onTap: toggleUi,
+            child: PageView.builder(
+              controller: _controller,
+              reverse: _store.rtl,
+              itemCount: spreads.length,
+              onPageChanged: _onPageChanged,
+              itemBuilder: (context, i) => InteractiveViewer(child: spread(i)),
+            ),
+          );
     return Stack(
       children: [
-        GestureDetector(
-          onTap: () => setState(() => _showUi = !_showUi),
-          child: PageView.builder(
-            controller: _controller,
-            reverse: _store.rtl,
-            itemCount: spreads.length,
-            onPageChanged: _onPageChanged,
-            itemBuilder: (context, i) {
-              var idx = spreads[i];
-              // In right-to-left dual mode the first page sits on the right.
-              if (_store.rtl) idx = idx.reversed.toList();
-              return InteractiveViewer(
-                child: Row(children: [for (final p in idx) Expanded(child: _pageImage(p))]),
-              );
-            },
-          ),
-        ),
+        Positioned.fill(child: pager),
         Positioned(right: 12, bottom: 12, child: _status()),
       ],
     );

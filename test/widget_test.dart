@@ -8,6 +8,7 @@ import 'package:image/image.dart' as img;
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/colorizer.dart';
 import 'package:manga_viewer/comic_loader.dart';
+import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -174,6 +175,81 @@ void main() {
       expect(again.bookmarksOf('/c/a.cbz').map((b) => b.page), [9]);
       expect(again.folders, ['/c']);
       expect(again.rtl, isFalse);
+    });
+  });
+
+  group('page curl', () {
+    test('half-plane clip and fold reflection', () {
+      const rect = [Offset(0, 0), Offset(100, 0), Offset(100, 200), Offset(0, 200)];
+      final right = clipHalfPlane(rect, const Offset(60, 0), const Offset(1, 0));
+      expect(right.map((o) => o.dx).reduce((a, b) => a < b ? a : b), 60);
+      final m = reflectionAcross(const Offset(50, 0), const Offset(1, 0));
+      expect(MatrixUtils.transformPoint(m, const Offset(80, 30)), const Offset(20, 30));
+    });
+
+    test('geometry: dragging the corner lifts the free edge', () {
+      const size = Size(100, 200);
+      // Corner pulled halfway towards the spine along the bottom edge.
+      final g = CurlGeometry.compute(size, const Offset(40, 200), 200, false)!;
+      expect(g.mid, const Offset(70, 200));
+      expect(g.lifted.every((p) => p.dx >= 70 - 1e-9), isTrue);
+      // The flap lands on the spine side of the fold.
+      expect(g.flap.every((p) => p.dx <= 70 + 1e-9), isTrue);
+      // Right-to-left books lift the left edge instead.
+      final r = CurlGeometry.compute(size, const Offset(40, 200), 200, true)!;
+      expect(r.lifted.every((p) => p.dx <= 30 + 1e-9), isTrue);
+      expect(CurlGeometry.compute(size, const Offset(100, 200), 200, false), isNull);
+    });
+
+    Future<List<int>> turn(
+      WidgetTester tester, {
+      required bool rtl,
+      required Offset drag,
+      int start = 0,
+    }) async {
+      final changes = <int>[];
+      var index = start;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) => CurlPageView(
+              index: index,
+              itemCount: 3,
+              rtl: rtl,
+              onPageChanged: (i) => setState(() {
+                changes.add(i);
+                index = i;
+              }),
+              itemBuilder: (context, i) => Center(child: Text('page $i')),
+            ),
+          ),
+        ),
+      );
+      await tester.drag(find.byType(CurlPageView), drag);
+      await tester.pumpAndSettle();
+      return changes;
+    }
+
+    testWidgets('left-to-right: drag left turns forward', (tester) async {
+      expect(await turn(tester, rtl: false, drag: const Offset(-500, 0)), [1]);
+      expect(find.text('page 1'), findsOneWidget);
+    });
+
+    testWidgets('right-to-left: drag right turns forward', (tester) async {
+      expect(await turn(tester, rtl: true, drag: const Offset(500, 0)), [1]);
+    });
+
+    testWidgets('dragging back returns to the previous page', (tester) async {
+      expect(await turn(tester, rtl: false, drag: const Offset(500, 0), start: 2), [1]);
+    });
+
+    testWidgets('a short drag snaps back', (tester) async {
+      expect(await turn(tester, rtl: false, drag: const Offset(-60, 0)), isEmpty);
+      expect(find.text('page 0'), findsOneWidget);
+    });
+
+    testWidgets('no turn past the last page', (tester) async {
+      expect(await turn(tester, rtl: false, drag: const Offset(-500, 0), start: 2), isEmpty);
     });
   });
 

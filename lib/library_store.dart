@@ -65,6 +65,9 @@ class LibraryStore extends ChangeNotifier {
   bool dual = false;
   bool colorize = true;
 
+  /// Page-curl ("book") turning instead of sliding.
+  bool curl = true;
+
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());
     s._read();
@@ -82,6 +85,7 @@ class LibraryStore extends ChangeNotifier {
     rtl = p.getBool('rtl') ?? rtl;
     dual = p.getBool('dual') ?? dual;
     colorize = p.getBool('colorize') ?? colorize;
+    curl = p.getBool('curl') ?? curl;
   }
 
   static List<Map<String, dynamic>> _decodeList(String? raw) {
@@ -101,6 +105,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('rtl', rtl);
     _prefs.setBool('dual', dual);
     _prefs.setBool('colorize', colorize);
+    _prefs.setBool('curl', curl);
   }
 
   // Settings
@@ -117,6 +122,11 @@ class LibraryStore extends ChangeNotifier {
 
   void setColorize(bool v) {
     colorize = v;
+    _changed();
+  }
+
+  void setCurl(bool v) {
+    curl = v;
     _changed();
   }
 
