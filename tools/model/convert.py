@@ -11,7 +11,7 @@ TFLite contract used by the app (lib/colorizer.dart):
   output: [1, S/4, S/4, 2] float32, CIE a*, b*  (Lab units)
 
 Usage:
-  python convert.py --official --out ../../assets/models/colorizer.tflite
+  python convert.py --official --out ../../assets/models/colorizer.tflite  # fp16
   python convert.py --random   # layout self-test with random weights
 """
 
@@ -124,10 +124,14 @@ def build_keras(model, size=SIZE):
     return tf.keras.Model(inp, out)
 
 
-def to_tflite(keras_model, quantize=True):
+def to_tflite(keras_model, precision="fp16"):
+    """fp16: float16 weights, fully handled by the XNNPACK CPU delegate on Android.
+    int8: dynamic-range weights; half the size, but its hybrid convolutions are
+    not delegated to XNNPACK on Android and ran ~100x slower on device."""
     conv = tf.lite.TFLiteConverter.from_keras_model(keras_model)
-    if quantize:
-        conv.optimizations = [tf.lite.Optimize.DEFAULT]  # int8 weights, float activations
+    conv.optimizations = [tf.lite.Optimize.DEFAULT]
+    if precision == "fp16":
+        conv.target_spec.supported_types = [tf.float16]
     return conv.convert()
 
 
@@ -164,6 +168,7 @@ def main():
     g.add_argument("--random", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--size", type=int, default=SIZE)
+    ap.add_argument("--precision", choices=["fp16", "int8"], default="fp16")
     args = ap.parse_args()
 
     model = ECCV16().eval()
@@ -181,7 +186,7 @@ def main():
                 m.bias.data.uniform_(-0.2, 0.2)
 
     keras_model = build_keras(model, args.size)
-    blob = to_tflite(keras_model)
+    blob = to_tflite(keras_model, args.precision)
     d_keras, d_lite = check_parity(model, keras_model, blob, args.size)
     assert d_keras < 1e-2, "Keras port does not match PyTorch"
     assert d_lite < 2.0, "quantized TFLite drifts too far from PyTorch"

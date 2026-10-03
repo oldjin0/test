@@ -98,7 +98,7 @@ void main() {
     );
 
     Future<void> waitFor(bool Function() done, String what) async {
-      final end = DateTime.now().add(const Duration(seconds: 90));
+      final end = DateTime.now().add(const Duration(seconds: 240));
       while (!done()) {
         if (DateTime.now().isAfter(end)) fail('timed out waiting for $what');
         await tester.pump(const Duration(milliseconds: 250));

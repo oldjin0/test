@@ -44,12 +44,27 @@ abstract class AbModel {
 
 /// [AbModel] backed by the bundled TFLite network (see tools/model/convert.py).
 class TfliteAbModel implements AbModel {
-  TfliteAbModel(Uint8List modelBytes, {int threads = 4})
-    : _it = Interpreter.fromBuffer(modelBytes, options: InterpreterOptions()..threads = threads) {
+  factory TfliteAbModel(Uint8List modelBytes, {int threads = 4}) {
+    // XNNPACK is the fast CPU path for float models; fall back to the plain
+    // interpreter if the delegate cannot be created on this device.
+    XNNPackDelegate? xnn;
+    final options = InterpreterOptions()..threads = threads;
+    try {
+      xnn = XNNPackDelegate(options: XNNPackDelegateOptions(numThreads: threads));
+      options.addDelegate(xnn);
+      return TfliteAbModel._(Interpreter.fromBuffer(modelBytes, options: options), xnn);
+    } catch (_) {
+      xnn?.delete();
+      final plain = InterpreterOptions()..threads = threads;
+      return TfliteAbModel._(Interpreter.fromBuffer(modelBytes, options: plain), null);
+    }
+  }
+
+  TfliteAbModel._(this._it, this._xnn) {
     final i = _it.getInputTensor(0).shape;
     final o = _it.getOutputTensor(0).shape;
     if (i.length != 4 || i[3] != 1 || o.length != 4 || o[3] != 2) {
-      _it.close();
+      close();
       throw ArgumentError('Unexpected model shapes: in $i, out $o');
     }
     inHeight = i[1];
@@ -59,8 +74,14 @@ class TfliteAbModel implements AbModel {
   }
 
   final Interpreter _it;
+  final XNNPackDelegate? _xnn;
   @override
   late final int inWidth, inHeight, outWidth, outHeight;
+
+  bool get usesXnnpack => _xnn != null;
+
+  /// Native time of the last [predict] call.
+  int get lastInferenceMs => _it.lastNativeInferenceDurationMicroSeconds ~/ 1000;
 
   @override
   Float32List predict(Float32List l) {
@@ -71,7 +92,10 @@ class TfliteAbModel implements AbModel {
   }
 
   @override
-  void close() => _it.close();
+  void close() {
+    _it.close();
+    _xnn?.delete();
+  }
 }
 
 /// 8-bit sRGB gray value -> CIE L* / 100.

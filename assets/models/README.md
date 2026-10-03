@@ -6,5 +6,6 @@ https://github.com/richzhang/colorization (BSD-2-Clause).
 TFLite contract (NHWC, float32):
 - input:  [1, 512, 512, 1]  CIE L* / 100 (0..1)
 - output: [1, 128, 128, 2]  CIE a*, b* (Lab units)
+- weights: float16 (runs on the XNNPACK CPU delegate)
 
 Without this file the app falls back to a tone-correction filter.

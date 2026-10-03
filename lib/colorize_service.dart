@@ -9,7 +9,7 @@ import 'package:path/path.dart' as p;
 import 'colorizer.dart';
 
 /// Bump when the model or post-processing changes so stale cache files are ignored.
-const _cacheVersion = 'eccv16-v1';
+const _cacheVersion = 'eccv16-fp16-v1';
 
 /// Loads the bundled model bytes, or null when the asset is missing.
 Future<Uint8List?> loadModelBytes() async {
