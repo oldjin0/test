@@ -18,7 +18,7 @@ Future<void> main() async {
 Future<ColorizeService> startColorizer() async {
   final cache = Directory(p.join((await getApplicationCacheDirectory()).path, 'colorized'));
   await cache.create(recursive: true);
-  return ColorizeService.start(modelBytes: await loadModelBytes(), cacheDir: cache);
+  return ColorizeService.start(modelPath: await ensureModelFile(), cacheDir: cache);
 }
 
 class MangaViewerApp extends StatelessWidget {

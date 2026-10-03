@@ -47,12 +47,19 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('bundled AI model loads and colorizes on device', (tester) async {
-    final bytes = await loadModelBytes();
-    expect(bytes, isNotNull, reason: 'assets/models/colorizer.tflite must be bundled');
+    final path = await ensureModelFile();
+    expect(path, isNotNull, reason: 'assets/models/colorizer.tflite must be bundled');
     final sw = Stopwatch()..start();
-    final model = TfliteAbModel(bytes!);
+    final model = TfliteColorModel.fromFile(path!);
     final loadMs = sw.elapsedMilliseconds;
-    expect([model.inWidth, model.inHeight, model.outWidth, model.outHeight], [512, 512, 128, 128]);
+    // ignore: avoid_print
+    print(
+      'MODEL ${model.output.name} in ${model.inWidth}x${model.inHeight} '
+      'out ${model.outWidth}x${model.outHeight}',
+    );
+    expect(model.output, ModelOutput.rgb, reason: 'manga model expected');
+    expect(model.inWidth % 32, 0);
+    expect(model.inHeight % 32, 0);
 
     final page = samplePage(0);
     final gray = meanChroma(page);

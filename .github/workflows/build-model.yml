@@ -19,15 +19,20 @@ jobs:
           python-version: '3.11'
       - name: Install converters
         run: |
-          pip install --index-url https://download.pytorch.org/whl/cpu torch
-          pip install tensorflow-cpu pillow scikit-image numpy ipython matplotlib
-      - name: Fetch official ECCV16 code
-        run: git clone --depth 1 https://github.com/richzhang/colorization /tmp/colorization
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install tensorflow-cpu==2.21.0 tf_keras==2.21.0 onnx==1.23.1 onnxruntime==1.30.0 \
+            onnxsim==0.7.3 onnx2tf==1.28.8 sng4onnx onnx_graphsurgeon psutil ai_edge_litert \
+            pillow scikit-image numpy opencv-python-headless gdown
+      - name: Fetch manga-colorization-v2 code and generator weights
+        run: |
+          git clone --depth 1 https://github.com/qweasdd/manga-colorization-v2 /tmp/mcv2
+          gdown --fuzzy 'https://drive.google.com/file/d/1qmxUEKADkEM4iYLp1fpPLLKnfZ6tcF-t/view' -O /tmp/mcv2/networks/generator.zip
+          ls -la /tmp/mcv2/networks
       - name: Convert and verify against PyTorch
         working-directory: tools/model
         env:
-          PYTHONPATH: /tmp/colorization
-        run: python convert.py --official --out ../../assets/models/colorizer.tflite
+          PYTHONPATH: /tmp/mcv2
+        run: python convert_manga.py --weights /tmp/mcv2/networks/generator.zip --width 448 --out ../../assets/models/colorizer.tflite
       - name: Preview on sample images
         working-directory: tools/model
         run: |
@@ -39,5 +44,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add assets/models/colorizer.tflite docs/colorize_preview.png
-          git diff --cached --quiet || git commit -m "Add converted ECCV16 colorizer.tflite and preview"
+          git diff --cached --quiet || git commit -m "Add converted manga colorizer.tflite and preview"
           git push

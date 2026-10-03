@@ -5,11 +5,36 @@ import 'dart:isolate';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'colorizer.dart';
 
-/// Bump when the model or post-processing changes so stale cache files are ignored.
-const _cacheVersion = 'eccv16-fp16-v1';
+/// Identifies the bundled model. Bump it whenever assets/models/colorizer.tflite
+/// or the post-processing changes: it names the extracted model file and keys
+/// the page cache, so stale copies are replaced.
+const modelVersion = 'mcv2-448-fp16-v1';
+
+/// Extracts the bundled model to app storage once so the worker can
+/// memory-map it. Returns null when no model is bundled.
+Future<String?> ensureModelFile() async {
+  try {
+    final dir = await getApplicationSupportDirectory();
+    final file = File(p.join(dir.path, 'colorizer-$modelVersion.tflite'));
+    if (await file.exists() && await file.length() > 0) return file.path;
+    final bytes = await loadModelBytes();
+    if (bytes == null) return null;
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsBytes(bytes, flush: true);
+    await tmp.rename(file.path);
+    await for (final e in dir.list()) {
+      final name = p.basename(e.path);
+      if (e is File && name.startsWith('colorizer-') && e.path != file.path) await e.delete();
+    }
+    return file.path;
+  } catch (_) {
+    return null;
+  }
+}
 
 /// Loads the bundled model bytes, or null when the asset is missing.
 Future<Uint8List?> loadModelBytes() async {
@@ -49,14 +74,11 @@ class ColorizeService {
   bool modelLoaded = false;
   String? modelError;
 
-  static Future<ColorizeService> start({Uint8List? modelBytes, Directory? cacheDir}) async {
+  static Future<ColorizeService> start({String? modelPath, Directory? cacheDir}) async {
     final s = ColorizeService._(cacheDir);
     final port = ReceivePort();
     port.listen(s._onMessage);
-    await Isolate.spawn(_workerMain, [
-      port.sendPort,
-      modelBytes == null ? null : TransferableTypedData.fromList([modelBytes]),
-    ]);
+    await Isolate.spawn(_workerMain, [port.sendPort, modelPath]);
     await s._ready.future;
     if (cacheDir != null) unawaited(_pruneCache(cacheDir));
     return s;
@@ -64,7 +86,7 @@ class ColorizeService {
 
   /// Cache key for page [index] of the comic at [comicId].
   static String keyFor(String comicId, int index) =>
-      '${md5.convert(comicId.codeUnits)}_${index}_$_cacheVersion';
+      '${md5.convert(comicId.codeUnits)}_${index}_$modelVersion';
 
   /// Queues [page] and returns its colorized version (from the disk cache
   /// when possible). Queuing is synchronous so a following [focus] sees it.
@@ -192,12 +214,12 @@ bool isCancelled(Object? error) => error is _Cancelled;
 
 void _workerMain(List args) {
   final reply = args[0] as SendPort;
-  final modelTd = args[1] as TransferableTypedData?;
-  AbModel? model;
+  final modelPath = args[1] as String?;
+  ColorModel? model;
   String? error;
-  if (modelTd != null) {
+  if (modelPath != null) {
     try {
-      model = TfliteAbModel(modelTd.materialize().asUint8List());
+      model = TfliteColorModel.fromFile(modelPath);
     } catch (e) {
       error = '$e';
     }

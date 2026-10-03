@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -28,42 +29,63 @@ class ColorizeResult {
   final int millis;
 }
 
-/// Predicts CIE a*/b* chroma from CIE L*.
-abstract class AbModel {
+/// What a [ColorModel] predicts.
+enum ModelOutput {
+  /// CIE a*/b* from CIE L* input (ECCV16-style models).
+  lab,
+
+  /// RGB 0..1 from gray 0..1 input (manga-colorization-v2).
+  rgb,
+}
+
+/// A colorization network with a fixed input size.
+abstract class ColorModel {
   int get inWidth;
   int get inHeight;
   int get outWidth;
   int get outHeight;
+  ModelOutput get output;
 
-  /// [l]: inHeight*inWidth values of L*/100 (0..1), row-major.
-  /// Returns outHeight*outWidth*2 values (a*, b* interleaved, Lab units).
-  Float32List predict(Float32List l);
+  /// [input]: inHeight*inWidth values, row-major; L*/100 for [ModelOutput.lab],
+  /// gray 0..1 for [ModelOutput.rgb]. Returns outHeight*outWidth*channels values.
+  Float32List predict(Float32List input);
 
   void close() {}
 }
 
-/// [AbModel] backed by the bundled TFLite network (see tools/model/convert.py).
-class TfliteAbModel implements AbModel {
-  factory TfliteAbModel(Uint8List modelBytes, {int threads = 4}) {
+/// [ColorModel] backed by a TFLite file (see tools/model/convert_manga.py).
+class TfliteColorModel implements ColorModel {
+  /// Memory-maps [path]; the model weights are not copied into the Dart heap.
+  factory TfliteColorModel.fromFile(String path, {int threads = 4}) =>
+      _create((o) => Interpreter.fromFile(File(path), options: o), threads);
+
+  factory TfliteColorModel.fromBuffer(Uint8List bytes, {int threads = 4}) =>
+      _create((o) => Interpreter.fromBuffer(bytes, options: o), threads);
+
+  static TfliteColorModel _create(Interpreter Function(InterpreterOptions) open, int threads) {
     // XNNPACK is the fast CPU path for float models; fall back to the plain
     // interpreter if the delegate cannot be created on this device.
     XNNPackDelegate? xnn;
-    final options = InterpreterOptions()..threads = threads;
     try {
       xnn = XNNPackDelegate(options: XNNPackDelegateOptions(numThreads: threads));
-      options.addDelegate(xnn);
-      return TfliteAbModel._(Interpreter.fromBuffer(modelBytes, options: options), xnn);
+      return TfliteColorModel._(
+        open(
+          InterpreterOptions()
+            ..threads = threads
+            ..addDelegate(xnn),
+        ),
+        xnn,
+      );
     } catch (_) {
       xnn?.delete();
-      final plain = InterpreterOptions()..threads = threads;
-      return TfliteAbModel._(Interpreter.fromBuffer(modelBytes, options: plain), null);
+      return TfliteColorModel._(open(InterpreterOptions()..threads = threads), null);
     }
   }
 
-  TfliteAbModel._(this._it, this._xnn) {
+  TfliteColorModel._(this._it, this._xnn) {
     final i = _it.getInputTensor(0).shape;
     final o = _it.getOutputTensor(0).shape;
-    if (i.length != 4 || i[3] != 1 || o.length != 4 || o[3] != 2) {
+    if (i.length != 4 || i[3] != 1 || o.length != 4 || (o[3] != 2 && o[3] != 3)) {
       close();
       throw ArgumentError('Unexpected model shapes: in $i, out $o');
     }
@@ -71,12 +93,15 @@ class TfliteAbModel implements AbModel {
     inWidth = i[2];
     outHeight = o[1];
     outWidth = o[2];
+    output = o[3] == 3 ? ModelOutput.rgb : ModelOutput.lab;
   }
 
   final Interpreter _it;
   final XNNPackDelegate? _xnn;
   @override
   late final int inWidth, inHeight, outWidth, outHeight;
+  @override
+  late final ModelOutput output;
 
   bool get usesXnnpack => _xnn != null;
 
@@ -84,10 +109,10 @@ class TfliteAbModel implements AbModel {
   int get lastInferenceMs => _it.lastNativeInferenceDurationMicroSeconds ~/ 1000;
 
   @override
-  Float32List predict(Float32List l) {
-    final out = Float32List(outHeight * outWidth * 2);
-    // Raw byte buffers avoid building nested Dart lists for 512x512 tensors.
-    _it.run(l.buffer.asUint8List(), out.buffer.asUint8List());
+  Float32List predict(Float32List input) {
+    final out = Float32List(outHeight * outWidth * (output == ModelOutput.rgb ? 3 : 2));
+    // Raw byte buffers avoid building nested Dart lists for large tensors.
+    _it.run(input.buffer.asUint8List(), out.buffer.asUint8List());
     return out;
   }
 
@@ -148,12 +173,12 @@ bool isColorPage(img.Image src) {
   return total > 0 && colored / total > 0.04;
 }
 
-/// Decodes [pageBytes] and colorizes it. With [model] the page is downsampled
-/// to the model input size (512x512), chroma is predicted and merged with the
-/// page's full-resolution luminance so line art stays sharp. Without a model,
-/// a tone-correction filter is applied. Pages that are already in color are
-/// returned unchanged.
-ColorizeResult colorizePage(Uint8List pageBytes, AbModel? model, {double saturation = 1.25}) {
+/// Decodes [pageBytes] and colorizes it. With [model] the page is scaled to
+/// fit the model input (keeping its aspect ratio, padded white), colors are
+/// predicted, and only their chroma is merged with the page's full-resolution
+/// luminance so the line art stays sharp. Without a model, a tone-correction
+/// filter is applied. Pages that are already in color are returned unchanged.
+ColorizeResult colorizePage(Uint8List pageBytes, ColorModel? model, {double? saturation}) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
   if (decoded == null) return ColorizeResult(pageBytes, ColorizeMode.alreadyColor, 0);
@@ -172,48 +197,70 @@ ColorizeResult colorizePage(Uint8List pageBytes, AbModel? model, {double saturat
     );
   }
 
-  final out = model != null
-      ? _composeChroma(src, _predictChroma(src, model, saturation))
-      : _toneFilter(src);
-  final bytes = img.encodeJpg(out, quality: 88);
-  return ColorizeResult(
-    bytes,
-    model != null ? ColorizeMode.ai : ColorizeMode.filter,
-    sw.elapsedMilliseconds,
-  );
+  final ColorizeMode mode;
+  final img.Image out;
+  if (model != null) {
+    // The manga model is already vivid; the photo-trained Lab model is not.
+    final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
+    out = _composeChroma(src, _predictChroma(src, model, sat));
+    mode = ColorizeMode.ai;
+  } else {
+    out = _toneFilter(src);
+    mode = ColorizeMode.filter;
+  }
+  return ColorizeResult(img.encodeJpg(out, quality: 88), mode, sw.elapsedMilliseconds);
 }
 
-/// Gray page -> L* tensor at model size -> a*b* -> RGB at model output size ->
-/// YCbCr chroma image (Cb in r, Cr in g).
-img.Image _predictChroma(img.Image src, AbModel model, double saturation) {
-  final small = img.copyResize(
-    src,
-    width: model.inWidth,
-    height: model.inHeight,
-    interpolation: img.Interpolation.linear,
-  );
-  final l = Float32List(model.inWidth * model.inHeight);
+/// Letterboxes the page into the model input, runs the model, and returns
+/// the page area of the prediction as a YCbCr chroma image (Cb in r, Cr in g).
+img.Image _predictChroma(img.Image src, ColorModel model, double saturation) {
+  final iw = model.inWidth, ih = model.inHeight;
+  final s = math.min(iw / src.width, ih / src.height);
+  final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
+  final small = img.copyResize(src, width: pw, height: ph, interpolation: img.Interpolation.linear);
   final sb = small.getBytes(order: img.ChannelOrder.rgb);
-  for (var i = 0, j = 0; i < l.length; i++, j += 3) {
-    l[i] = lStarLut[_luma(sb[j], sb[j + 1], sb[j + 2])];
+  final lab = model.output == ModelOutput.lab;
+  final input = Float32List(iw * ih)..fillRange(0, iw * ih, 1.0); // white paper
+  for (var y = 0; y < ph; y++) {
+    for (var x = 0; x < pw; x++) {
+      final j = (y * pw + x) * 3;
+      final v = _luma(sb[j], sb[j + 1], sb[j + 2]);
+      input[y * iw + x] = lab ? lStarLut[v] : v / 255;
+    }
   }
-  final ab = model.predict(l);
+  final pred = model.predict(input);
 
-  final lowL = img.copyResize(
-    src,
-    width: model.outWidth,
-    height: model.outHeight,
-    interpolation: img.Interpolation.linear,
-  );
-  final lb = lowL.getBytes(order: img.ChannelOrder.rgb);
-  final chroma = img.Image(width: model.outWidth, height: model.outHeight, numChannels: 3);
-  for (var y = 0, k = 0; y < model.outHeight; y++) {
-    for (var x = 0; x < model.outWidth; x++, k++) {
-      final lum = lStarLut[_luma(lb[k * 3], lb[k * 3 + 1], lb[k * 3 + 2])] * 100;
-      final rgb = labToRgb(lum, ab[k * 2] * saturation, ab[k * 2 + 1] * saturation);
-      final cb = 128 - 0.168736 * rgb[0] - 0.331264 * rgb[1] + 0.5 * rgb[2];
-      final cr = 128 + 0.5 * rgb[0] - 0.418688 * rgb[1] - 0.081312 * rgb[2];
-      chroma.setPixelRgb(x, y, cb.clamp(0, 255), cr.clamp(0, 255), 0);
+  // Crop the page area out of the (possibly smaller) prediction.
+  final ow = model.outWidth;
+  final cw = math.max(1, (pw * ow / iw).round()),
+      ch = math.max(1, (ph * model.outHeight / ih).round());
+  final chroma = img.Image(width: cw, height: ch, numChannels: 3);
+  final lowL = lab
+      ? img
+            .copyResize(src, width: cw, height: ch, interpolation: img.Interpolation.linear)
+            .getBytes(order: img.ChannelOrder.rgb)
+      : null;
+  for (var y = 0; y < ch; y++) {
+    for (var x = 0; x < cw; x++) {
+      final k = y * ow + x;
+      double r, g, b;
+      if (lab) {
+        final j = (y * cw + x) * 3;
+        final l = lStarLut[_luma(lowL![j], lowL[j + 1], lowL[j + 2])] * 100;
+        final rgb = labToRgb(l, pred[k * 2] * saturation, pred[k * 2 + 1] * saturation);
+        (r, g, b) = (rgb[0], rgb[1], rgb[2]);
+      } else {
+        r = pred[k * 3] * 255;
+        g = pred[k * 3 + 1] * 255;
+        b = pred[k * 3 + 2] * 255;
+      }
+      var cb = -0.168736 * r - 0.331264 * g + 0.5 * b;
+      var cr = 0.5 * r - 0.418688 * g - 0.081312 * b;
+      if (!lab) {
+        cb *= saturation;
+        cr *= saturation;
+      }
+      chroma.setPixelRgb(x, y, (128 + cb).clamp(0, 255), (128 + cr).clamp(0, 255), 0);
     }
   }
   return chroma;

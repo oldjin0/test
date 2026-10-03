@@ -39,18 +39,30 @@ def lab_to_rgb(L, a, b):
 
 
 def colorize(it, gray_img):
-    """gray_img: PIL 'L' image. Returns colorized PIL RGB at the same size."""
+    """gray_img: PIL 'L' image. Returns colorized PIL RGB at the same size.
+
+    The page is letterboxed into the model input (padded white at the
+    right/bottom), as lib/colorizer.dart does."""
     _, h, w, _ = it.get_input_details()[0]["shape"]
-    small = np.asarray(gray_img.resize((w, h), Image.BILINEAR), np.float32)
-    x = (srgb_to_l(small) / 100.0).astype(np.float32)[None, :, :, None]
-    it.set_tensor(it.get_input_details()[0]["index"], x)
+    out_c = it.get_output_details()[0]["shape"][3]
+    s = min(w / gray_img.width, h / gray_img.height)
+    pw, ph = max(1, round(gray_img.width * s)), max(1, round(gray_img.height * s))
+    canvas = Image.new("L", (w, h), 255)
+    canvas.paste(gray_img.resize((pw, ph), Image.BILINEAR), (0, 0))
+    small = np.asarray(canvas, np.float32)
+    x = (small / 255.0 if out_c == 3 else srgb_to_l(small) / 100.0).astype(np.float32)
+    it.set_tensor(it.get_input_details()[0]["index"], x[None, :, :, None])
     t = time.perf_counter()
     it.invoke()
     ms = (time.perf_counter() - t) * 1000
-    ab = it.get_tensor(it.get_output_details()[0]["index"])[0]
-    oh, ow = ab.shape[:2]
-    low_gray = np.asarray(gray_img.resize((ow, oh), Image.BILINEAR), np.float32)
-    rgb = lab_to_rgb(srgb_to_l(low_gray), ab[..., 0], ab[..., 1])
+    y = it.get_tensor(it.get_output_details()[0]["index"])[0]
+    k = y.shape[1] / w  # output scale (ECCV16 predicts at 1/4 size)
+    y = y[: max(1, round(ph * k)), : max(1, round(pw * k))]
+    if out_c == 3:
+        rgb = y.clip(0, 1) * 255
+    else:
+        low_gray = np.asarray(gray_img.resize((y.shape[1], y.shape[0]), Image.BILINEAR), np.float32)
+        rgb = lab_to_rgb(srgb_to_l(low_gray), y[..., 0], y[..., 1])
     cb = 128 - 0.168736 * rgb[..., 0] - 0.331264 * rgb[..., 1] + 0.5 * rgb[..., 2]
     cr = 128 + 0.5 * rgb[..., 0] - 0.418688 * rgb[..., 1] - 0.081312 * rgb[..., 2]
     W, H = gray_img.size

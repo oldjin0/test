@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -13,8 +14,8 @@ import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Predicts the same a*/b* everywhere, for checking the pipeline around the model.
-class FakeModel implements AbModel {
+/// Lab model that predicts the same a*/b* everywhere.
+class FakeModel implements ColorModel {
   FakeModel(this.a, this.b);
   final double a, b;
   int calls = 0;
@@ -27,6 +28,8 @@ class FakeModel implements AbModel {
   @override
   int get outHeight => 16;
   @override
+  ModelOutput get output => ModelOutput.lab;
+  @override
   Float32List predict(Float32List l) {
     calls++;
     expect(l.length, 64 * 64);
@@ -34,6 +37,37 @@ class FakeModel implements AbModel {
     for (var i = 0; i < out.length; i += 2) {
       out[i] = a;
       out[i + 1] = b;
+    }
+    return out;
+  }
+
+  @override
+  void close() {}
+}
+
+/// RGB model (manga-colorization-v2 contract): paints input pixels that are
+/// pure white padding blue and everything else orange.
+class FakeRgbModel implements ColorModel {
+  Float32List? lastInput;
+  @override
+  int get inWidth => 64;
+  @override
+  int get inHeight => 96;
+  @override
+  int get outWidth => 64;
+  @override
+  int get outHeight => 96;
+  @override
+  ModelOutput get output => ModelOutput.rgb;
+  @override
+  Float32List predict(Float32List gray) {
+    lastInput = gray;
+    final out = Float32List(64 * 96 * 3);
+    for (var i = 0; i < gray.length; i++) {
+      final pad = gray[i] == 1.0;
+      out[i * 3] = pad ? 0.1 : 1.0;
+      out[i * 3 + 1] = pad ? 0.2 : 0.55;
+      out[i * 3 + 2] = pad ? 1.0 : 0.1;
     }
     return out;
   }
@@ -101,6 +135,25 @@ void main() {
       expect(fill.r - fill.b, greaterThan(40), reason: 'fill should turn orange');
       final line = out.getPixel(21, 80);
       expect(line.r + line.g + line.b, lessThan(150), reason: 'black lines stay dark');
+    });
+
+    test('RGB model: page is letterboxed, padding is cropped away', () {
+      final model = FakeRgbModel();
+      // A wide gray page (no pure white) so padding is easy to tell apart.
+      final im = img.Image(width: 200, height: 100, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(150, 150, 150));
+      final r = colorizePage(img.encodePng(im), model);
+      expect(r.mode, ColorizeMode.ai);
+      // Fit 200x100 into 64x96 -> 64x32 at the top, white below.
+      final input = model.lastInput!;
+      expect(input[0], closeTo(150 / 255, 0.01));
+      expect(input[40 * 64 + 10], 1.0);
+      final out = img.decodeImage(r.bytes)!;
+      expect([out.width, out.height], [200, 100]);
+      for (final pt in [const Point(5, 5), const Point(190, 95), const Point(100, 50)]) {
+        final px = out.getPixel(pt.x, pt.y);
+        expect(px.r - px.b, greaterThan(30), reason: 'orange at $pt, no blue padding');
+      }
     });
 
     test('falls back to the tone filter without a model', () {
