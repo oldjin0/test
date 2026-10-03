@@ -84,8 +84,18 @@ class _ViewerPageState extends State<ViewerPage> {
     }
   }
 
+  late bool _curl = _store.curl;
+
   void _onStore() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {
+      // The slide view's controller must start at the current page whenever
+      // the view switches, however the setting was changed.
+      if (_curl != _store.curl) {
+        _curl = _store.curl;
+        _resetController();
+      }
+    });
   }
 
   void _saveProgress() => _store.saveProgress(widget.path, _title, _page, _pages?.length ?? 0);
@@ -109,10 +119,7 @@ class _ViewerPageState extends State<ViewerPage> {
     _controller = PageController(initialPage: _page ~/ _step);
   }
 
-  void _toggleCurl() {
-    _store.setCurl(!_store.curl);
-    setState(_resetController);
-  }
+  void _toggleCurl() => _store.setCurl(!_store.curl);
 
   void _toggleDual() {
     _store.setDual(!_store.dual);

@@ -340,6 +340,13 @@ void main() {
     await tester.drag(find.byType(CurlPageView), const Offset(300, 0)); // RTL: forward
     await tester.pumpAndSettle();
     expect(store.progressOf(path)!.page, 1);
+
+    // Switching to the slide effect continues from the current page.
+    store.setCurl(false);
+    await tester.pumpAndSettle();
+    await tester.fling(find.byType(PageView), const Offset(300, 0), 2000);
+    await tester.pumpAndSettle();
+    expect(store.progressOf(path)!.page, 2);
   });
 
   testWidgets('home shows library tabs', (tester) async {
