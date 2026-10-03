@@ -26,8 +26,10 @@ jobs:
       - name: Fetch manga-colorization-v2 code and generator weights
         run: |
           git clone --depth 1 https://github.com/qweasdd/manga-colorization-v2 /tmp/mcv2
-          gdown --fuzzy 'https://drive.google.com/file/d/1qmxUEKADkEM4iYLp1fpPLLKnfZ6tcF-t/view' -O /tmp/mcv2/networks/generator.zip
+          gdown 1qmxUEKADkEM4iYLp1fpPLLKnfZ6tcF-t -O /tmp/mcv2/networks/generator.zip
           ls -la /tmp/mcv2/networks
+          # Guard against an HTML error page instead of the weights.
+          test $(stat -c %s /tmp/mcv2/networks/generator.zip) -gt 50000000
       - name: Convert and verify against PyTorch
         working-directory: tools/model
         env:
