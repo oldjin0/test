@@ -1,8 +1,18 @@
+import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 
 const _imageExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+
+const comicExts = ['.zip', '.cbz'];
+
+bool isComicFile(String path) => comicExts.any(path.toLowerCase().endsWith);
+
+/// Reads and unpacks the comic at [path] on a background isolate.
+Future<List<Uint8List>> loadComicFile(String path) =>
+    Isolate.run(() => loadComicPages(File(path).readAsBytesSync()));
 
 /// Extracts image entries from zip/cbz bytes, sorted by natural file name order.
 List<Uint8List> loadComicPages(Uint8List bytes) {
@@ -14,11 +24,8 @@ List<Uint8List> loadComicPages(Uint8List bytes) {
       return false;
     }
     return _imageExts.any(name.endsWith);
-  }).toList()
-    ..sort((a, b) => naturalCompare(a.name.toLowerCase(), b.name.toLowerCase()));
-  return [
-    for (final e in entries) Uint8List.fromList(e.content as List<int>),
-  ];
+  }).toList()..sort((a, b) => naturalCompare(a.name.toLowerCase(), b.name.toLowerCase()));
+  return [for (final e in entries) Uint8List.fromList(e.content as List<int>)];
 }
 
 /// Compares strings so that "page2" sorts before "page10".

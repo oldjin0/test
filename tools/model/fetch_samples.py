@@ -17,8 +17,8 @@ for name in ["astronaut", "coffee", "chelsea"]:
 UA = {"User-Agent": "manga-viewer-model-ci/1.0 (github actions)"}
 try:
     q = urllib.parse.urlencode({
-        "action": "query", "format": "json", "generator": "categorymembers",
-        "gcmtitle": "Category:Hokusai Manga", "gcmtype": "file", "gcmlimit": "12",
+        "action": "query", "format": "json", "generator": "search",
+        "gsrsearch": "Hokusai Manga filetype:bitmap", "gsrnamespace": "6", "gsrlimit": "12",
         "prop": "imageinfo", "iiprop": "url|mime", "iiurlwidth": "900"})
     req = urllib.request.Request("https://commons.wikimedia.org/w/api.php?" + q, headers=UA)
     pages = json.load(urllib.request.urlopen(req, timeout=30))["query"]["pages"].values()
