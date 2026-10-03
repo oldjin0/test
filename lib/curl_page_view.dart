@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -33,11 +34,24 @@ class CurlPageView extends StatefulWidget {
   State<CurlPageView> createState() => _CurlPageViewState();
 }
 
-class _CurlPageViewState extends State<CurlPageView> with SingleTickerProviderStateMixin {
+enum _Mode { none, turn, zoom }
+
+/// Largest zoom factor.
+const _maxZoom = 4.0;
+
+/// Zoom factor of a double tap.
+const _tapZoom = 2.5;
+
+class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMixin {
   late final AnimationController _anim = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 380),
   )..addListener(_onAnim);
+
+  late final AnimationController _zoomAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  )..addListener(_onZoomAnim);
 
   // Turn in progress. Coordinates are "local": spine at x=0, free edge at
   // x=width (mirrored for right-to-left books).
@@ -51,16 +65,57 @@ class _CurlPageViewState extends State<CurlPageView> with SingleTickerProviderSt
   bool _animCompletes = false;
   Size _size = Size.zero;
 
+  // Zoom: a point at `c` in the unzoomed page is drawn at `c * _zoom + _pan`.
+  double _zoom = 1;
+  Offset _pan = Offset.zero;
+  _Mode _mode = _Mode.none;
+  double _zoom0 = 1;
+  Offset _contentFocal = Offset.zero;
+  int _startPointers = 0;
+  double _zoomFrom = 1, _zoomTo = 1;
+  Offset _panFrom = Offset.zero, _panTo = Offset.zero;
+
+  // Where the first finger of the current touch went down, and how many
+  // fingers are down. The scale recognizer only starts after ~36 px of
+  // movement; the turn is measured from where the finger really started.
+  Offset _downPos = Offset.zero;
+  int _pointers = 0;
+  bool _restarted = false; // the recognizer restarted because the finger count changed
+
+  // Single taps wait briefly for a second tap (double tap = zoom).
+  Timer? _tapTimer;
+  Offset _lastTapPos = Offset.zero;
+
+  @override
+  void didUpdateWidget(CurlPageView old) {
+    super.didUpdateWidget(old);
+    if (old.index != widget.index) _resetZoom();
+  }
+
   @override
   void dispose() {
+    _tapTimer?.cancel();
     _anim.dispose();
+    _zoomAnim.dispose();
     super.dispose();
+  }
+
+  void _resetZoom() {
+    _zoomAnim.stop();
+    _zoom = 1;
+    _pan = Offset.zero;
   }
 
   double _lx(double screenX) => widget.rtl ? _size.width - screenX : screenX;
 
   bool get _canForward => widget.index + 1 < widget.itemCount;
   bool get _canBack => widget.index > 0;
+  bool get _zoomed => _zoom > 1.001;
+
+  Offset _clampPan(Offset pan, double zoom) => Offset(
+    pan.dx.clamp(_size.width * (1 - zoom), 0.0),
+    pan.dy.clamp(_size.height * (1 - zoom), 0.0),
+  );
 
   void _begin(bool forward, Offset localFinger) {
     _forward = forward;
@@ -72,21 +127,52 @@ class _CurlPageViewState extends State<CurlPageView> with SingleTickerProviderSt
     _dragStart = localFinger;
   }
 
-  void _onDragStart(DragStartDetails d) {
-    _anim.stop();
-    _turning = false;
-    _dragStart = Offset(_lx(d.localPosition.dx), d.localPosition.dy);
+  void _onPointerDown(PointerDownEvent e) {
+    _pointers++;
+    if (_pointers == 1) {
+      _downPos = e.localPosition;
+      _restarted = false;
+    }
   }
 
-  void _onDragUpdate(DragUpdateDetails d) {
-    final f = Offset(_lx(d.localPosition.dx), d.localPosition.dy);
+  void _onPointerUp(PointerEvent e) => _pointers = math.max(0, _pointers - 1);
+
+  void _onScaleStart(ScaleStartDetails d) {
+    _anim.stop();
+    _zoomAnim.stop();
+    _turning = false;
+    _startPointers = d.pointerCount;
+    if (d.pointerCount >= 2 || _zoomed) {
+      // Pinch, or panning around a zoomed page: turning is off.
+      _mode = _Mode.zoom;
+      _zoom0 = _zoom;
+      _contentFocal = (d.localFocalPoint - _pan) / _zoom;
+    } else {
+      _mode = _Mode.turn;
+      final origin = _restarted ? d.localFocalPoint : _downPos;
+      _dragStart = Offset(_lx(origin.dx), origin.dy);
+    }
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails d) {
+    if (_mode == _Mode.zoom) {
+      final z = (_zoom0 * d.scale).clamp(1.0, _maxZoom);
+      setState(() {
+        _zoom = z;
+        _pan = _clampPan(d.localFocalPoint - _contentFocal * z, z);
+      });
+    } else if (_mode == _Mode.turn && d.pointerCount == _startPointers) {
+      _turnUpdate(Offset(_lx(d.localFocalPoint.dx), d.localFocalPoint.dy));
+    }
+  }
+
+  void _turnUpdate(Offset f) {
     if (!_turning) {
       final dx = f.dx - _dragStart.dx;
       if (dx.abs() < 4) return;
       final forward = dx < 0; // towards the spine
       if (forward ? !_canForward : !_canBack) return;
-      final start = _dragStart;
-      _begin(forward, start);
+      _begin(forward, _dragStart);
     }
     final w = _size.width, h = _size.height;
     // The corner moves twice as fast as the finger, so dragging across the
@@ -99,14 +185,19 @@ class _CurlPageViewState extends State<CurlPageView> with SingleTickerProviderSt
     setState(() => _p = Offset(x, y));
   }
 
-  void _onDragEnd(DragEndDetails d) {
-    if (!_turning) return;
-    final v = (widget.rtl ? -1 : 1) * d.velocity.pixelsPerSecond.dx;
-    final turned = (_size.width - _p.dx) / (2 * _size.width); // 0 flat .. 1 turned
-    final complete = _forward
-        ? (v < -400 || (v <= 400 && turned > 0.3))
-        : (v > 400 || (v >= -400 && turned < 0.7));
-    _animateTo(complete);
+  void _onScaleEnd(ScaleEndDetails d) {
+    _restarted = true; // a follow-up start in the same touch begins where the fingers are
+    if (_mode == _Mode.zoom) {
+      if (_zoom < 1.02) setState(_resetZoom);
+    } else if (_mode == _Mode.turn && _turning) {
+      final v = (widget.rtl ? -1 : 1) * d.velocity.pixelsPerSecond.dx;
+      final turned = (_size.width - _p.dx) / (2 * _size.width); // 0 flat .. 1 turned
+      final complete = _forward
+          ? (v < -400 || (v <= 400 && turned > 0.3))
+          : (v > 400 || (v >= -400 && turned < 0.7));
+      _animateTo(complete);
+    }
+    _mode = _Mode.none;
   }
 
   void _turnByTap(bool forward) {
@@ -133,15 +224,53 @@ class _CurlPageViewState extends State<CurlPageView> with SingleTickerProviderSt
     }
   }
 
-  void _onTapUp(TapUpDetails d) {
-    final x = _lx(d.localPosition.dx) / _size.width;
-    if (x > 0.75) {
-      _turnByTap(true);
-    } else if (x < 0.25) {
-      _turnByTap(false);
+  void _onZoomAnim() {
+    final t = Curves.easeOut.transform(_zoomAnim.value);
+    setState(() {
+      _zoom = _zoomFrom + (_zoomTo - _zoomFrom) * t;
+      _pan = Offset.lerp(_panFrom, _panTo, t)!;
+    });
+  }
+
+  /// Double tap: zoom in around [at], or back out when already zoomed.
+  void _toggleZoom(Offset at) {
+    _zoomFrom = _zoom;
+    _panFrom = _pan;
+    if (_zoomed) {
+      _zoomTo = 1;
+      _panTo = Offset.zero;
     } else {
+      _zoomTo = _tapZoom;
+      _panTo = _clampPan(at - at * _tapZoom, _tapZoom);
+    }
+    _zoomAnim.forward(from: 0);
+  }
+
+  void _onTapUp(TapUpDetails d) {
+    final pos = d.localPosition;
+    final pending = _tapTimer?.isActive ?? false;
+    if (pending && (pos - _lastTapPos).distance < 60) {
+      _tapTimer!.cancel();
+      _tapTimer = null;
+      _toggleZoom(pos);
+      return;
+    }
+    if (pending) {
+      // A different tap: the first one was a plain tap after all.
+      _tapTimer!.cancel();
+      _tapTimer = null;
       widget.onTapCenter?.call();
     }
+    final x = _lx(pos.dx) / _size.width;
+    if (!_zoomed && (x > 0.75 || x < 0.25)) {
+      _turnByTap(x > 0.75);
+      return;
+    }
+    _lastTapPos = pos;
+    _tapTimer = Timer(const Duration(milliseconds: 260), () {
+      _tapTimer = null;
+      widget.onTapCenter?.call();
+    });
   }
 
   @override
@@ -149,15 +278,32 @@ class _CurlPageViewState extends State<CurlPageView> with SingleTickerProviderSt
     return LayoutBuilder(
       builder: (context, c) {
         _size = c.biggest;
-        return GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onHorizontalDragStart: _onDragStart,
-          onHorizontalDragUpdate: _onDragUpdate,
-          onHorizontalDragEnd: _onDragEnd,
-          onTapUp: _onTapUp,
-          child: _turning ? _curl() : _page(widget.index),
+        return Listener(
+          onPointerDown: _onPointerDown,
+          onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerUp,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onScaleStart: _onScaleStart,
+            onScaleUpdate: _onScaleUpdate,
+            onScaleEnd: _onScaleEnd,
+            onTapUp: _onTapUp,
+            child: _turning ? _curl() : _zoomedPage(),
+          ),
         );
       },
+    );
+  }
+
+  Widget _zoomedPage() {
+    final page = _page(widget.index);
+    if (!_zoomed) return page;
+    return ClipRect(
+      child: Transform(
+        key: const ValueKey('curl-zoom'),
+        transform: Matrix4(_zoom, 0, 0, 0, 0, _zoom, 0, 0, 0, 0, 1, 0, _pan.dx, _pan.dy, 0, 1),
+        child: page,
+      ),
     );
   }
 

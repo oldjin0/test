@@ -367,6 +367,182 @@ void main() {
     });
   });
 
+  group('page curl zoom and taps', () {
+    final turns = <int>[];
+    var centerTaps = 0;
+    var index = 0;
+
+    Future<void> pumpCurl(WidgetTester tester, {bool rtl = false, int start = 0}) async {
+      turns.clear();
+      centerTaps = 0;
+      index = start;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) => CurlPageView(
+              index: index,
+              itemCount: 4,
+              rtl: rtl,
+              onTapCenter: () => centerTaps++,
+              onPageChanged: (i) => setState(() {
+                turns.add(i);
+                index = i;
+              }),
+              itemBuilder: (context, i) => ColoredBox(
+                color: Colors.white,
+                child: Center(child: Text('page $i')),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    double zoomOf(WidgetTester tester) {
+      final f = find.byKey(const ValueKey('curl-zoom'));
+      return f.evaluate().isEmpty ? 1.0 : tester.widget<Transform>(f).transform.getMaxScaleOnAxis();
+    }
+
+    Offset panOf(WidgetTester tester) {
+      final m = tester.widget<Transform>(find.byKey(const ValueKey('curl-zoom'))).transform;
+      return Offset(m.getTranslation().x, m.getTranslation().y);
+    }
+
+    /// Spreads two fingers apart in small steps around [center].
+    Future<void> pinch(
+      WidgetTester tester,
+      Offset center, {
+      required double from,
+      required double to,
+    }) async {
+      final a = await tester.startGesture(center - Offset(from, 0), pointer: 1);
+      final b = await tester.startGesture(center + Offset(from, 0), pointer: 2);
+      const steps = 12;
+      for (var i = 1; i <= steps; i++) {
+        final d = from + (to - from) * i / steps;
+        await a.moveTo(center - Offset(d, 0));
+        await b.moveTo(center + Offset(d, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await a.up();
+      await b.up();
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('pinch zooms in; dragging then pans instead of turning', (tester) async {
+      await pumpCurl(tester);
+      final c = tester.getCenter(find.byType(CurlPageView));
+      await pinch(tester, c, from: 30, to: 90);
+      expect(zoomOf(tester), greaterThan(1.5));
+
+      final before = panOf(tester);
+      final g = await tester.startGesture(c);
+      for (var i = 1; i <= 10; i++) {
+        await g.moveBy(const Offset(-30, 0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await g.up();
+      await tester.pumpAndSettle();
+      expect(turns, isEmpty, reason: 'zoomed pages do not turn');
+      expect(panOf(tester).dx, lessThan(before.dx), reason: 'content moved with the finger');
+    });
+
+    testWidgets('pinching back out restores normal turning', (tester) async {
+      await pumpCurl(tester);
+      final c = tester.getCenter(find.byType(CurlPageView));
+      await pinch(tester, c, from: 30, to: 90);
+      expect(zoomOf(tester), greaterThan(1.5));
+      await pinch(tester, c, from: 150, to: 20);
+      expect(zoomOf(tester), 1.0);
+      await tester.drag(find.byType(CurlPageView), const Offset(-500, 0));
+      await tester.pumpAndSettle();
+      expect(turns, [1]);
+    });
+
+    testWidgets('double tap zooms in and out', (tester) async {
+      await pumpCurl(tester);
+      final c = tester.getCenter(find.byType(CurlPageView));
+      await tester.tapAt(c);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tapAt(c);
+      await tester.pumpAndSettle();
+      expect(zoomOf(tester), closeTo(2.5, 0.01));
+      expect(centerTaps, 0, reason: 'a double tap is not a UI toggle');
+
+      await tester.tapAt(c);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tapAt(c);
+      await tester.pumpAndSettle();
+      expect(zoomOf(tester), 1.0);
+    });
+
+    testWidgets('single center tap toggles the UI after the double-tap window', (tester) async {
+      await pumpCurl(tester);
+      await tester.tapAt(tester.getCenter(find.byType(CurlPageView)));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(centerTaps, 0);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(centerTaps, 1);
+    });
+
+    testWidgets('edge taps turn immediately, mirrored for right-to-left', (tester) async {
+      await pumpCurl(tester);
+      final r = tester.getRect(find.byType(CurlPageView));
+      await tester.tapAt(Offset(r.right - 10, r.center.dy));
+      await tester.pumpAndSettle();
+      expect(turns, [1]);
+
+      await pumpCurl(tester, rtl: true);
+      await tester.tapAt(Offset(r.left + 10, r.center.dy));
+      await tester.pumpAndSettle();
+      expect(turns, [1], reason: 'right-to-left: the left edge goes forward');
+    });
+
+    testWidgets('edge taps do not turn pages while zoomed', (tester) async {
+      await pumpCurl(tester);
+      final c = tester.getCenter(find.byType(CurlPageView));
+      await tester.tapAt(c);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tapAt(c);
+      await tester.pumpAndSettle();
+      expect(zoomOf(tester), greaterThan(2));
+      // Zoomed: edge taps no longer turn pages.
+      final r = tester.getRect(find.byType(CurlPageView));
+      await tester.tapAt(Offset(r.right - 10, r.center.dy));
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle(); // let a page turn finish, if one started
+      expect(turns, isEmpty);
+    });
+  });
+
+  testWidgets('page curl: zoom is dropped when the page changes', (tester) async {
+    final page = ValueNotifier<int>(0);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ValueListenableBuilder<int>(
+          valueListenable: page,
+          builder: (context, i, _) => CurlPageView(
+            index: i,
+            itemCount: 3,
+            onPageChanged: (_) {},
+            itemBuilder: (context, i) => Center(child: Text('page $i')),
+          ),
+        ),
+      ),
+    );
+    final c = tester.getCenter(find.byType(CurlPageView));
+    await tester.tapAt(c);
+    await tester.pump(const Duration(milliseconds: 80));
+    await tester.tapAt(c);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('curl-zoom')), findsOneWidget);
+
+    page.value = 1;
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('curl-zoom')), findsNothing);
+    expect(find.text('page 1'), findsOneWidget);
+  });
+
   testWidgets('viewer gives the page most of the screen and turns pages', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final store = await LibraryStore.load();

@@ -50,8 +50,8 @@ jobs:
               -storepass "$PASS" -keypass "$PASS" -dname "CN=Manga Viewer"
             printf 'storeFile=upload-keystore.jks\nstorePassword=%s\nkeyAlias=upload\nkeyPassword=%s\n' "$PASS" "$PASS" > key.properties
             tar czf signing.tgz upload-keystore.jks key.properties
-            gh release create "signing-key-$(date +%s)" --draft --title signing-key \
-              --notes "Private release signing key. Do not publish or delete." \
+            gh release create "signing-key-$(date +%s)" --repo "$REPO" --draft \
+              --title signing-key --notes "Private release signing key. Do not publish or delete." \
               --target "${{ github.sha }}" signing.tgz
             cd "$GITHUB_WORKSPACE"
             ASSET=$(find_key)
