@@ -126,7 +126,10 @@ void main() {
       'colorization',
     );
     expect(find.textContaining('AI 모델 없음'), findsNothing);
-    final first = await service.colorize(ColorizeService.keyFor(path, 0), samplePage(0));
+    final first = await service.colorize(
+      ColorizeService.keyFor(path, 0),
+      () async => samplePage(0),
+    );
     expect(first.mode, ColorizeMode.ai);
 
     // Defaults: right-to-left with the page-curl effect. Dragging right turns forward.

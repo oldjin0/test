@@ -100,6 +100,65 @@ void main() {
     expect(names, ['p1.jpg', 'p2.jpg', 'p10.jpg']);
   });
 
+  group('ComicBook', () {
+    late Directory dir;
+    setUp(() => dir = Directory.systemTemp.createTempSync('book'));
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    String writeZip(Map<String, List<int>> files) {
+      final archive = Archive();
+      files.forEach((name, data) => archive.addFile(ArchiveFile(name, data.length, data)));
+      final f = File('${dir.path}/book.cbz')..writeAsBytesSync(ZipEncoder().encode(archive));
+      return f.path;
+    }
+
+    test('lists pages in natural order and skips non-page entries', () {
+      final path = writeZip({
+        'ch/page10.jpg': [10],
+        'ch/page2.JPG': [2],
+        'ch/page1.png': [1],
+        '__MACOSX/ch/page1.png': [9],
+        'ch/.hidden.jpg': [9],
+        'ch/notes.txt': [9],
+        'ch/': [],
+      });
+      expect(listComicPages(path), ['ch/page1.png', 'ch/page2.JPG', 'ch/page10.jpg']);
+    });
+
+    test('reads single pages on demand', () {
+      final path = writeZip({
+        'a.jpg': [1, 2, 3],
+        'b.jpg': List.generate(5000, (i) => i % 251),
+      });
+      expect(readComicPage(path, 'a.jpg'), [1, 2, 3]);
+      expect(readComicPage(path, 'b.jpg').length, 5000);
+      expect(() => readComicPage(path, 'missing.jpg'), throwsFormatException);
+    });
+
+    test('keeps a small window of pages and shares futures', () async {
+      final path = writeZip({
+        for (var i = 0; i < 10; i++) 'p${i.toString().padLeft(2, '0')}.jpg': [i],
+      });
+      final book = await ComicBook.open(path, window: 3);
+      expect(book.length, 10);
+      final first = book.page(0);
+      expect(book.page(0), same(first), reason: 'cached while in the window');
+      expect(await first, [0]);
+      for (var i = 1; i <= 3; i++) {
+        expect(await book.page(i), [i]);
+      }
+      expect(book.page(0), isNot(same(first)), reason: 'page 0 left the window');
+      expect(await book.page(0), [0]);
+    });
+
+    test('rejects archives without images', () async {
+      final path = writeZip({
+        'readme.txt': [1],
+      });
+      await expectLater(ComicBook.open(path), throwsFormatException);
+    });
+  });
+
   group('color math', () {
     test('L* lookup table', () {
       expect(lStarLut[0], closeTo(0, 1e-6));
@@ -189,9 +248,9 @@ void main() {
     test('runs jobs in the background and caches color-page checks', () async {
       final s = await ColorizeService.start(cacheDir: cache);
       expect(s.modelLoaded, isFalse);
-      final r = await s.colorize('a', grayPage());
+      final r = await s.colorize('a', () async => grayPage());
       expect(r.mode, ColorizeMode.filter);
-      final c = await s.colorize('b', colorPage());
+      final c = await s.colorize('b', () async => colorPage());
       expect(c.mode, ColorizeMode.alreadyColor);
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(File('${cache.path}/b.color').existsSync(), isTrue);
@@ -199,9 +258,9 @@ void main() {
 
     test('focus drops queued pages the reader moved away from', () async {
       final s = await ColorizeService.start(cacheDir: cache);
-      final first = s.colorize('p1', grayPage(w: 900, h: 1200)); // running
-      final second = s.colorize('p2', grayPage());
-      final third = s.colorize('p3', grayPage());
+      final first = s.colorize('p1', () async => grayPage(w: 900, h: 1200)); // running
+      final second = s.colorize('p2', () async => grayPage());
+      final third = s.colorize('p3', () async => grayPage());
       s.focus(['p3']);
       await expectLater(second, throwsA(predicate(isCancelled)));
       expect((await third).mode, ColorizeMode.filter);

@@ -47,12 +47,15 @@ Future<Uint8List?> loadModelBytes() async {
 }
 
 class _Job {
-  _Job(this.key, this.bytes) {
+  _Job(this.key, this.load) {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
   }
   final String key;
-  final Uint8List bytes;
+
+  /// Reads the page when the job reaches the front of the queue, so queued
+  /// pages cost no memory.
+  final Future<Uint8List> Function() load;
   final completer = Completer<ColorizeResult>();
 }
 
@@ -89,12 +92,14 @@ class ColorizeService {
   static String keyFor(String comicId, int index) =>
       '${md5.convert(comicId.codeUnits)}_${index}_$modelVersion';
 
-  /// Queues [page] and returns its colorized version (from the disk cache
-  /// when possible). Queuing is synchronous so a following [focus] sees it.
-  Future<ColorizeResult> colorize(String key, Uint8List page) {
+  /// Queues the page behind [loadPage] and returns its colorized version
+  /// (from the disk cache when possible). Queuing is synchronous so a
+  /// following [focus] sees it; the page itself is read only when its turn
+  /// comes.
+  Future<ColorizeResult> colorize(String key, Future<Uint8List> Function() loadPage) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
-    final job = _Job(key, page);
+    final job = _Job(key, loadPage);
     _queue[key] = job;
     unawaited(_pump());
     return job.completer.future;
@@ -120,19 +125,26 @@ class ColorizeService {
     if (_running != null || _queue.isEmpty || _worker == null) return;
     final job = _queue.remove(_queue.keys.first)!;
     _running = job;
-    final cached = await _readCache(job.key, job.bytes);
-    if (cached != null) {
+    try {
+      final cached = await _readCache(job.key, job.load);
+      if (cached != null) {
+        _running = null;
+        job.completer.complete(cached);
+        unawaited(_pump());
+        return;
+      }
+      final bytes = await job.load();
+      final id = _nextId++;
+      _replies[id] = job;
+      _worker!.send([
+        id,
+        TransferableTypedData.fromList([bytes]),
+      ]);
+    } catch (e) {
       _running = null;
-      job.completer.complete(cached);
+      job.completer.completeError(e);
       unawaited(_pump());
-      return;
     }
-    final id = _nextId++;
-    _replies[id] = job;
-    _worker!.send([
-      id,
-      TransferableTypedData.fromList([job.bytes]),
-    ]);
   }
 
   void _onMessage(dynamic msg) {
@@ -163,7 +175,7 @@ class ColorizeService {
   File? _file(String key, String ext) =>
       _cacheDir == null ? null : File(p.join(_cacheDir.path, '$key.$ext'));
 
-  Future<ColorizeResult?> _readCache(String key, Uint8List page) async {
+  Future<ColorizeResult?> _readCache(String key, Future<Uint8List> Function() load) async {
     try {
       final jpg = _file(key, 'jpg');
       if (jpg != null && await jpg.exists()) {
@@ -171,7 +183,7 @@ class ColorizeService {
       }
       final skip = _file(key, 'color');
       if (skip != null && await skip.exists()) {
-        return ColorizeResult(page, ColorizeMode.alreadyColor, 0);
+        return ColorizeResult(await load(), ColorizeMode.alreadyColor, 0);
       }
     } catch (_) {}
     return null;

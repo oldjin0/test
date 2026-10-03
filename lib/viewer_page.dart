@@ -32,7 +32,7 @@ class ViewerPage extends StatefulWidget {
 }
 
 class _ViewerPageState extends State<ViewerPage> {
-  List<Uint8List>? _pages;
+  ComicBook? _book;
   Object? _error;
   int _page = 0; // first page of the visible spread
   PageController? _controller;
@@ -45,7 +45,7 @@ class _ViewerPageState extends State<ViewerPage> {
   int get _step => _store.dual ? 2 : 1;
 
   List<List<int>> get _spreads {
-    final n = _pages?.length ?? 0;
+    final n = _book?.length ?? 0;
     return [
       for (var i = 0; i < n; i += _step) [for (var j = i; j < i + _step && j < n; j++) j],
     ];
@@ -65,15 +65,14 @@ class _ViewerPageState extends State<ViewerPage> {
 
   Future<void> _load() async {
     try {
-      final pages = await loadComicFile(widget.path);
-      if (pages.isEmpty) throw const FormatException('이미지가 없는 파일입니다.');
+      final book = await ComicBook.open(widget.path);
       final start = (widget.initialPage ?? _store.progressOf(widget.path)?.page ?? 0).clamp(
         0,
-        pages.length - 1,
+        book.length - 1,
       );
       if (!mounted) return;
       setState(() {
-        _pages = pages;
+        _book = book;
         _page = start - start % _step;
         _controller = PageController(initialPage: start ~/ _step);
       });
@@ -98,7 +97,7 @@ class _ViewerPageState extends State<ViewerPage> {
     });
   }
 
-  void _saveProgress() => _store.saveProgress(widget.path, _title, _page, _pages?.length ?? 0);
+  void _saveProgress() => _store.saveProgress(widget.path, _title, _page, _book?.length ?? 0);
 
   void _onPageChanged(int spread) {
     setState(() => _page = _spreads[spread].first);
@@ -182,7 +181,8 @@ class _ViewerPageState extends State<ViewerPage> {
 
   Future<ColorizeResult> _colorFor(int i) {
     return _colored.putIfAbsent(i, () {
-      final f = _service!.colorize(_key(i), _pages![i]);
+      final book = _book!;
+      final f = _service!.colorize(_key(i), () => book.page(i));
       f.then(
         (_) {},
         onError: (Object e) {
@@ -194,8 +194,8 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   void _warm() {
-    final service = _service, pages = _pages;
-    if (!_store.colorize || service == null || pages == null) return;
+    final service = _service;
+    if (!_store.colorize || service == null || _book == null) return;
     final sp = _spreads;
     final cur = _page ~/ _step;
     final wanted = [
@@ -221,7 +221,7 @@ class _ViewerPageState extends State<ViewerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final total = _pages?.length ?? 0;
+    final total = _book?.length ?? 0;
     final shown = _spreads.isEmpty ? '' : _spreads[_page ~/ _step].map((i) => i + 1).join('-');
     return Scaffold(
       backgroundColor: Colors.black,
@@ -301,7 +301,7 @@ class _ViewerPageState extends State<ViewerPage> {
         ),
       );
     }
-    if (_pages == null) return const Center(child: CircularProgressIndicator());
+    if (_book == null) return const Center(child: CircularProgressIndicator());
     final spreads = _spreads;
     Widget spread(int i) {
       var idx = spreads[i];
@@ -342,19 +342,30 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   Widget _pageImage(int p) {
-    final original = _pages![p];
     Widget image(Uint8List b) => Image.memory(b, fit: BoxFit.contain, gaplessPlayback: true);
-    if (!_store.colorize || _service == null) return image(original);
-    // The original stays on screen until the colorized page is ready.
-    return FutureBuilder<ColorizeResult>(
-      future: _colorFor(p),
-      builder: (context, snap) => image(snap.data?.bytes ?? original),
+    // Pages are read from the archive on demand (see ComicBook).
+    return FutureBuilder<Uint8List>(
+      future: _book!.page(p),
+      builder: (context, page) {
+        final original = page.data;
+        if (original == null) {
+          return page.hasError
+              ? const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white38))
+              : const SizedBox.expand();
+        }
+        if (!_store.colorize || _service == null) return image(original);
+        // The original stays on screen until the colorized page is ready.
+        return FutureBuilder<ColorizeResult>(
+          future: _colorFor(p),
+          builder: (context, snap) => image(snap.data?.bytes ?? original),
+        );
+      },
     );
   }
 
   /// Small chip showing what the colorizer is doing for the visible page.
   Widget _status() {
-    if (!_store.colorize || _pages == null) return const SizedBox.shrink();
+    if (!_store.colorize || _book == null) return const SizedBox.shrink();
     final service = _service;
     if (service == null) return const _Chip(busy: true, text: 'AI 모델 준비 중…');
     return FutureBuilder<ColorizeResult>(
