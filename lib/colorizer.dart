@@ -62,27 +62,14 @@ class TfliteColorModel implements ColorModel {
   factory TfliteColorModel.fromBuffer(Uint8List bytes, {int threads = 4}) =>
       _create((o) => Interpreter.fromBuffer(bytes, options: o), threads);
 
-  static TfliteColorModel _create(Interpreter Function(InterpreterOptions) open, int threads) {
-    // XNNPACK is the fast CPU path for float models; fall back to the plain
-    // interpreter if the delegate cannot be created on this device.
-    XNNPackDelegate? xnn;
-    try {
-      xnn = XNNPackDelegate(options: XNNPackDelegateOptions(numThreads: threads));
-      return TfliteColorModel._(
-        open(
-          InterpreterOptions()
-            ..threads = threads
-            ..addDelegate(xnn),
-        ),
-        xnn,
-      );
-    } catch (_) {
-      xnn?.delete();
-      return TfliteColorModel._(open(InterpreterOptions()..threads = threads), null);
-    }
-  }
+  static TfliteColorModel _create(Interpreter Function(InterpreterOptions) open, int threads) =>
+      // LiteRT applies its XNNPACK CPU delegate to float models by default.
+      // Do not add XNNPackDelegate(options: ...) explicitly: tflite_flutter's
+      // options struct is smaller than LiteRT's, and the delegate then reads
+      // garbage pointers (SIGSEGV in TfLiteInterpreterCreate on device).
+      TfliteColorModel._(open(InterpreterOptions()..threads = threads));
 
-  TfliteColorModel._(this._it, this._xnn) {
+  TfliteColorModel._(this._it) {
     final i = _it.getInputTensor(0).shape;
     final o = _it.getOutputTensor(0).shape;
     if (i.length != 4 || i[3] != 1 || o.length != 4 || (o[3] != 2 && o[3] != 3)) {
@@ -97,13 +84,10 @@ class TfliteColorModel implements ColorModel {
   }
 
   final Interpreter _it;
-  final XNNPackDelegate? _xnn;
   @override
   late final int inWidth, inHeight, outWidth, outHeight;
   @override
   late final ModelOutput output;
-
-  bool get usesXnnpack => _xnn != null;
 
   /// Native time of the last [predict] call.
   int get lastInferenceMs => _it.lastNativeInferenceDurationMicroSeconds ~/ 1000;
@@ -117,10 +101,7 @@ class TfliteColorModel implements ColorModel {
   }
 
   @override
-  void close() {
-    _it.close();
-    _xnn?.delete();
-  }
+  void close() => _it.close();
 }
 
 /// 8-bit sRGB gray value -> CIE L* / 100.
