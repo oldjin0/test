@@ -12,6 +12,8 @@ import 'package:manga_viewer/comic_loader.dart';
 import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
+import 'package:manga_viewer/viewer_page.dart';
+import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Lab model that predicts the same a*/b* everywhere.
@@ -304,6 +306,40 @@ void main() {
     testWidgets('no turn past the last page', (tester) async {
       expect(await turn(tester, rtl: false, drag: const Offset(-500, 0), start: 2), isEmpty);
     });
+  });
+
+  testWidgets('viewer gives the page most of the screen and turns pages', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await LibraryStore.load();
+    final path = await tester.runAsync(() async {
+      final dir = await Directory.systemTemp.createTemp('viewer');
+      final archive = Archive();
+      for (var i = 0; i < 3; i++) {
+        final b = grayPage();
+        archive.addFile(ArchiveFile('p$i.png', b.length, b));
+      }
+      final f = File('${dir.path}/book.cbz');
+      await f.writeAsBytes(ZipEncoder().encode(archive));
+      return f.path;
+    });
+    store.setColorize(false);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ViewerPage(path: path!, store: store, colorizer: Completer<ColorizeService>().future),
+      ),
+    );
+    for (var i = 0; i < 50 && find.byType(CurlPageView).evaluate().isEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    final screen = tester.getSize(find.byType(Scaffold));
+    final pageArea = tester.getSize(find.byType(CurlPageView));
+    expect(pageArea.height, greaterThan(screen.height * 0.75));
+    expect(store.progressOf(path)!.total, 3);
+
+    await tester.drag(find.byType(CurlPageView), const Offset(300, 0)); // RTL: forward
+    await tester.pumpAndSettle();
+    expect(store.progressOf(path)!.page, 1);
   });
 
   testWidgets('home shows library tabs', (tester) async {

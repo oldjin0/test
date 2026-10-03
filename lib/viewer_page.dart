@@ -368,16 +368,21 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   Widget _slider(int total) {
+    // Fixed height: in bottomNavigationBar the slider would otherwise grow to
+    // fill the loose height constraint and squeeze the page area.
     return SafeArea(
-      child: Directionality(
-        textDirection: _store.rtl ? TextDirection.rtl : TextDirection.ltr,
-        child: Slider(
-          value: _page.toDouble(),
-          max: (total - 1).toDouble(),
-          divisions: total - 1,
-          label: '${_page + 1}',
-          onChanged: (v) => setState(() => _page = v.round() - v.round() % _step),
-          onChangeEnd: (v) => _jumpTo(v.round()),
+      child: SizedBox(
+        height: 48,
+        child: Directionality(
+          textDirection: _store.rtl ? TextDirection.rtl : TextDirection.ltr,
+          child: Slider(
+            value: _page.toDouble(),
+            max: (total - 1).toDouble(),
+            divisions: total - 1,
+            label: '${_page + 1}',
+            onChanged: (v) => setState(() => _page = v.round() - v.round() % _step),
+            onChangeEnd: (v) => _jumpTo(v.round()),
+          ),
         ),
       ),
     );
