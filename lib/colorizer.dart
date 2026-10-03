@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
+import 'xnnpack.dart';
+
 const modelAsset = 'assets/models/colorizer.tflite';
 
 /// Long side cap for the colorized output. Pages larger than this are scaled
@@ -56,20 +58,39 @@ abstract class ColorModel {
 /// [ColorModel] backed by a TFLite file (see tools/model/convert_manga.py).
 class TfliteColorModel implements ColorModel {
   /// Memory-maps [path]; the model weights are not copied into the Dart heap.
-  factory TfliteColorModel.fromFile(String path, {int threads = 4}) =>
-      _create((o) => Interpreter.fromFile(File(path), options: o), threads);
+  factory TfliteColorModel.fromFile(String path, {int threads = 4, bool xnnpack = true}) =>
+      _create((o) => Interpreter.fromFile(File(path), options: o), threads, xnnpack);
 
-  factory TfliteColorModel.fromBuffer(Uint8List bytes, {int threads = 4}) =>
-      _create((o) => Interpreter.fromBuffer(bytes, options: o), threads);
+  factory TfliteColorModel.fromBuffer(Uint8List bytes, {int threads = 4, bool xnnpack = true}) =>
+      _create((o) => Interpreter.fromBuffer(bytes, options: o), threads, xnnpack);
 
-  static TfliteColorModel _create(Interpreter Function(InterpreterOptions) open, int threads) =>
-      // LiteRT applies its XNNPACK CPU delegate to float models by default.
-      // Do not add XNNPackDelegate(options: ...) explicitly: tflite_flutter's
-      // options struct is smaller than LiteRT's, and the delegate then reads
-      // garbage pointers (SIGSEGV in TfLiteInterpreterCreate on device).
-      TfliteColorModel._(open(InterpreterOptions()..threads = threads));
+  static TfliteColorModel _create(
+    Interpreter Function(InterpreterOptions) open,
+    int threads,
+    bool xnnpack,
+  ) {
+    // The prebuilt LiteRT does not apply XNNPACK on its own through this API;
+    // without it the manga model runs several times slower.
+    XnnpackDelegate? xnn;
+    if (xnnpack) {
+      try {
+        xnn = XnnpackDelegate(threads: threads);
+        return TfliteColorModel._(
+          open(
+            InterpreterOptions()
+              ..threads = threads
+              ..addDelegate(xnn),
+          ),
+          xnn,
+        );
+      } catch (_) {
+        xnn?.delete();
+      }
+    }
+    return TfliteColorModel._(open(InterpreterOptions()..threads = threads), null);
+  }
 
-  TfliteColorModel._(this._it) {
+  TfliteColorModel._(this._it, this._xnn) {
     final i = _it.getInputTensor(0).shape;
     final o = _it.getOutputTensor(0).shape;
     if (i.length != 4 || i[3] != 1 || o.length != 4 || (o[3] != 2 && o[3] != 3)) {
@@ -84,6 +105,9 @@ class TfliteColorModel implements ColorModel {
   }
 
   final Interpreter _it;
+  final XnnpackDelegate? _xnn;
+
+  bool get usesXnnpack => _xnn != null;
   @override
   late final int inWidth, inHeight, outWidth, outHeight;
   @override
@@ -101,7 +125,10 @@ class TfliteColorModel implements ColorModel {
   }
 
   @override
-  void close() => _it.close();
+  void close() {
+    _it.close();
+    _xnn?.delete();
+  }
 }
 
 /// 8-bit sRGB gray value -> CIE L* / 100.

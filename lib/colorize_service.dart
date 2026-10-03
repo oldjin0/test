@@ -78,7 +78,8 @@ class ColorizeService {
     final s = ColorizeService._(cacheDir);
     final port = ReceivePort();
     port.listen(s._onMessage);
-    await Isolate.spawn(_workerMain, [port.sendPort, modelPath]);
+    final guard = modelPath == null ? null : '$modelPath.xnnpack-guard';
+    await Isolate.spawn(_workerMain, [port.sendPort, modelPath, guard]);
     await s._ready.future;
     if (cacheDir != null) unawaited(_pruneCache(cacheDir));
     return s;
@@ -215,11 +216,21 @@ bool isCancelled(Object? error) => error is _Cancelled;
 void _workerMain(List args) {
   final reply = args[0] as SendPort;
   final modelPath = args[1] as String?;
+  // A native crash cannot be caught. The guard file exists only while XNNPACK
+  // is being set up and used for the first time; if it is still there on the
+  // next launch, that attempt crashed and the plain interpreter is used.
+  final guard = args[2] == null ? null : File(args[2] as String);
+  var guarded = false;
   ColorModel? model;
   String? error;
   if (modelPath != null) {
     try {
-      model = TfliteColorModel.fromFile(modelPath);
+      final xnnpack = guard == null || !guard.existsSync();
+      if (xnnpack && guard != null) {
+        guard.writeAsStringSync('1', flush: true);
+        guarded = true;
+      }
+      model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack);
     } catch (e) {
       error = '$e';
     }
@@ -233,6 +244,10 @@ void _workerMain(List args) {
     final bytes = (m[1] as TransferableTypedData).materialize().asUint8List();
     try {
       final r = colorizePage(bytes, model);
+      if (guarded && r.mode == ColorizeMode.ai) {
+        guarded = false;
+        guard?.deleteSync();
+      }
       reply.send([
         id,
         TransferableTypedData.fromList([r.bytes]),

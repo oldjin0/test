@@ -51,6 +51,7 @@ void main() {
     expect(path, isNotNull, reason: 'assets/models/colorizer.tflite must be bundled');
     final sw = Stopwatch()..start();
     final model = TfliteColorModel.fromFile(path!);
+    expect(model.usesXnnpack, isTrue);
     final loadMs = sw.elapsedMilliseconds;
     // ignore: avoid_print
     print(
@@ -66,15 +67,20 @@ void main() {
     sw.reset();
     final r = colorizePage(page, model);
     final firstMs = sw.elapsedMilliseconds;
+    final firstNative = model.lastInferenceMs;
     sw.reset();
     colorizePage(samplePage(1), model);
     final secondMs = sw.elapsedMilliseconds;
+    final secondNative = model.lastInferenceMs;
+    final xnn = model.usesXnnpack;
     model.close();
 
     final chroma = meanChroma(r.bytes);
     // ignore: avoid_print
     print(
-      'MODEL load=${loadMs}ms page1=${firstMs}ms page2=${secondMs}ms '
+      'MODEL xnnpack=$xnn load=${loadMs}ms '
+      'page1=${firstMs}ms (inference ${firstNative}ms) '
+      'page2=${secondMs}ms (inference ${secondNative}ms) '
       'chroma gray=${gray.toStringAsFixed(2)} colorized=${chroma.toStringAsFixed(2)}',
     );
     expect(r.mode, ColorizeMode.ai);
@@ -113,7 +119,7 @@ void main() {
       }
     }
 
-    await waitFor(() => find.byType(PageView).evaluate().isNotEmpty, 'pages to load');
+    await waitFor(() => find.byType(CurlPageView).evaluate().isNotEmpty, 'pages to load');
     expect(store.progressOf(path)?.total, 3);
     await waitFor(
       () => find.text('AI 채색 중…').evaluate().isEmpty && find.text('AI 모델 준비 중…').evaluate().isEmpty,
