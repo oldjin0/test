@@ -62,10 +62,21 @@ jobs:
           tar xzf /tmp/signing.tgz -C android key.properties
           test -s android/app/upload-keystore.jks && test -s android/key.properties
       - run: flutter build apk --release
-      - name: Show signing certificate
+      - name: Verify the APK is signed with the persistent key
         run: |
+          set -uo pipefail
+          APK=build/app/outputs/flutter-apk/app-release.apk
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
-          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -E "Signer #1 certificate (DN|SHA-256)"
+          OUT=$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1) || { echo "$OUT"; exit 1; }
+          echo "$OUT" | grep -iE "verifies|certificate (DN|SHA-256)" || echo "$OUT"
+          norm() { tr -d ': ' | tr 'A-F' 'a-f'; }
+          APK_FP=$(echo "$OUT" | grep -m1 -i "certificate SHA-256 digest" | sed 's/^[^:]*: *//' | norm)
+          KEY_FP=$(keytool -list -keystore android/app/upload-keystore.jks \
+            -storepass "$(grep '^storePassword=' android/key.properties | cut -d= -f2-)" \
+            | grep -m1 "SHA-256" | sed 's/^[^:]*: *//' | norm)
+          echo "APK signer SHA-256: $APK_FP"
+          echo "Stored key SHA-256: $KEY_FP"
+          test -n "$APK_FP" && test "$APK_FP" = "$KEY_FP"
       - run: ls -l build/app/outputs/flutter-apk/ && sha256sum build/app/outputs/flutter-apk/app-release.apk
       - uses: actions/upload-artifact@v4
         with:
