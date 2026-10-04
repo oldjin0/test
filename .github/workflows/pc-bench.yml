@@ -1,0 +1,118 @@
+name: PC benchmark
+
+# Exports the colorizer to ONNX and builds MangaBench.zip: a self-contained
+# benchmark for a Windows PC (embedded Python + ONNX Runtime DirectML + models).
+# It is published as a pre-release so the Android updater never sees it.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ccr-4d8e098a-xfwocj]
+    paths: [tools/pc/**, .github/workflows/pc-bench.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install onnx onnxruntime onnxconverter-common numpy pillow gdown
+      - name: Fetch manga-colorization-v2 code and generator weights
+        run: |
+          git clone --depth 1 https://github.com/qweasdd/manga-colorization-v2 /tmp/mcv2
+          gdown 1qmxUEKADkEM4iYLp1fpPLLKnfZ6tcF-t -O /tmp/mcv2/networks/generator.zip
+          test $(stat -c %s /tmp/mcv2/networks/generator.zip) -gt 50000000
+      - name: Export to ONNX and check against PyTorch
+        working-directory: tools/pc
+        env:
+          PYTHONPATH: /tmp/mcv2
+        run: python export_onnx.py --weights /tmp/mcv2/networks/generator.zip --out-dir "$GITHUB_WORKSPACE/onnx"
+      - name: Report
+        run: |
+          ls -la onnx
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          r = json.load(open("onnx/export_report.json"))
+          print("### ONNX export")
+          for k, v in r.items():
+              print(f"- **{k}**: {v}")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onnx
+          path: onnx/
+
+  bench:
+    needs: export
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: onnx
+          path: onnx
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Sample images
+        run: |
+          pip install scikit-image pillow
+          python tools/model/fetch_samples.py samples
+      - name: Assemble MangaBench (embedded Python + ONNX Runtime DirectML)
+        shell: pwsh
+        run: |
+          $d = "MangaBench"
+          New-Item -ItemType Directory $d | Out-Null
+          Invoke-WebRequest https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip -OutFile py.zip
+          Expand-Archive py.zip -DestinationPath $d
+          pip install --target "$d/site" onnxruntime-directml numpy pillow
+          # Embedded Python reads only this file for its search path.
+          Set-Content -Path "$d/python311._pth" -Value "python311.zip`n.`nsite`nimport site"
+          Copy-Item tools/pc/bench.py $d
+          Copy-Item onnx/*.onnx $d
+          Copy-Item samples "$d/samples" -Recurse
+          Set-Content -Path "$d/RunBench.bat" -Encoding ascii -Value @"
+          @echo off
+          cd /d "%~dp0"
+          echo Manga Viewer benchmark. This takes a few minutes, please wait...
+          python.exe bench.py --model colorizer_*.onnx --samples samples --out result
+          echo.
+          echo Done. Please send the files in the "result" folder: bench_result.txt and quality_by_size.png
+          pause
+          "@
+          Set-Content -Path "$d/README.txt" -Value "Double-click RunBench.bat. Nothing is installed; delete this folder when done.`nSend result\bench_result.txt (and result\quality_by_size.png)."
+          Get-ChildItem $d | Format-Table Name, Length
+      - name: Run it here (CPU; DirectML on the runner's software adapter, if it works)
+        shell: pwsh
+        working-directory: MangaBench
+        run: |
+          ./python.exe bench.py --model colorizer_fp32.onnx colorizer_fp16.onnx --samples samples --out result --runs 2 --sizes 448,576
+          Get-Content result/bench_result.txt | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Zip
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force MangaBench/result
+          Compress-Archive -Path MangaBench -DestinationPath MangaBench.zip -CompressionLevel Fastest
+          (Get-Item MangaBench.zip).Length / 1MB
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-result
+          path: |
+            MangaBench.zip
+          compression-level: 0
+      - name: Publish pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "pc-bench-${{ github.run_number }}" MangaBench.zip \
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" --prerelease --latest=false \
+            --title "PC benchmark ${{ github.run_number }}" \
+            --notes "Run RunBench.bat from the extracted folder and send result/bench_result.txt."

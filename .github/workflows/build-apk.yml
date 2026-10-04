@@ -4,7 +4,13 @@ on:
   push:
     branches: [ccr-4d8e098a-xfwocj]
     # Model tooling alone does not change the app.
-    paths-ignore: [tools/**, docs/**, .github/workflows/build-model.yml]
+    paths-ignore:
+      - tools/**
+      - docs/**
+      - windows/**
+      - .github/workflows/build-model.yml
+      - .github/workflows/pc-*.yml
+      - .github/workflows/bench.yml
   workflow_dispatch:
 
 jobs:
