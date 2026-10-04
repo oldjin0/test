@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -8,6 +9,8 @@ const _imageExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
 const comicExts = ['.zip', '.cbz'];
 
 bool isComicFile(String path) => comicExts.any(path.toLowerCase().endsWith);
+
+bool isImageFile(String path) => _isPageName(path.split('/').last);
 
 bool _isPageName(String name) {
   final lower = name.toLowerCase();
@@ -53,24 +56,41 @@ Future<Uint8List> _readInBackground(String path, String entry) =>
 
 Future<List<String>> _listInBackground(String path) => Isolate.run(() => listComicPages(path));
 
-/// A comic opened for reading. Pages are decompressed one at a time on
-/// background isolates, and only a small window of recent pages is kept, so
-/// memory use does not grow with the size of the comic.
+/// Image files directly inside [dir], in reading order.
+List<String> listImageFiles(String dir) => [
+  for (final e in Directory(dir).listSync(followLinks: false))
+    if (e is File && _isPageName(e.uri.pathSegments.last)) e.uri.pathSegments.last,
+]..sort((a, b) => naturalCompare(a.toLowerCase(), b.toLowerCase()));
+
+Future<List<String>> _listImagesInBackground(String dir) => Isolate.run(() => listImageFiles(dir));
+
+/// A comic opened for reading: a .zip/.cbz archive or a folder of images.
+/// Pages are read one at a time (archives on background isolates) and only a
+/// small window of recent pages is kept, so memory use does not grow with the
+/// size of the comic.
 class ComicBook {
-  ComicBook._(this.path, this.names, this._window);
+  ComicBook._(this.path, this.names, this._read, this._window);
 
   final String path;
 
-  /// Page entry names in reading order.
+  /// Page names (archive entries or file names) in reading order.
   final List<String> names;
+  final Future<Uint8List> Function(int index) _read;
   final int _window;
 
   int get length => names.length;
 
   static Future<ComicBook> open(String path, {int window = 12}) async {
-    final names = await _listInBackground(path);
-    if (names.isEmpty) throw const FormatException('이미지가 없는 파일입니다.');
-    return ComicBook._(path, names, window);
+    final ComicBook book;
+    if (await FileSystemEntity.isDirectory(path)) {
+      final names = await _listImagesInBackground(path);
+      book = ComicBook._(path, names, (i) => File('$path/${names[i]}').readAsBytes(), window);
+    } else {
+      final names = await _listInBackground(path);
+      book = ComicBook._(path, names, (i) => _readInBackground(path, names[i]), window);
+    }
+    if (book.length == 0) throw const FormatException('이미지가 없습니다.');
+    return book;
   }
 
   // Insertion-ordered: the first key is the least recently used page.
@@ -79,7 +99,7 @@ class ComicBook {
   /// Bytes of page [index]. Repeated calls return the same future while the
   /// page is in the window, so it is safe to call from build methods.
   Future<Uint8List> page(int index) {
-    final future = _cache.remove(index) ?? _readInBackground(path, names[index]);
+    final future = _cache.remove(index) ?? _read(index);
     _cache[index] = future;
     future.then(
       (_) {},

@@ -68,6 +68,9 @@ class LibraryStore extends ChangeNotifier {
   /// Page-curl ("book") turning instead of sliding.
   bool curl = true;
 
+  /// Continuous vertical scrolling (webtoon style) instead of single pages.
+  bool vertical = false;
+
   /// How strongly colorized pages are shown over the original (0..1).
   double colorStrength = 1.0;
 
@@ -96,6 +99,7 @@ class LibraryStore extends ChangeNotifier {
     colorize = p.getBool('colorize') ?? colorize;
     curl = p.getBool('curl') ?? curl;
     colorStrength = p.getDouble('colorStrength') ?? colorStrength;
+    vertical = p.getBool('vertical') ?? vertical;
     keepScreenOn = p.getBool('keepScreenOn') ?? keepScreenOn;
     brightness = p.getDouble('brightness') ?? brightness;
   }
@@ -119,8 +123,51 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('colorize', colorize);
     _prefs.setBool('curl', curl);
     _prefs.setDouble('colorStrength', colorStrength);
+    _prefs.setBool('vertical', vertical);
     _prefs.setBool('keepScreenOn', keepScreenOn);
     _prefs.setDouble('brightness', brightness);
+  }
+
+  // Backup
+
+  /// Everything the library remembers, as JSON-encodable data.
+  Map<String, Object> exportData() => {
+    'app': 'manga_viewer',
+    'version': 1,
+    'folders': folders,
+    'progress': [for (final r in _progress.values) r.toJson()],
+    'bookmarks': [for (final b in _bookmarks) b.toJson()],
+  };
+
+  /// Merges a backup from [exportData]: folders and bookmarks are added, and
+  /// for each comic the more recent reading position wins. Returns how many
+  /// records were added or updated.
+  int importData(Map<String, dynamic> data) {
+    if (data['app'] != 'manga_viewer') throw const FormatException('Manga Viewer 백업 파일이 아닙니다.');
+    var changed = 0;
+    for (final f in (data['folders'] as List? ?? const []).cast<String>()) {
+      if (!folders.contains(f)) {
+        folders.add(f);
+        changed++;
+      }
+    }
+    for (final e in (data['progress'] as List? ?? const []).cast<Map<String, dynamic>>()) {
+      final r = ReadProgress.fromJson(e);
+      final old = _progress[r.path];
+      if (old == null || r.updatedAt.isAfter(old.updatedAt)) {
+        _progress[r.path] = r;
+        changed++;
+      }
+    }
+    for (final e in (data['bookmarks'] as List? ?? const []).cast<Map<String, dynamic>>()) {
+      final b = Bookmark.fromJson(e);
+      if (!isBookmarked(b.path, b.page)) {
+        _bookmarks.add(b);
+        changed++;
+      }
+    }
+    _changed();
+    return changed;
   }
 
   // Settings
@@ -137,6 +184,11 @@ class LibraryStore extends ChangeNotifier {
 
   void setColorize(bool v) {
     colorize = v;
+    _changed();
+  }
+
+  void setVertical(bool v) {
+    vertical = v;
     _changed();
   }
 

@@ -52,6 +52,22 @@ class AppPlatform {
     }
   }
 
+  /// Copies [path] into Pictures/MangaViewer ([pictures]) or
+  /// Download/MangaViewer and returns where it went.
+  static Future<String> publish(
+    String path, {
+    required String name,
+    required String mime,
+    required bool pictures,
+  }) async =>
+      await _channel.invokeMethod<String>('publish', {
+        'path': path,
+        'name': name,
+        'mime': mime,
+        'collection': pictures ? 'pictures' : 'downloads',
+      }) ??
+      '';
+
   /// Opens the system installer for the APK at [path] (in the cache's updates/ dir).
   static Future<void> install(String path) => _channel.invokeMethod('install', {'path': path});
 }

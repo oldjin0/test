@@ -3,6 +3,8 @@
     <!-- Reading .zip/.cbz from user folders: storage permission up to Android 10,
          "All files access" on Android 11+ (zip files are not media files). -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+    <!-- Saving pages/comics to Pictures and Download before Android 10 (MediaStore after). -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage"/>
     <!-- In-app updates: download the new APK and hand it to the system installer. -->

@@ -44,15 +44,19 @@ Future<String?> importComicFile() async {
 Future<String?> pickFolder() => FilePicker.getDirectoryPath();
 
 class FolderListing {
-  FolderListing(this.dirs, this.comics);
+  FolderListing(this.dirs, this.comics, this.images);
   final List<Directory> dirs;
   final List<File> comics;
+
+  /// Number of image files directly in the folder (readable as one comic).
+  final int images;
 }
 
 /// Subfolders and .zip/.cbz files in [path], sorted by natural name order.
 Future<FolderListing> listFolder(String path) async {
   final dirs = <Directory>[];
   final comics = <File>[];
+  var images = 0;
   await for (final e in Directory(path).list(followLinks: false)) {
     final name = p.basename(e.path);
     if (name.startsWith('.')) continue;
@@ -60,11 +64,13 @@ Future<FolderListing> listFolder(String path) async {
       dirs.add(e);
     } else if (e is File && isComicFile(e.path)) {
       comics.add(e);
+    } else if (e is File && isImageFile(e.path)) {
+      images++;
     }
   }
   int byName(FileSystemEntity a, FileSystemEntity b) =>
       naturalCompare(p.basename(a.path).toLowerCase(), p.basename(b.path).toLowerCase());
-  return FolderListing(dirs..sort(byName), comics..sort(byName));
+  return FolderListing(dirs..sort(byName), comics..sort(byName), images);
 }
 
 String comicTitle(String path) => p.basenameWithoutExtension(path);

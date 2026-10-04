@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
@@ -7,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'colorize_service.dart';
 import 'library_store.dart';
 import 'storage.dart';
+import 'thumbnails.dart';
 import 'update_ui.dart';
 import 'updater.dart';
 import 'viewer_page.dart';
@@ -19,7 +23,8 @@ Future<void> openComic(
   String path, {
   int? page,
 }) async {
-  if (!await File(path).exists()) {
+  // Comics are files (.zip/.cbz) or folders of images.
+  if (await FileSystemEntity.type(path) == FileSystemEntityType.notFound) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -100,6 +105,38 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _say(String text) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> _exportBackup() async {
+    try {
+      final json = const JsonEncoder.withIndent(' ').convert(_store.exportData());
+      final now = DateTime.now();
+      final stamp =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+      final saved = await FilePicker.saveFile(
+        fileName: 'manga-viewer-backup-$stamp.json',
+        bytes: Uint8List.fromList(utf8.encode(json)),
+        mimeType: 'application/json',
+      );
+      if (saved != null && mounted) _say('백업을 저장했습니다.');
+    } catch (e) {
+      if (mounted) _say('백업하지 못했습니다: $e');
+    }
+  }
+
+  Future<void> _importBackup() async {
+    try {
+      final file = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: ['json']);
+      if (file == null) return;
+      final data = jsonDecode(utf8.decode(await file.readAsBytes())) as Map<String, dynamic>;
+      final n = _store.importData(data);
+      if (mounted) _say('백업을 불러왔습니다 ($n개 항목 반영).');
+    } catch (e) {
+      if (mounted) _say('백업을 불러오지 못했습니다: $e');
+    }
+  }
+
   Future<void> _addFolder() async {
     if (!await ensureStorageAccess()) {
       if (mounted) showPermissionHint(context);
@@ -121,9 +158,28 @@ class _HomePageState extends State<HomePage> {
             PopupMenuButton<String>(
               tooltip: '메뉴',
               onSelected: (v) => switch (v) {
+                'backup' => _exportBackup(),
+                'restore' => _importBackup(),
                 _ => checkForUpdate(context),
               },
               itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'backup',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.save_alt),
+                    title: Text('백업 내보내기'),
+                    subtitle: Text('읽던 위치 · 북마크 · 폴더'),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'restore',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.restore),
+                    title: Text('백업 불러오기'),
+                  ),
+                ),
                 PopupMenuItem(
                   value: 'update',
                   child: ListTile(
@@ -195,7 +251,7 @@ class _HomePageState extends State<HomePage> {
             builder: (context) {
               final (label, frac) = progressLabel(r);
               return ListTile(
-                leading: const Icon(Icons.menu_book),
+                leading: ComicCover(r.path),
                 title: Text(r.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                 subtitle: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -315,13 +371,21 @@ class _FolderPageState extends State<FolderPage> {
           }
           final l = snap.data;
           if (l == null) return const Center(child: CircularProgressIndicator());
-          if (l.dirs.isEmpty && l.comics.isEmpty) {
-            return const Center(child: Text('이 폴더에 .zip / .cbz 파일이 없습니다.'));
+          if (l.dirs.isEmpty && l.comics.isEmpty && l.images == 0) {
+            return const Center(child: Text('이 폴더에 만화 파일이나 이미지가 없습니다.'));
           }
           return ListenableBuilder(
             listenable: widget.store,
             builder: (context, _) => ListView(
               children: [
+                // A folder of page images reads as one comic.
+                if (l.images > 0)
+                  ListTile(
+                    leading: ComicCover(widget.path),
+                    title: Text('이 폴더의 이미지 ${l.images}장 보기'),
+                    subtitle: _progressText(widget.path),
+                    onTap: () => openComic(context, widget.store, widget.colorizer, widget.path),
+                  ),
                 for (final d in l.dirs)
                   ListTile(
                     leading: const Icon(Icons.folder),
@@ -345,12 +409,17 @@ class _FolderPageState extends State<FolderPage> {
     );
   }
 
+  Widget? _progressText(String path) {
+    final r = widget.store.progressOf(path);
+    return r == null ? null : Text(progressLabel(r).$1);
+  }
+
   Widget _comicTile(String path) {
     final r = widget.store.progressOf(path);
     final marks = widget.store.bookmarksOf(path).length;
     final (label, frac) = r == null ? ('', 0.0) : progressLabel(r);
     return ListTile(
-      leading: const Icon(Icons.menu_book_outlined),
+      leading: ComicCover(path),
       title: Text(comicTitle(path), maxLines: 2, overflow: TextOverflow.ellipsis),
       subtitle: r == null
           ? null

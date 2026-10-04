@@ -14,6 +14,7 @@ import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
 import 'package:manga_viewer/updater.dart';
 import 'package:manga_viewer/viewer_page.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -667,6 +668,54 @@ void main() {
     await tester.drag(find.byKey(const ValueKey('strength')), const Offset(500, 0));
     await tester.pumpAndSettle();
     expect(store.colorStrength, 1.0);
+  });
+
+  testWidgets('vertical (webtoon) mode scrolls through pages and saves the position', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await LibraryStore.load();
+    store.setColorize(false);
+    store.setVertical(true);
+    store.setDual(true); // ignored while scrolling vertically
+    final path = await tester.runAsync(() async {
+      final dir = await Directory.systemTemp.createTemp('webtoon');
+      final archive = Archive();
+      for (var i = 0; i < 6; i++) {
+        final b = grayPage();
+        archive.addFile(ArchiveFile('p$i.png', b.length, b));
+      }
+      final f = File('${dir.path}/w.cbz');
+      await f.writeAsBytes(ZipEncoder().encode(archive));
+      return f.path;
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ViewerPage(path: path!, store: store, colorizer: Completer<ColorizeService>().future),
+      ),
+    );
+    for (var i = 0; i < 50 && find.byType(ScrollablePositionedList).evaluate().isEmpty; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump();
+    }
+    expect(find.byType(ScrollablePositionedList), findsOneWidget);
+    expect(find.byType(CurlPageView), findsNothing);
+    expect(store.progressOf(path)!.page, 0);
+
+    // Each page is about one screen tall: scroll down past two of them.
+    final list = find.byType(ScrollablePositionedList);
+    for (var i = 0; i < 6; i++) {
+      await tester.drag(list, const Offset(0, -500));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(store.progressOf(path)!.page, greaterThanOrEqualTo(2));
+
+    // The page slider jumps in the list as well.
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    slider.onChangeEnd!(5);
+    await tester.pumpAndSettle();
+    expect(store.progressOf(path)!.page, 5);
   });
 
   testWidgets('AppPlatform falls back when the native side is missing', (tester) async {

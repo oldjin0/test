@@ -54,6 +54,26 @@ void main() {
     expect(v.code, greaterThan(0));
     expect(v.abis, isNotEmpty);
     expect(await AppPlatform.canInstall(), isA<bool>());
+
+    // Saving to the gallery and Download (MediaStore) works on the device.
+    final tmp = File('${(await Directory.systemTemp.createTemp('pub')).path}/p.png');
+    await tmp.writeAsBytes(img.encodePng(img.Image(width: 8, height: 8)));
+    final picture = await AppPlatform.publish(
+      tmp.path,
+      name: 'test_${DateTime.now().millisecondsSinceEpoch}.png',
+      mime: 'image/png',
+      pictures: true,
+    );
+    final download = await AppPlatform.publish(
+      tmp.path,
+      name: 'test_${DateTime.now().millisecondsSinceEpoch}.cbz',
+      mime: 'application/vnd.comicbook+zip',
+      pictures: false,
+    );
+    // ignore: avoid_print
+    print('SAVED $picture and $download');
+    expect(picture, contains('Pictures/MangaViewer'));
+    expect(download, contains('Download/MangaViewer'));
   });
 
   testWidgets('bundled AI model loads and colorizes on device', (tester) async {

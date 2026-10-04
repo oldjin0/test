@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'colorize_service.dart';
 import 'colorizer.dart';
 import 'comic_loader.dart';
 import 'curl_page_view.dart';
+import 'exporter.dart';
 import 'library_store.dart';
 import 'storage.dart';
 import 'updater.dart';
@@ -41,10 +45,14 @@ class _ViewerPageState extends State<ViewerPage> {
   bool _showUi = true;
   bool _showOriginal = false; // while the page is long-pressed
   final _colored = <int, Future<ColorizeResult>>{};
+  final _vScroll = ItemScrollController();
+  final _vPositions = ItemPositionsListener.create();
 
   LibraryStore get _store => widget.store;
   String get _title => comicTitle(widget.path);
-  int get _step => _store.dual ? 2 : 1;
+
+  /// Pages per spread: two in dual mode, but vertical scrolling is always single.
+  int get _step => _store.dual && !_store.vertical ? 2 : 1;
 
   List<List<int>> get _spreads {
     final n = _book?.length ?? 0;
@@ -57,6 +65,7 @@ class _ViewerPageState extends State<ViewerPage> {
   void initState() {
     super.initState();
     _store.addListener(_onStore);
+    _vPositions.itemPositions.addListener(_onVerticalScroll);
     AppPlatform.keepScreenOn(_store.keepScreenOn);
     _load();
     widget.colorizer.then((s) {
@@ -87,14 +96,17 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   late bool _curl = _store.curl;
+  late bool _vertical = _store.vertical;
 
   void _onStore() {
     if (!mounted) return;
     setState(() {
       // The slide view's controller must start at the current page whenever
       // the view switches, however the setting was changed.
-      if (_curl != _store.curl) {
+      if (_curl != _store.curl || _vertical != _store.vertical) {
         _curl = _store.curl;
+        _vertical = _store.vertical;
+        _page -= _page % _step;
         _resetController();
       }
     });
@@ -111,8 +123,23 @@ class _ViewerPageState extends State<ViewerPage> {
 
   void _jumpTo(int page) {
     final spread = page ~/ _step;
-    if (!_store.curl && (_controller?.hasClients ?? false)) _controller!.jumpToPage(spread);
+    if (_store.vertical) {
+      if (_vScroll.isAttached) _vScroll.jumpTo(index: page);
+    } else if (!_store.curl && (_controller?.hasClients ?? false)) {
+      _controller!.jumpToPage(spread);
+    }
     _onPageChanged(spread);
+  }
+
+  /// Vertical mode: the current page is the one covering the screen's middle.
+  void _onVerticalScroll() {
+    if (!_store.vertical) return;
+    final positions = _vPositions.itemPositions.value;
+    if (positions.isEmpty) return;
+    final mid = positions.where((p) => p.itemLeadingEdge <= 0.5 && p.itemTrailingEdge > 0.5);
+    final current =
+        (mid.isNotEmpty ? mid.first : positions.reduce((a, b) => a.index < b.index ? a : b)).index;
+    if (current != _page) _onPageChanged(current);
   }
 
   /// The slide view's controller must start at the current page when the
@@ -217,6 +244,7 @@ class _ViewerPageState extends State<ViewerPage> {
 
   @override
   void dispose() {
+    _vPositions.itemPositions.removeListener(_onVerticalScroll);
     AppPlatform.keepScreenOn(false);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _service?.focus(const []);
@@ -267,6 +295,9 @@ class _ViewerPageState extends State<ViewerPage> {
                     'rtl' => _store.setRtl(!_store.rtl),
                     'dual' => _toggleDual(),
                     'display' => _showDisplaySettings(),
+                    'vertical' => _store.setVertical(!_store.vertical),
+                    'savePage' => _savePage(),
+                    'export' => _exportComic(),
                     _ => _toggleCurl(),
                   },
                   itemBuilder: (context) => [
@@ -285,7 +316,15 @@ class _ViewerPageState extends State<ViewerPage> {
                       checked: _store.curl,
                       child: const Text('책 넘김 효과'),
                     ),
+                    CheckedPopupMenuItem(
+                      value: 'vertical',
+                      checked: _store.vertical,
+                      child: const Text('세로 스크롤 (웹툰)'),
+                    ),
                     const PopupMenuItem(value: 'display', child: Text('채색 강도 · 화면 설정')),
+                    const PopupMenuDivider(),
+                    const PopupMenuItem(value: 'savePage', child: Text('현재 페이지를 갤러리에 저장')),
+                    const PopupMenuItem(value: 'export', child: Text('컬러 만화(.cbz)로 저장')),
                   ],
                 ),
               ],
@@ -329,7 +368,19 @@ class _ViewerPageState extends State<ViewerPage> {
       );
     }
 
-    final pager = _store.curl
+    final pager = _store.vertical
+        ? GestureDetector(
+            onTap: toggleUi,
+            child: ScrollablePositionedList.builder(
+              itemCount: _book!.length,
+              initialScrollIndex: _page,
+              itemScrollController: _vScroll,
+              itemPositionsListener: _vPositions,
+              minCacheExtent: 800,
+              itemBuilder: (context, i) => _pageImage(i, vertical: true),
+            ),
+          )
+        : _store.curl
         ? CurlPageView(
             index: _page ~/ _step,
             itemCount: spreads.length,
@@ -374,8 +425,22 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
-  Widget _pageImage(int p) {
-    Widget image(Uint8List b) => Image.memory(b, fit: BoxFit.contain, gaplessPlayback: true);
+  /// A page, colorized when enabled. [vertical]: laid out by width with
+  /// unbounded height (webtoon list), with a page-sized placeholder until the
+  /// image is decoded so the list does not jump.
+  Widget _pageImage(int p, {bool vertical = false}) {
+    final width = MediaQuery.sizeOf(context).width;
+    Widget placeholder() =>
+        vertical ? SizedBox(width: width, height: width * 1.42) : const SizedBox.expand();
+    Widget image(Uint8List b) => Image.memory(
+      b,
+      fit: vertical ? BoxFit.fitWidth : BoxFit.contain,
+      width: vertical ? width : null,
+      gaplessPlayback: true,
+      frameBuilder: vertical
+          ? (context, child, frame, sync) => frame == null && !sync ? placeholder() : child
+          : null,
+    );
     // Pages are read from the archive on demand (see ComicBook).
     return FutureBuilder<Uint8List>(
       future: _book!.page(p),
@@ -383,8 +448,14 @@ class _ViewerPageState extends State<ViewerPage> {
         final original = page.data;
         if (original == null) {
           return page.hasError
-              ? const Center(child: Icon(Icons.broken_image_outlined, color: Colors.white38))
-              : const SizedBox.expand();
+              ? SizedBox(
+                  width: vertical ? width : null,
+                  height: vertical ? width : null,
+                  child: const Center(
+                    child: Icon(Icons.broken_image_outlined, color: Colors.white38),
+                  ),
+                )
+              : placeholder();
         }
         if (!_store.colorize || _service == null) return image(original);
         // The original stays on screen until the colorized page is ready.
@@ -398,17 +469,122 @@ class _ViewerPageState extends State<ViewerPage> {
             final strength = _showOriginal ? 0.0 : _store.colorStrength;
             if (strength >= 0.999) return image(colored.bytes);
             // Colorized page faded over the original by the chosen strength.
+            // The original sizes the stack, so this works in both layouts.
             return Stack(
-              fit: StackFit.expand,
+              alignment: Alignment.center,
               children: [
                 image(original),
-                if (strength > 0.001) Opacity(opacity: strength, child: image(colored.bytes)),
+                if (strength > 0.001)
+                  Positioned.fill(
+                    child: Opacity(opacity: strength, child: image(colored.bytes)),
+                  ),
               ],
             );
           },
         );
       },
     );
+  }
+
+  /// Bytes of page [i] as shown: colorized when colorizing is on (waits for
+  /// it), otherwise the original.
+  Future<Uint8List> _shownPage(int i) async {
+    final service = _service;
+    if (_store.colorize && service != null) {
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          final book = _book!;
+          final r = await service.colorize(_key(i), () => book.page(i));
+          return r.bytes;
+        } catch (e) {
+          if (!isCancelled(e)) rethrow; // cancelled by page flips: just ask again
+        }
+      }
+    }
+    return _book!.page(i);
+  }
+
+  void _say(String text) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> _savePage() async {
+    final i = _page;
+    try {
+      final bytes = await _shownPage(i);
+      final ext = imageExtension(bytes);
+      final tmp = File('${(await getTemporaryDirectory()).path}/page.$ext');
+      await tmp.writeAsBytes(bytes);
+      final where = await AppPlatform.publish(
+        tmp.path,
+        name: '${_title}_${(i + 1).toString().padLeft(3, '0')}.$ext',
+        mime: imageMime(ext),
+        pictures: true,
+      );
+      if (mounted) _say('저장했습니다: $where');
+    } catch (e) {
+      if (mounted) _say('저장하지 못했습니다: $e');
+    }
+  }
+
+  /// Saves the whole comic as shown (colorized) into Download/MangaViewer.
+  Future<void> _exportComic() async {
+    final book = _book;
+    if (book == null) return;
+    final done = ValueNotifier<int>(0);
+    var cancelled = false;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('컬러 만화로 저장 중'),
+          content: ValueListenableBuilder<int>(
+            valueListenable: done,
+            builder: (context, n, _) => Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                LinearProgressIndicator(value: n / book.length),
+                const SizedBox(height: 8),
+                Text('$n / ${book.length} 페이지'),
+                const SizedBox(height: 4),
+                const Text('채색이 안 된 페이지는 채색하면서 저장합니다.', style: TextStyle(fontSize: 12)),
+              ],
+            ),
+          ),
+          actions: [TextButton(onPressed: () => cancelled = true, child: const Text('취소'))],
+        ),
+      ),
+    );
+    final navigator = Navigator.of(context);
+    final tmp = File('${(await getTemporaryDirectory()).path}/export.cbz');
+    String message;
+    try {
+      await writeCbz(
+        tmp.path,
+        book.length,
+        _shownPage,
+        onProgress: (n) => done.value = n,
+        cancelled: () => cancelled,
+      );
+      final suffix = _store.colorize ? '_color' : '';
+      final where = await AppPlatform.publish(
+        tmp.path,
+        name: '$_title$suffix.cbz',
+        mime: 'application/vnd.comicbook+zip',
+        pictures: false,
+      );
+      message = '저장했습니다: $where';
+    } on ExportCancelled {
+      message = '저장을 취소했습니다.';
+    } catch (e) {
+      message = '저장하지 못했습니다: $e';
+    } finally {
+      if (await tmp.exists()) await tmp.delete();
+    }
+    navigator.pop();
+    if (mounted) _say(message);
   }
 
   void _showDisplaySettings() {
