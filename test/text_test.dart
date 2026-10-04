@@ -9,6 +9,7 @@ import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/storage.dart';
 import 'package:manga_viewer/text_book.dart';
 import 'package:manga_viewer/text_reader_page.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// '가나다 똠방각하 쀍 abc\r\n제1장 시작' in CP949 (똠 and 쀍 are outside EUC-KR).
@@ -242,7 +243,7 @@ void main() {
       File('${dir.path}/b.cbz').writeAsBytesSync([0]);
       File('${dir.path}/c.doc').writeAsStringSync('x');
       final l = await listFolder(dir.path);
-      expect(l.comics.map((f) => f.path.split('/').last), ['a.txt', 'b.cbz']);
+      expect(l.comics.map((f) => p.basename(f.path)), ['a.txt', 'b.cbz']);
       expect(progressLabel(ReadProgress('/a.txt', 'a', 250, 1000, DateTime.now())).$1, '25.0%');
       expect(progressLabel(ReadProgress('/b.cbz', 'b', 4, 10, DateTime.now())).$1, '5 / 10');
       dir.deleteSync(recursive: true);

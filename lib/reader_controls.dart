@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -53,10 +54,18 @@ class ReaderKeys extends StatefulWidget {
     this.onMenu,
     this.volumeKeys = true,
     this.rtl = false,
+    this.shortcuts = const {},
+    this.wheelTurns = false,
   });
 
   final VoidCallback onNext, onPrev;
   final VoidCallback? onMenu;
+
+  /// Extra keys (PC): F11, Home/End, B for a bookmark...
+  final Map<LogicalKeyboardKey, VoidCallback> shortcuts;
+
+  /// The mouse wheel turns pages (off where it must scroll, e.g. webtoons).
+  final bool wheelTurns;
   final bool volumeKeys;
 
   /// Right-to-left books: the left arrow reads forward.
@@ -92,9 +101,25 @@ class _ReaderKeysState extends State<ReaderKeys> {
     super.dispose();
   }
 
+  DateTime _lastWheel = DateTime.fromMillisecondsSinceEpoch(0);
+
+  void _onWheel(PointerSignalEvent e) {
+    if (!widget.wheelTurns || e is! PointerScrollEvent || e.scrollDelta.dy == 0) return;
+    // One notch = one page: a smooth wheel sends many events per notch.
+    final now = DateTime.now();
+    if (now.difference(_lastWheel) < const Duration(milliseconds: 160)) return;
+    _lastWheel = now;
+    e.scrollDelta.dy > 0 ? widget.onNext() : widget.onPrev();
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
     final k = e.logicalKey;
+    final extra = widget.shortcuts[k];
+    if (extra != null && e is KeyDownEvent) {
+      extra();
+      return KeyEventResult.handled;
+    }
     final forward = widget.rtl ? LogicalKeyboardKey.arrowLeft : LogicalKeyboardKey.arrowRight;
     final back = widget.rtl ? LogicalKeyboardKey.arrowRight : LogicalKeyboardKey.arrowLeft;
     if (k == LogicalKeyboardKey.pageDown ||
@@ -124,7 +149,10 @@ class _ReaderKeysState extends State<ReaderKeys> {
 
   @override
   Widget build(BuildContext context) {
-    return Focus(autofocus: true, onKeyEvent: _onKey, child: widget.child);
+    return Listener(
+      onPointerSignal: _onWheel,
+      child: Focus(autofocus: true, onKeyEvent: _onKey, child: widget.child),
+    );
   }
 }
 

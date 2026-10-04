@@ -78,10 +78,13 @@ String _ago(DateTime t) {
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.store, required this.colorizer});
+  const HomePage({super.key, required this.store, required this.colorizer, this.openOnStart});
 
   final LibraryStore store;
   final Future<ColorizeService> colorizer;
+
+  /// A book to open right away (PC: "open with" / a path on the command line).
+  final String? openOnStart;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -95,7 +98,13 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) checkForUpdateQuietly(context);
+      if (!mounted) return;
+      final first = widget.openOnStart;
+      if (first != null) {
+        _open(first, page: _store.progressOf(first)?.page);
+      } else {
+        checkForUpdateQuietly(context);
+      }
     });
   }
 

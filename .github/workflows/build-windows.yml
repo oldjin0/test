@@ -93,3 +93,47 @@ jobs:
           name: MangaViewer-windows
           path: MangaViewer-windows.zip
           compression-level: 0
+
+  # Publishes the zip the PC version's updater downloads (a pre-release, so the
+  # phone's "latest" never changes), only when the build and its tests passed.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: MangaViewer-windows
+          path: dist
+      - name: Publish pc-${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          # The token cannot tag a commit whose workflow files differ from the branch
+          # head; the newer commit's own build publishes instead.
+          HEAD=$(gh api "repos/$REPO/commits/${{ github.ref_name }}" -q .sha)
+          CHANGED=$(gh api "repos/$REPO/compare/${{ github.sha }}...$HEAD" \
+            -q '[.files[]?.filename | select(startswith(".github/workflows/"))] | length')
+          if [ "$CHANGED" != "0" ]; then
+            echo "::notice::Workflows changed after this commit; the newer build publishes."
+            exit 0
+          fi
+          (cd dist && sha256sum MangaViewer-windows.zip > SHA256SUMS && cat SHA256SUMS)
+          git log -1 --format='%s%n%n%b' | grep -vE '^(Co-Authored-By|Claude-Session):' > notes.md || true
+          gh release create "pc-${{ github.run_number }}" dist/MangaViewer-windows.zip dist/SHA256SUMS \
+            --repo "$REPO" --target "${{ github.sha }}" --prerelease --latest=false \
+            --title "Manga Viewer PC 1.0.${{ github.run_number }}" --notes-file notes.md
+      - name: Keep only the 3 newest PC builds
+        run: |
+          set -euo pipefail
+          gh release list --repo "$REPO" --limit 100 --json tagName,isDraft,createdAt \
+            -q '[.[] | select(.isDraft | not) | select(.tagName | test("^pc-[0-9]+$"))]
+                | sort_by(.createdAt) | reverse | .[3:] | .[].tagName' |
+          while read -r TAG; do
+            echo "Deleting old release $TAG"
+            gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
+          done

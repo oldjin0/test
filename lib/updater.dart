@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import 'pc_platform.dart';
 
@@ -14,6 +15,7 @@ const updateRepo = 'oldjin0/test';
 const _arm64Apk = 'manga-viewer-arm64.apk';
 const _universalApk = 'manga-viewer-universal.apk';
 const _checksums = 'SHA256SUMS';
+const _windowsZip = 'MangaViewer-windows.zip';
 
 class AppVersion {
   const AppVersion(this.code, this.name, this.abis);
@@ -79,7 +81,8 @@ class AppPlatform {
             '';
 
   /// Opens the system installer for the APK at [path] (in the cache's updates/ dir).
-  static Future<void> install(String path) => _channel.invokeMethod('install', {'path': path});
+  static Future<void> install(String path) =>
+      isPc ? pcInstallUpdate(path) : _channel.invokeMethod('install', {'path': path});
 
   static StreamController<String>? _keys;
 
@@ -149,16 +152,21 @@ class UpdateException implements Exception {
 
 /// Checks GitHub Releases for a newer build and downloads it.
 class Updater {
-  Updater({this.repo = updateRepo, Uri? apiBase, HttpClient? client})
+  /// [pc] selects the PC version's releases (`pc-<n>` tags, a zip of the
+  /// program); by default whatever platform this is.
+  Updater({this.repo = updateRepo, Uri? apiBase, HttpClient? client, bool? pc})
     : apiBase = apiBase ?? Uri.parse('https://api.github.com'),
+      pc = pc ?? isPc,
       _client = client ?? (HttpClient()..connectionTimeout = const Duration(seconds: 15));
 
+  final bool pc;
   final String repo;
   final Uri apiBase;
   final HttpClient _client;
 
   /// Returns the newer release, or null when [currentBuild] is up to date.
   Future<UpdateInfo?> check({required int currentBuild, required List<String> abis}) async {
+    if (pc) return _checkPc(currentBuild);
     final release = await _getJson(apiBase.resolve('/repos/$repo/releases/latest'));
     final tag = release['tag_name'] as String? ?? '';
     final build = int.tryParse(tag.replaceFirst('build-', '')) ?? 0;
@@ -189,6 +197,44 @@ class Updater {
     );
   }
 
+  /// The PC version's releases are pre-releases (so the phone's "latest" is
+  /// never one of them): find the newest `pc-<n>` among the recent releases.
+  Future<UpdateInfo?> _checkPc(int currentBuild) async {
+    final list = jsonDecode(
+      await _getText(apiBase.resolve('/repos/$repo/releases?per_page=30'), api: true),
+    ) as List;
+    Map<String, dynamic>? best;
+    var bestBuild = 0;
+    for (final r in list.cast<Map<String, dynamic>>()) {
+      if (r['draft'] == true) continue;
+      final tag = r['tag_name'] as String? ?? '';
+      if (!tag.startsWith('pc-')) continue;
+      final n = int.tryParse(tag.substring(3)) ?? 0;
+      if (n > bestBuild) (best, bestBuild) = (r, n);
+    }
+    if (best == null || bestBuild <= currentBuild) return null;
+
+    final assets = [for (final a in (best['assets'] as List? ?? const [])) a as Map];
+    Map? asset(String name) => assets.where((a) => a['name'] == name).firstOrNull;
+    final zip = asset(_windowsZip), sums = asset(_checksums);
+    if (zip == null || sums == null) {
+      throw const UpdateException('업데이트 파일이 아직 준비되지 않았습니다.');
+    }
+    final sumsText = await _getText(Uri.parse(sums['browser_download_url'] as String));
+    final sha = _checksumFor(sumsText, _windowsZip);
+    if (sha == null) throw const UpdateException('업데이트 파일의 검증 정보가 없습니다.');
+    final name = (best['name'] as String?)?.trim();
+    return UpdateInfo(
+      build: bestBuild,
+      version: name != null && name.isNotEmpty ? name : 'pc-$bestBuild',
+      notes: best['body'] as String? ?? '',
+      assetName: _windowsZip,
+      url: Uri.parse(zip['browser_download_url'] as String),
+      size: (zip['size'] as num?)?.toInt() ?? 0,
+      sha256: sha,
+    );
+  }
+
   /// Downloads the update into [dir] and verifies its SHA-256 before
   /// returning it. A partial or corrupted download is deleted.
   Future<File> download(
@@ -197,7 +243,10 @@ class Updater {
     void Function(int received, int total)? onProgress,
   }) async {
     await dir.create(recursive: true);
-    final target = File('${dir.path}/manga-viewer-${info.build}.apk');
+    final ext = info.assetName.contains('.')
+        ? info.assetName.substring(info.assetName.lastIndexOf('.'))
+        : '';
+    final target = File(p.join(dir.path, 'manga-viewer-${info.build}$ext'));
     if (await target.exists() && await _sha256Of(target) == info.sha256) return target;
 
     final part = File('${target.path}.part');
@@ -227,7 +276,9 @@ class Updater {
     }
     // Keep only this update.
     await for (final e in dir.list()) {
-      if (e is File && e.path != part.path) await e.delete();
+      // p.equals: Windows lists paths with backslashes, the .part path was built
+      // with the other kind; comparing the strings would delete the download itself.
+      if (e is File && !p.equals(e.path, part.path)) await e.delete();
     }
     return part.rename(target.path);
   }

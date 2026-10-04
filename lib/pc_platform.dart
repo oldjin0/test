@@ -63,5 +63,70 @@ Future<void> pcRevealInFolder(String path) async {
   }
 }
 
+/// The helper that replaces the program's files once it has exited.
+const _updateScript = r'''
+$ErrorActionPreference = 'Stop'
+$log = @LOG@
+try {
+  try { Wait-Process -Id @PID@ -Timeout 90 } catch {}
+  Start-Sleep -Milliseconds 400
+  Copy-Item -Path (Join-Path @STAGE@ '*') -Destination @INSTALL@ -Recurse -Force
+  'copied' | Set-Content $log
+} catch {
+  ('failed: ' + $_) | Set-Content $log
+}
+if ('@RESTART@' -eq '1') { Start-Process -FilePath (Join-Path @INSTALL@ 'manga_viewer.exe') }
+Remove-Item -Recurse -Force @STAGE@ -ErrorAction SilentlyContinue
+''';
+
+String _ps(String s) => "'${s.replaceAll("'", "''")}'";
+
+/// Installs a downloaded PC update: unpacks [zipPath] next to the program,
+/// then a PowerShell helper waits for this program to exit, copies the new
+/// files over it and starts it again. Returns once the helper runs; the
+/// caller (the app) should exit at once. [installDir], [waitForPid] and
+/// [restart] exist for tests.
+Future<void> pcInstallUpdate(
+  String zipPath, {
+  String? installDir,
+  int? waitForPid,
+  bool restart = true,
+}) async {
+  final install = installDir ?? exeDir;
+  final stage = Directory(p.join(Directory.systemTemp.path, 'manga_viewer_update'));
+  if (await stage.exists()) await stage.delete(recursive: true);
+  await stage.create(recursive: true);
+  final root = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+  final tar = p.join(root, 'System32', 'tar.exe');
+  final r = await Process.run(File(tar).existsSync() ? tar : 'tar', [
+    '-xf',
+    zipPath,
+    '-C',
+    stage.path,
+  ]);
+  if (r.exitCode != 0) throw Exception('업데이트 파일을 풀 수 없습니다: ${r.stderr}');
+  if (!File(p.join(stage.path, 'manga_viewer.exe')).existsSync()) {
+    throw Exception('업데이트 파일에 프로그램이 없습니다.');
+  }
+  final log = p.join(Directory.systemTemp.path, 'manga_viewer_update.log');
+  final script = File(p.join(Directory.systemTemp.path, 'manga_viewer_update.ps1'));
+  // UTF-8 with a BOM: Windows PowerShell reads other files as ANSI.
+  final text = _updateScript
+      .replaceAll('@LOG@', _ps(log))
+      .replaceAll('@PID@', '${waitForPid ?? pid}')
+      .replaceAll('@STAGE@', _ps(stage.path))
+      .replaceAll('@INSTALL@', _ps(install))
+      .replaceAll('@RESTART@', restart ? '1' : '0');
+  await script.writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(text)]);
+  if (File(log).existsSync()) File(log).deleteSync();
+  await Process.start('powershell.exe', [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    script.path,
+  ], mode: ProcessStartMode.detached);
+}
+
 /// Frees [ptr] allocated with the ffi allocator (shared by the FFI helpers).
 void freeNative(ffi.Pointer<ffi.NativeType> ptr) => calloc.free(ptr);

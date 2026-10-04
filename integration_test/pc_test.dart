@@ -36,7 +36,9 @@ void main() {
   final fp16 = p.join(models, 'colorizer_fp16.onnx');
   final denoiser = p.join(models, 'denoiser.onnx');
 
-  testWidgets('this is the PC build and its platform helpers answer', (tester) async {
+  testWidgets('this is the PC build and its platform helpers answer', (
+    tester,
+  ) async {
     expect(isPc, isTrue);
     final v = await AppPlatform.version();
     report('version', '${v.name} (${v.code}) ${v.abis}');
@@ -44,7 +46,9 @@ void main() {
     expect(await AppPlatform.canInstall(), isTrue);
     await AppPlatform.keepScreenOn(true);
     await AppPlatform.keepScreenOn(false);
-    final tmp = File(p.join((await Directory.systemTemp.createTemp('pub')).path, 'p.png'));
+    final tmp = File(
+      p.join((await Directory.systemTemp.createTemp('pub')).path, 'p.png'),
+    );
     await tmp.writeAsBytes(img.encodePng(img.Image(width: 8, height: 8)));
     final where = await AppPlatform.publish(
       tmp.path,
@@ -57,7 +61,9 @@ void main() {
     expect(where, contains('MangaViewer'));
   });
 
-  testWidgets('ONNX Runtime engine: colors, hints, denoiser, GPU fallback', (tester) async {
+  testWidgets('ONNX Runtime engine: colors, hints, denoiser, GPU fallback', (
+    tester,
+  ) async {
     const w = 448;
     final h = pcModelHeight(w);
     final sw = Stopwatch()..start();
@@ -79,15 +85,32 @@ void main() {
     report('colorize', '${sw.elapsedMilliseconds} ms on ${model.backend}');
     expect(out.mode, ColorizeMode.ai);
     expect(model.sawInvalidOutput, isFalse);
-    expect(meanChroma(out.bytes), greaterThan(gray + 2), reason: 'output carries color');
+    expect(
+      meanChroma(out.bytes),
+      greaterThan(gray + 2),
+      reason: 'output carries color',
+    );
 
     // A blue hint turns its surroundings bluer; the denoiser keeps the page sane.
-    final hinted = colorizePage(page, model, hints: const [ColorHint(0.5, 0.5, 0x3A78D8)]);
-    final before = blueness(out.bytes, 0.5, 0.5), after = blueness(hinted.bytes, 0.5, 0.5);
-    report('hint', 'blueness ${before.toStringAsFixed(1)} -> ${after.toStringAsFixed(1)}');
+    final hinted = colorizePage(
+      page,
+      model,
+      hints: const [ColorHint(0.5, 0.5, 0x3A78D8)],
+    );
+    final before = blueness(out.bytes, 0.5, 0.5),
+        after = blueness(hinted.bytes, 0.5, 0.5);
+    report(
+      'hint',
+      'blueness ${before.toStringAsFixed(1)} -> ${after.toStringAsFixed(1)}',
+    );
     expect(after, greaterThan(before + 8));
 
-    final dn = OnnxDenoiser.open(denoiser, width: w, height: h, device: model.device);
+    final dn = OnnxDenoiser.open(
+      denoiser,
+      width: w,
+      height: h,
+      device: model.device,
+    );
     addTearDown(dn.close);
     final cleaned = colorizePage(page, model, denoiser: dn);
     expect(cleaned.mode, ColorizeMode.ai);
@@ -100,9 +123,75 @@ void main() {
     }
   });
 
+  testWidgets(
+    'the update helper waits for exit, swaps the files and restarts',
+    (tester) async {
+      final dir = await Directory.systemTemp.createTemp('pcupdate');
+      final install = Directory(p.join(dir.path, 'install dir ü'))
+        ..createSync(); // spaces, non-ASCII
+      File(p.join(install.path, 'old.txt')).writeAsStringSync('old');
+      final system32 = p.join(
+        Platform.environment['SystemRoot'] ?? r'C:\Windows',
+        'System32',
+      );
+      // A real program that starts and ends at once stands in for manga_viewer.exe.
+      final stand = File(p.join(system32, 'whoami.exe')).readAsBytesSync();
+      File(p.join(install.path, 'manga_viewer.exe')).writeAsBytesSync([0]);
+      final zip = Archive()
+        ..addFile(ArchiveFile('manga_viewer.exe', stand.length, stand))
+        ..addFile(ArchiveFile('new.txt', 3, 'new'.codeUnits))
+        ..addFile(ArchiveFile('data/child.txt', 5, 'child'.codeUnits));
+      final zipFile = File(p.join(dir.path, 'update.zip'))
+        ..writeAsBytesSync(ZipEncoder().encode(zip));
+      final log = File(
+        p.join(Directory.systemTemp.path, 'manga_viewer_update.log'),
+      );
+      if (log.existsSync()) log.deleteSync();
+
+      // The "old program": a process that exits after ~3 s; the helper must wait for it.
+      final old = await Process.start('powershell.exe', [
+        '-NoProfile',
+        '-Command',
+        'Start-Sleep -Seconds 3',
+      ]);
+      final t = Stopwatch()..start();
+      await pcInstallUpdate(
+        zipFile.path,
+        installDir: install.path,
+        waitForPid: old.pid,
+      );
+      for (var i = 0; i < 120 && !log.existsSync(); i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      expect(log.existsSync(), isTrue, reason: 'the helper never finished');
+      expect(log.readAsStringSync().trim(), 'copied');
+      expect(
+        t.elapsed,
+        greaterThan(const Duration(seconds: 2)),
+        reason: 'it waited for the old program',
+      );
+      expect(File(p.join(install.path, 'new.txt')).readAsStringSync(), 'new');
+      expect(
+        File(p.join(install.path, 'data', 'child.txt')).readAsStringSync(),
+        'child',
+      );
+      expect(
+        File(p.join(install.path, 'manga_viewer.exe')).lengthSync(),
+        stand.length,
+      );
+      expect(
+        File(p.join(install.path, 'old.txt')).existsSync(),
+        isTrue,
+        reason: 'user files stay',
+      );
+      report('update helper', 'swapped files in ${t.elapsed.inSeconds} s');
+    },
+  );
+
   testWidgets('PDF pages render through pdfium', (tester) async {
     final dir = await Directory.systemTemp.createTemp('pcpdf');
-    final pdf = File(p.join(dir.path, 'book.pdf'))..writeAsBytesSync(simplePdf([0.8, 0.3]));
+    final pdf = File(p.join(dir.path, 'book.pdf'))
+      ..writeAsBytesSync(simplePdf([0.8, 0.3]));
     final book = await ComicBook.open(pdf.path);
     expect(book.length, 2);
     for (final (i, grayLevel) in [(0, 204), (1, 76)]) {
@@ -122,7 +211,9 @@ void main() {
     }
   });
 
-  testWidgets('RAR (RAR4 here) and 7z open through the system tar', (tester) async {
+  testWidgets('RAR (RAR4 here) and 7z open through the system tar', (
+    tester,
+  ) async {
     final dir = await Directory.systemTemp.createTemp('pcarc');
     Uint8List gray(int v) {
       final im = img.Image(width: 30, height: 40, numChannels: 3);
@@ -130,8 +221,13 @@ void main() {
       return img.encodePng(im);
     }
 
-    final pages = {'p10.png': gray(100), 'p2.png': gray(50), 'dir/p1.png': gray(20)};
-    final cbr = File(p.join(dir.path, 'book.cbr'))..writeAsBytesSync(storedRar(pages));
+    final pages = {
+      'p10.png': gray(100),
+      'p2.png': gray(50),
+      'dir/p1.png': gray(20),
+    };
+    final cbr = File(p.join(dir.path, 'book.cbr'))
+      ..writeAsBytesSync(storedRar(pages));
     final rar = await ComicBook.open(cbr.path);
     expect(rar.names, ['dir/p1.png', 'p2.png', 'p10.png']);
     expect(await rar.page(1), pages['p2.png']);
@@ -145,17 +241,36 @@ void main() {
     });
     final sevenZip = p.join(dir.path, 'book.7z');
     final made = await Process.run(
-      p.join(Platform.environment['SystemRoot'] ?? r'C:\Windows', 'System32', 'tar.exe'),
-      ['--format', '7zip', '-cf', sevenZip, '-C', src.path, 'dir', 'p10.png', 'p2.png'],
+      p.join(
+        Platform.environment['SystemRoot'] ?? r'C:\Windows',
+        'System32',
+        'tar.exe',
+      ),
+      [
+        '--format',
+        '7zip',
+        '-cf',
+        sevenZip,
+        '-C',
+        src.path,
+        'dir',
+        'p10.png',
+        'p2.png',
+      ],
     );
     expect(made.exitCode, 0, reason: '${made.stderr}');
     final z = await ComicBook.open(sevenZip);
     expect(z.names, ['dir/p1.png', 'p2.png', 'p10.png']);
     expect(await z.page(0), pages['dir/p1.png']);
-    report('archives', 'rar ${rar.names.length} pages, 7z ${z.names.length} pages');
+    report(
+      'archives',
+      'rar ${rar.names.length} pages, 7z ${z.names.length} pages',
+    );
   });
 
-  testWidgets('worker on the ONNX engine colorizes a comic in the viewer', (tester) async {
+  testWidgets('worker on the ONNX engine colorizes a comic in the viewer', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     final store = await LibraryStore.load();
     store.update((s) {
@@ -192,11 +307,16 @@ void main() {
       }
     }
 
-    await waitFor(() => find.byType(Image).evaluate().isNotEmpty, 'the first page');
+    await waitFor(
+      () => find.byType(Image).evaluate().isNotEmpty,
+      'the first page',
+    );
     expect(store.progressOf(path)?.total, 3);
     // The first page gets colorized by the ONNX worker (the chip disappears).
     await waitFor(
-      () => find.text('AI 채색 중…').evaluate().isEmpty && find.text('AI 모델 준비 중…').evaluate().isEmpty,
+      () =>
+          find.text('AI 채색 중…').evaluate().isEmpty &&
+          find.text('AI 모델 준비 중…').evaluate().isEmpty,
       'colorization',
     );
     final first = await service.colorize(

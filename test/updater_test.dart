@@ -12,6 +12,8 @@ class FakeGitHub {
   final arm64 = List<int>.generate(300000, (i) => i % 251);
   final universal = List<int>.generate(500000, (i) => (i * 7) % 253);
   String? overrideSums;
+  final zip = List<int>.generate(400000, (i) => (i * 11) % 249);
+  bool pcZipMissing = false;
 
   Uri get base => Uri.parse('http://${server.address.host}:${server.port}');
 
@@ -35,6 +37,32 @@ class FakeGitHub {
               ],
             }),
           );
+        case '/repos/o/r/releases': // the list the PC version reads
+          r.headers.contentType = ContentType.json;
+          Map<String, Object> release(String tag, {bool draft = false, bool zipOk = true}) => {
+            'tag_name': tag,
+            'name': 'Manga Viewer $tag',
+            'body': 'PC notes',
+            'draft': draft,
+            'prerelease': true,
+            'assets': [
+              if (zipOk && !pcZipMissing)
+                _asset('MangaViewer-windows.zip', zip.length, '/files/zip'),
+              _asset('SHA256SUMS', 0, '/files/pcsums'),
+            ],
+          };
+          r.write(
+            jsonEncode([
+              {'tag_name': 'build-99', 'draft': false, 'assets': []}, // a phone release
+              release('pc-5', draft: true),
+              release('pc-4'),
+              release('pc-3'),
+            ]),
+          );
+        case '/files/zip':
+          r.add(zip);
+        case '/files/pcsums':
+          r.write('${sha256.convert(zip)}  MangaViewer-windows.zip\n');
         case '/redirect/arm64': // release assets are served through a redirect
           r.statusCode = HttpStatus.found;
           r.headers.set(HttpHeaders.locationHeader, '$base/files/arm64');
@@ -123,5 +151,38 @@ void main() {
     await gh.server.close(force: true);
     final offline = Updater(repo: 'o/r', apiBase: Uri.parse('http://127.0.0.1:$port'));
     await expectLater(offline.check(currentBuild: 1, abis: []), throwsA(isA<UpdateException>()));
+  });
+
+  group('PC version', () {
+    late Updater pc;
+    setUp(() => pc = Updater(repo: 'o/r', apiBase: gh.base, pc: true));
+
+    test('finds the newest published pc-N release, ignoring drafts and phone builds', () async {
+      final info = await pc.check(currentBuild: 2, abis: const ['windows-x64']);
+      expect(info, isNotNull);
+      expect(info!.build, 4);
+      expect(info.assetName, 'MangaViewer-windows.zip');
+      expect(info.notes, 'PC notes');
+      expect(info.size, gh.zip.length);
+    });
+
+    test('up to date when this build is the newest', () async {
+      expect(await pc.check(currentBuild: 4, abis: const []), isNull);
+      expect(await pc.check(currentBuild: 9, abis: const []), isNull);
+    });
+
+    test('downloads the zip, verifies it and names it .zip', () async {
+      final info = (await pc.check(currentBuild: 0, abis: const []))!;
+      final seen = <int>[];
+      final f = await pc.download(info, dir, onProgress: (r, t) => seen.add(r));
+      expect(f.path, endsWith('.zip'));
+      expect(await f.readAsBytes(), gh.zip);
+      expect(seen.last, gh.zip.length);
+    });
+
+    test('a release without the zip is not offered', () async {
+      gh.pcZipMissing = true;
+      await expectLater(pc.check(currentBuild: 0, abis: const []), throwsA(isA<UpdateException>()));
+    });
   });
 }

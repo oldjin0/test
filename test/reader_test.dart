@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -226,6 +227,44 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
       expect(store.progressOf(path)!.page, 2);
+    });
+
+    testWidgets('PC keys: Home/End, B, D; the wheel turns one page per notch', (tester) async {
+      final (store, _) = await open(tester, (s) => s.update((s) => s.turnStyle = 'none'));
+      final path = store.recent.first.path;
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await tester.pump();
+      expect(store.progressOf(path)!.page, 4);
+      await tester.sendKeyEvent(LogicalKeyboardKey.home);
+      await tester.pump();
+      expect(store.progressOf(path)!.page, 0);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+      await tester.pump();
+      expect(store.isBookmarked(path, 0), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+      await tester.pump();
+      expect(store.isBookmarked(path, 0), isFalse);
+
+      Future<void> wheel(double dy) async {
+        final pointer = TestPointer(1, PointerDeviceKind.mouse)..hover(const Offset(400, 300));
+        await tester.sendEventToBinding(pointer.scroll(Offset(0, dy)));
+        await tester.pump();
+      }
+
+      await wheel(100); // one notch down: next page
+      expect(store.progressOf(path)!.page, 1);
+      await wheel(100); // a smooth wheel's second event within the same notch: ignored
+      expect(store.progressOf(path)!.page, 1);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 250)));
+      await wheel(100);
+      expect(store.progressOf(path)!.page, 2);
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 250)));
+      await wheel(-100); // up: previous
+      expect(store.progressOf(path)!.page, 1);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyD); // dual view: two pages per spread
+      await tester.pump();
+      expect(store.dual, isTrue);
     });
 
     testWidgets('top/bottom tap zones and the status line', (tester) async {

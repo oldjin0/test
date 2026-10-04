@@ -13,6 +13,7 @@ import 'curl_page_view.dart';
 import 'exporter.dart';
 import 'hint_editor.dart';
 import 'library_store.dart';
+import 'pc_window.dart';
 import 'reader_controls.dart';
 import 'reader_pages.dart';
 import 'reader_settings.dart';
@@ -266,6 +267,15 @@ class _ViewerPageState extends State<ViewerPage> {
 
   void _toggleColorize() => _store.setColorize(!_store.colorize);
 
+  /// Esc: leaves full screen first, then the book.
+  Future<void> _onEscape() async {
+    if (await pcIsFullscreen()) {
+      await pcExitFullscreen();
+    } else if (mounted) {
+      Navigator.maybePop(context);
+    }
+  }
+
   void _toggleUi() {
     setState(() => _showUi = !_showUi);
     // Hidden UI: hide the status and navigation bars too.
@@ -494,6 +504,18 @@ class _ViewerPageState extends State<ViewerPage> {
         onMenu: _toggleUi,
         volumeKeys: _store.volumeKeys,
         rtl: _store.rtl && !_store.vertical,
+        wheelTurns: !_store.vertical,
+        shortcuts: {
+          LogicalKeyboardKey.f11: pcToggleFullscreen,
+          LogicalKeyboardKey.keyF: pcToggleFullscreen,
+          LogicalKeyboardKey.escape: _onEscape,
+          LogicalKeyboardKey.home: () => _jumpTo(0),
+          LogicalKeyboardKey.end: () => _jumpTo((_book?.length ?? 1) - 1),
+          LogicalKeyboardKey.keyB: _toggleBookmark,
+          LogicalKeyboardKey.keyC: _toggleColorize,
+          LogicalKeyboardKey.keyD: _toggleDual,
+          LogicalKeyboardKey.keyR: () => _store.setRtl(!_store.rtl),
+        },
         child: _body(),
       ),
       bottomNavigationBar: _showUi && total > 1 ? _slider(total) : null,

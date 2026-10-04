@@ -2,9 +2,11 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'pc_platform.dart';
 import 'updater.dart';
 
 const _lastCheckKey = 'update_checked_at';
@@ -115,7 +117,7 @@ Future<void> _downloadAndInstall(BuildContext context, UpdateInfo info) async {
   File? apk;
   String? error;
   try {
-    final dir = Directory('${(await getApplicationCacheDirectory()).path}/updates');
+    final dir = Directory(p.join((await getApplicationCacheDirectory()).path, 'updates'));
     apk = await Updater().download(info, dir, onProgress: (r, t) => progress.value = (r, t));
   } on UpdateException catch (e) {
     error = e.message;
@@ -164,4 +166,6 @@ Future<void> _install(BuildContext context, File apk) async {
   }
   // The system installer takes over; Android restarts the app as the new version.
   await AppPlatform.install(apk.path);
+  // On the PC a helper swaps the files once this program is gone, then starts it.
+  if (isPc) exit(0);
 }

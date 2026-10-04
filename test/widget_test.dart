@@ -12,6 +12,7 @@ import 'package:manga_viewer/comic_loader.dart';
 import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
+import 'package:manga_viewer/pc_platform.dart';
 import 'package:manga_viewer/updater.dart';
 import 'package:manga_viewer/viewer_page.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -830,6 +831,8 @@ void main() {
     expect(store.prefetchPages, 20);
     final keepOn = find.widgetWithText(SwitchListTile, '읽는 동안 화면 켜짐 유지');
     await tester.scrollUntilVisible(keepOn, 200, scrollable: find.byType(Scrollable).last);
+    await tester.ensureVisible(keepOn); // fully, not just its edge
+    await tester.pumpAndSettle();
     await tester.tap(keepOn);
     await tester.pumpAndSettle();
     expect(store.keepScreenOn, isFalse);
@@ -886,7 +889,7 @@ void main() {
   testWidgets('AppPlatform falls back when the native side is missing', (tester) async {
     final v = (await tester.runAsync(AppPlatform.version))!;
     expect(v.code, 0);
-    expect(v.abis, isEmpty);
+    expect(v.abis, isPc ? ['windows-x64'] : isEmpty);
   });
 
   testWidgets('home shows library tabs', (tester) async {
