@@ -332,6 +332,28 @@ class _ViewerPageState extends State<ViewerPage> {
     denoise: _store.denoise,
   );
 
+  /// Queues every page for colorizing in the background, from the current
+  /// page on and then the pages before it. Reading goes on: the pages the
+  /// reader looks at are always done first, and the finished ones are
+  /// instant when reached.
+  void _colorizeWholeBook() {
+    final book = _book, service = _service;
+    if (book == null || service == null) return;
+    final n = book.length;
+    for (var k = 0; k < n; k++) {
+      final i = (_page + k) % n;
+      service
+          .colorizeInBackground(
+            _key(i),
+            () => book.page(i),
+            hints: _store.hintsOf(widget.path, i),
+            denoise: _store.denoise,
+          )
+          .then((_) {}, onError: (Object _) {});
+    }
+    _say('전체 $n쪽을 백그라운드에서 채색합니다. 읽는 동안 계속 진행됩니다.');
+  }
+
   /// Opens the color-hint editor for the visible page (the first of a spread).
   Future<void> _editHints() async {
     final book = _book, service = _service;
@@ -427,6 +449,7 @@ class _ViewerPageState extends State<ViewerPage> {
                     'savePage' => _savePage(),
                     'hints' => _editHints(),
                     'export' => _exportComic(),
+                    'colorizeAll' => _colorizeWholeBook(),
                     _ => null,
                   },
                   itemBuilder: (context) => [
@@ -453,6 +476,11 @@ class _ViewerPageState extends State<ViewerPage> {
                       child: const Text('이 페이지 색 지정 (힌트)'),
                     ),
                     const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: 'colorizeAll',
+                      enabled: (_service?.modelLoaded ?? false) && _store.colorize,
+                      child: const Text('이 책 전체를 미리 채색 (백그라운드)'),
+                    ),
                     const PopupMenuItem(value: 'savePage', child: Text('현재 페이지를 갤러리에 저장')),
                     const PopupMenuItem(value: 'export', child: Text('컬러 만화(.cbz)로 저장')),
                   ],
@@ -807,7 +835,15 @@ class _ViewerPageState extends State<ViewerPage> {
     if (service == null) return _Chip(busy: true, text: 'AI 모델 준비 중…', eink: eink);
     if (!service.modelLoaded) return _Chip(text: 'AI 모델 없음 · 색조 필터', eink: eink);
     if (pages.coloring(_page)) return _Chip(busy: true, text: 'AI 채색 중…', eink: eink);
-    return const SizedBox.shrink();
+    return ValueListenableBuilder<int>(
+      valueListenable: service.backgroundLeft,
+      builder: (context, left, _) => left == 0
+          ? const SizedBox.shrink()
+          : GestureDetector(
+              onTap: service.cancelBackground,
+              child: _Chip(text: '전체 채색 남은 $left쪽 · 누르면 중지', eink: eink),
+            ),
+    );
   }
 
   Widget _slider(int total) {

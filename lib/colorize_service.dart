@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -57,6 +58,9 @@ class _Job {
   final List<ColorHint> hints;
   final bool denoise;
 
+  /// Queued by [ColorizeService.colorizeInBackground] (whole-book colorizing).
+  bool background = false;
+
   /// Reads the page when the job reaches the front of the queue, so queued
   /// pages cost no memory.
   final Future<Uint8List> Function() load;
@@ -73,6 +77,7 @@ class ColorizeService {
   SendPort? _worker;
   final _ready = Completer<void>();
   final _queue = <String, _Job>{}; // insertion-ordered
+  final _background = <String, _Job>{}; // whole-book jobs: run when _queue is empty
   final _replies = <int, _Job>{};
   _Job? _running;
   int _nextId = 0;
@@ -138,10 +143,49 @@ class ColorizeService {
   }) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
-    final job = _Job(key, loadPage, hints, denoise);
+    // Already waiting in the background queue: now the reader wants it.
+    final promoted = _background.remove(key);
+    final job = promoted ?? _Job(key, loadPage, hints, denoise);
+    job.background = false;
     _queue[key] = job;
+    _updateBackgroundLeft();
     unawaited(_pump());
     return job.completer.future;
+  }
+
+  /// Pages still to do in the background queue (running one included).
+  final backgroundLeft = ValueNotifier<int>(0);
+
+  void _updateBackgroundLeft() {
+    backgroundLeft.value = _background.length + ((_running?.background ?? false) ? 1 : 0);
+  }
+
+  /// Queues a page for colorizing when nothing the reader is looking at is
+  /// waiting: a whole book can be prepared while reading goes on. The result
+  /// lands in the disk cache, so the page is instant when it is reached. A
+  /// later [colorize] of the same page moves it to the front.
+  Future<ColorizeResult> colorizeInBackground(
+    String key,
+    Future<Uint8List> Function() loadPage, {
+    List<ColorHint> hints = const [],
+    bool denoise = false,
+  }) {
+    final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
+    if (existing != null) return existing.completer.future;
+    final job = _Job(key, loadPage, hints, denoise)..background = true;
+    _background[key] = job;
+    _updateBackgroundLeft();
+    unawaited(_pump());
+    return job.completer.future;
+  }
+
+  /// Drops the queued whole-book jobs (the page being worked on finishes).
+  void cancelBackground() {
+    for (final j in _background.values) {
+      j.completer.completeError(const _Cancelled());
+    }
+    _background.clear();
+    _updateBackgroundLeft();
   }
 
   /// Puts [keys] at the front of the queue in this order and cancels queued
@@ -161,13 +205,19 @@ class ColorizeService {
   }
 
   Future<void> _pump() async {
-    if (_running != null || _queue.isEmpty || _worker == null) return;
-    final job = _queue.remove(_queue.keys.first)!;
+    if (_running != null || _worker == null) return;
+    final fromQueue = _queue.isNotEmpty;
+    if (!fromQueue && _background.isEmpty) return;
+    final job = fromQueue
+        ? _queue.remove(_queue.keys.first)!
+        : _background.remove(_background.keys.first)!;
     _running = job;
+    _updateBackgroundLeft();
     try {
       final cached = await _readCache(job.key, job.load);
       if (cached != null) {
         _running = null;
+        _updateBackgroundLeft();
         job.completer.complete(cached);
         unawaited(_pump());
         return;
@@ -185,6 +235,7 @@ class ColorizeService {
       ]);
     } catch (e) {
       _running = null;
+      _updateBackgroundLeft();
       job.completer.completeError(e);
       unawaited(_pump());
     }
@@ -205,6 +256,7 @@ class ColorizeService {
     }
     final job = _replies.remove(m[0] as int)!;
     _running = null;
+    _updateBackgroundLeft();
     if (m[1] == null) {
       job.completer.completeError(StateError(m[4] as String));
     } else {

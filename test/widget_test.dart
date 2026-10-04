@@ -372,6 +372,52 @@ void main() {
       expect(File('${cache.path}/b.color').existsSync(), isTrue);
     });
 
+    test('background (whole-book) jobs yield to the page being read', () async {
+      final s = await ColorizeService.start(cacheDir: cache);
+      final order = <String>[];
+      Future<Uint8List> load(String name) async {
+        order.add(name);
+        return grayPage();
+      }
+
+      final done = [
+        for (final k in ['b1', 'b2', 'b3', 'b4'])
+          s.colorizeInBackground(k, () => load(k)).then((_) {}, onError: (Object _) {}),
+      ];
+      expect(s.backgroundLeft.value, 4, reason: 'b1 runs, three wait');
+      // The reader turns to a page: it goes first; and b4 is wanted too.
+      final f1 = s.colorize('f1', () => load('f1'));
+      final b4 = s.colorize('b4', () => load('b4')); // promoted out of the background
+      expect(s.backgroundLeft.value, 3, reason: 'b4 left the background queue');
+      await Future.wait([f1, b4, ...done]);
+      expect(order, ['b1', 'f1', 'b4', 'b2', 'b3']);
+      expect(s.backgroundLeft.value, 0);
+    });
+
+    test('cancelBackground drops what is queued and keeps the running page', () async {
+      final s = await ColorizeService.start(cacheDir: cache);
+      final results = <String, Object?>{};
+      final all = [
+        for (final k in ['c1', 'c2', 'c3'])
+          s
+              .colorizeInBackground(k, () async => grayPage())
+              .then<void>(
+                (r) {
+                  results[k] = r.mode;
+                },
+                onError: (Object e) {
+                  results[k] = isCancelled(e);
+                },
+              ),
+      ];
+      s.cancelBackground();
+      await Future.wait(all);
+      expect(results['c1'], ColorizeMode.filter, reason: 'was already running');
+      expect(results['c2'], true);
+      expect(results['c3'], true);
+      expect(s.backgroundLeft.value, 0);
+    });
+
     test('focus drops queued pages the reader moved away from', () async {
       final s = await ColorizeService.start(cacheDir: cache);
       final first = s.colorize('p1', () async => grayPage(w: 900, h: 1200)); // running
