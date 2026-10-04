@@ -49,23 +49,27 @@ def main():
         base_in = np.zeros((1, 5, h, w), np.float32)
         base_in[0, 0] = gray
         base = run(base_in)
-        for enc in ("signed", "unit"):
-            for r in (4, 12, 30):
-                disc = (yy - cy) ** 2 + (xx - cx) ** 2 < r * r
-                near = (yy - cy) ** 2 + (xx - cx) ** 2 < (3 * r) ** 2
-                row = []
-                for cname, c in COLORS.items():
-                    x = base_in.copy()
-                    for k in range(3):
-                        v = c[k] * 2 - 1 if enc == "signed" else c[k]
-                        x[0, 1 + k][disc] = v
-                    x[0, 4][disc] = 1
-                    out = run(x)
-                    target = np.array(c, np.float32)
-                    d0 = np.linalg.norm(base[near] - target, axis=1).mean()
-                    d1 = np.linalg.norm(out[near] - target, axis=1).mean()
-                    row.append(f"{cname} {(d0 - d1) / max(d0, 1e-6):+.2f}")
-                print(f"{name:>16} {enc:>6} r={r:<3} " + "  ".join(row), flush=True)
+        # GitHub keeps 10 notices per step: the project's encoding at three
+        # sizes per page, plus 0..1 colors once for comparison.
+        cases = [("signed", 4), ("signed", 12), ("signed", 30)]
+        if name == "synthetic":
+            cases.append(("unit", 12))
+        for enc, r in cases:
+            disc = (yy - cy) ** 2 + (xx - cx) ** 2 < r * r
+            near = (yy - cy) ** 2 + (xx - cx) ** 2 < (3 * r) ** 2
+            row = []
+            for cname, c in COLORS.items():
+                x = base_in.copy()
+                for k in range(3):
+                    v = c[k] * 2 - 1 if enc == "signed" else c[k]
+                    x[0, 1 + k][disc] = v
+                x[0, 4][disc] = 1
+                out = run(x)
+                target = np.array(c, np.float32)
+                d0 = np.linalg.norm(base[near] - target, axis=1).mean()
+                d1 = np.linalg.norm(out[near] - target, axis=1).mean()
+                row.append(f"{cname} {(d0 - d1) / max(d0, 1e-6):+.2f}")
+            print(f"::notice::{name} {enc} r={r} " + "  ".join(row), flush=True)
 
 
 if __name__ == "__main__":

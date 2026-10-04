@@ -92,7 +92,7 @@ def to_tflite(model, h, w, out_path):
     onnx_path = os.path.join(work, "denoiser.onnx")
     torch.onnx.export(model, torch.rand(1, 1, h, w), onnx_path, opset_version=17,
                       input_names=["gray"], output_names=["clean"], dynamo=False)
-    subprocess.run(["onnx2tf", "-i", onnx_path, "-o", os.path.join(work, "tf"), "-b", "1"],
+    subprocess.run(["onnx2tf", "-i", onnx_path, "-o", os.path.join(work, "tf"), "-b", "1", "-n"],
                    check=True)
     shutil.copy(glob.glob(os.path.join(work, "tf", "*_float16.tflite"))[0], out_path)
 
@@ -143,7 +143,7 @@ def main():
     ref = reference(net, x)
     err = (mine - ref).abs().max().item()
     change = (ref - x).abs().max().item()  # how much the denoiser alters the page
-    print(f"rewritten graph vs project FFDNet: max diff {err:.2e} (denoiser changes up to {change:.3f})")
+    print(f"::notice::rewritten graph vs project FFDNet: max diff {err:.2e} (denoiser changes up to {change:.3f})")
     assert change > 0.01 and err < 1e-3 * change, "rewritten FFDNet does not match the project's"
     if args.check_only:
         return
@@ -154,7 +154,7 @@ def main():
     tone = slice(h // 5, h // 2), slice(w // 6, w * 5 // 6)
     before = x.numpy()[0, 0][tone].std()
     after = lite[0, :, :, 0][tone].std()
-    print(f"tflite vs torch: mean {diff.mean():.5f} max {diff.max():.4f}, {ms:.0f} ms, "
+    print(f"::notice::denoiser tflite vs torch: mean {diff.mean():.5f} max {diff.max():.4f}, {ms:.0f} ms, "
           f"{os.path.getsize(args.out) / 1e6:.1f} MB; screentone std {before:.3f} -> {after:.3f}")
     assert diff.mean() < 0.01, "converted denoiser does not match PyTorch"
     print("wrote", args.out)

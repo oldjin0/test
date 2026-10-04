@@ -134,7 +134,7 @@ def main():
             toned = screentone(big).resize(gray.size, Image.BILINEAR)
             plain, ms = colorize(it, toned)
             clean, ms_dn = colorize(it, toned, dn)
-            print(f"{p}: screentoned; colorize {ms:.0f} ms sat {saturation(plain):.1f}, "
+            print(f"::notice::{p.split('/')[-1]}: screentoned; colorize {ms:.0f} ms sat {saturation(plain):.1f}, "
                   f"denoise+colorize {ms_dn:.0f} ms sat {saturation(clean):.1f}")
             panels = [toned.convert("RGB"), plain, clean, orig]
         row = Image.new("RGB", (orig.width * len(panels), orig.height))
