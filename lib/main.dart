@@ -15,6 +15,7 @@ import 'pc_window.dart';
 import 'text_book.dart' show isTextFile;
 import 'home_page.dart';
 import 'library_store.dart';
+import 'viewer_page.dart' show prepareNextPages;
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,10 +24,12 @@ Future<void> main(List<String> args) async {
     await pcWindowInit();
     unawaited(pruneExtractedArchives());
   }
+  final colorizer = startColorizer(store);
+  unawaited(colorizer.then((s) => prepareNextPages(store, s)));
   runApp(
     MangaViewerApp(
       store: store,
-      colorizer: startColorizer(store),
+      colorizer: colorizer,
       openOnStart: isPc ? bookFromArguments(args) : null,
     ),
   );

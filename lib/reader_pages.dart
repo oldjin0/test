@@ -130,6 +130,26 @@ class ReaderPages extends ChangeNotifier {
     _apply();
   }
 
+  /// The reader is closing: the upcoming pages not colorized yet keep going in
+  /// the colorizer's background queue (into the disk cache), so the pages
+  /// that come next are ready the next time this book is opened.
+  void handOff() {
+    final service = _service;
+    if (!_colorize || service == null) return;
+    for (final i in _focus.ahead) {
+      if (colorReady(i)) continue;
+      final opts = colorOptions(i);
+      service
+          .colorizeInBackground(
+            colorKey(i),
+            () => book.page(i),
+            hints: opts.hints,
+            denoise: opts.denoise,
+          )
+          .then((_) {}, onError: (Object _) {}); // nobody waits: cached for later
+    }
+  }
+
   /// Moves the reader: [spread] is how many pages a turn reveals.
   void focus(PageFocus f, {int spread = 1}) {
     _focus = f;

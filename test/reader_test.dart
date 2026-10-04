@@ -122,6 +122,31 @@ void main() {
       expect(pages.original(12), isNull, reason: 'far pages are not read for display');
     });
 
+    test('closing the reader hands the pages ahead to the background queue', () async {
+      final book = await ComicBook.open(await writeComic(dir, 30));
+      final service = await ColorizeService.start(); // no model: tone filter
+      final pages = ReaderPages(
+        book: book,
+        colorKey: (i) => 'h$i',
+        colorOptions: (_) => const ColorOptions(),
+      );
+      pages.setColorizer(service, colorize: true);
+      pages.focus(PageFocus(visible: const [0], ahead: [for (var i = 1; i <= 20; i++) i]));
+      // The reader closes at once: its queue is dropped, the pages ahead go on.
+      service.focus(const []);
+      pages.handOff();
+      pages.dispose();
+      expect(service.backgroundLeft.value, greaterThan(15));
+      final done = Completer<void>();
+      void check() {
+        if (service.backgroundLeft.value == 0 && !done.isCompleted) done.complete();
+      }
+
+      service.backgroundLeft.addListener(check);
+      check();
+      await done.future.timeout(const Duration(seconds: 30));
+    });
+
     test('a page is drawable only once decoded; far pages are forgotten', () async {
       final book = await ComicBook.open(await writeComic(dir, 12));
       final gate = Completer<void>();

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,7 +19,39 @@ import 'reader_controls.dart';
 import 'reader_pages.dart';
 import 'reader_settings.dart';
 import 'storage.dart';
+import 'text_book.dart' show isTextFile;
 import 'updater.dart';
+
+/// At start-up: colors the pages the reader will see next in the book read
+/// last (from where they stopped, as many as "미리 채색할 페이지"), in the
+/// background, so they are ready when the book is opened again.
+Future<void> prepareNextPages(LibraryStore store, ColorizeService service) async {
+  if (!store.colorize || !service.modelLoaded) return;
+  final last = store.recent.where((r) => !isTextFile(r.path)).firstOrNull;
+  if (last == null || last.total == 0 || last.page >= last.total - 1) return;
+  if (!await FileSystemEntity.isDirectory(last.path) && !await File(last.path).exists()) return;
+  try {
+    final book = await ComicBook.open(last.path, window: 4);
+    final end = math.min(book.length, last.page + 1 + store.prefetchPages);
+    for (var i = last.page; i < end; i++) {
+      service
+          .colorizeInBackground(
+            ColorizeService.keyFor(
+              last.path,
+              i,
+              hints: store.hintsOf(last.path, i),
+              denoise: store.denoise,
+            ),
+            () => book.page(i),
+            hints: store.hintsOf(last.path, i),
+            denoise: store.denoise,
+          )
+          .then((_) {}, onError: (Object _) {});
+    }
+  } catch (_) {
+    // the book moved or cannot be read: nothing to prepare
+  }
+}
 
 class ViewerPage extends StatefulWidget {
   const ViewerPage({
@@ -398,6 +431,7 @@ class _ViewerPageState extends State<ViewerPage> {
     applyOrientation('auto');
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _service?.focus(const []);
+    _pages?.handOff(); // the pages ahead keep coloring after the reader closes
     _store.removeListener(_onStore);
     _pages?.removeListener(_onPages);
     _pages?.dispose();
@@ -634,7 +668,8 @@ class _ViewerPageState extends State<ViewerPage> {
     final shown = sp[_page ~/ _step].map((i) => i + 1).join('-');
     final pages = _pages;
     if (!_store.colorize || pages == null || _service == null) return '$shown / $total';
-    return '$shown / $total · 채색 +${pages.readyAhead}';
+    final goal = math.max(0, math.min(_store.prefetchPages, total - 1 - sp[_page ~/ _step].last));
+    return '$shown / $total · 채색 +${pages.readyAhead}/$goal';
   }
 
   /// A page, colorized when enabled, drawn from what [ReaderPages] already
@@ -863,7 +898,7 @@ class _ViewerPageState extends State<ViewerPage> {
           ? const SizedBox.shrink()
           : GestureDetector(
               onTap: service.cancelBackground,
-              child: _Chip(text: '전체 채색 남은 $left쪽 · 누르면 중지', eink: eink),
+              child: _Chip(text: '백그라운드 채색 남은 $left쪽 · 누르면 중지', eink: eink),
             ),
     );
   }
