@@ -28,6 +28,8 @@ class FakeModel implements ColorModel {
   @override
   int get inHeight => 64;
   @override
+  int get inChannels => 1;
+  @override
   int get outWidth => 16;
   @override
   int get outHeight => 16;
@@ -50,9 +52,13 @@ class FakeModel implements ColorModel {
 }
 
 /// RGB model (manga-colorization-v2 contract): paints input pixels that are
-/// pure white padding blue and everything else orange.
+/// pure white padding blue and everything else orange; with hint channels,
+/// hinted pixels take the hint color.
 class FakeRgbModel implements ColorModel {
+  FakeRgbModel({this.inChannels = 1});
   Float32List? lastInput;
+  @override
+  final int inChannels;
   @override
   int get inWidth => 64;
   @override
@@ -64,11 +70,19 @@ class FakeRgbModel implements ColorModel {
   @override
   ModelOutput get output => ModelOutput.rgb;
   @override
-  Float32List predict(Float32List gray) {
-    lastInput = gray;
+  Float32List predict(Float32List input) {
+    lastInput = input;
+    expect(input.length, 64 * 96 * inChannels);
     final out = Float32List(64 * 96 * 3);
-    for (var i = 0; i < gray.length; i++) {
-      final pad = gray[i] == 1.0;
+    for (var i = 0; i < 64 * 96; i++) {
+      final k = i * inChannels;
+      if (inChannels == 5 && input[k + 4] == 1.0) {
+        for (var c = 0; c < 3; c++) {
+          out[i * 3 + c] = (input[k + 1 + c] + 1) / 2;
+        }
+        continue;
+      }
+      final pad = input[k] == 1.0;
       out[i * 3] = pad ? 0.1 : 1.0;
       out[i * 3 + 1] = pad ? 0.2 : 0.55;
       out[i * 3 + 2] = pad ? 1.0 : 0.1;
@@ -217,6 +231,50 @@ void main() {
         final px = out.getPixel(pt.x, pt.y);
         expect(px.r - px.b, greaterThan(30), reason: 'orange at $pt, no blue padding');
       }
+    });
+
+    test('hint model: hints are painted where the reader put them', () {
+      final model = FakeRgbModel(inChannels: 5);
+      final im = img.Image(width: 200, height: 100, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(150, 150, 150));
+      // Page fits as 64x32 at the top: (0.75, 0.5) of the page -> (48, 16).
+      final r = colorizePage(
+        img.encodePng(im),
+        model,
+        hints: const [ColorHint(0.75, 0.5, 0x2080FF)],
+      );
+      final input = model.lastInput!;
+      final at = (16 * 64 + 48) * 5;
+      expect(input[at], closeTo(150 / 255, 0.01), reason: 'gray kept in channel 0');
+      expect(input[at + 4], 1.0, reason: 'mask set at the hint');
+      expect(input[at + 1], closeTo(0x20 / 127.5 - 1, 1e-6));
+      expect(input[at + 3], closeTo(1.0, 1e-6));
+      expect(input[(16 * 64 + 10) * 5 + 4], 0.0, reason: 'no mask away from the hint');
+      expect(input[(40 * 64 + 48) * 5], 1.0, reason: 'padding stays white');
+      // The output turns blue around the hint, orange elsewhere.
+      final out = img.decodeImage(r.bytes)!;
+      final hinted = out.getPixel(150, 50), plain = out.getPixel(20, 50);
+      expect(hinted.b - hinted.r, greaterThan(30));
+      expect(plain.r - plain.b, greaterThan(30));
+    });
+
+    test('denoiser cleans the model input', () {
+      final model = FakeRgbModel();
+      final dn = _HalfDenoiser();
+      final im = img.Image(width: 64, height: 96, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(100, 100, 100));
+      colorizePage(img.encodePng(im), model, denoiser: dn);
+      expect(dn.calls, 1);
+      expect(model.lastInput![0], closeTo(50 / 255, 0.01));
+    });
+
+    test('cache key follows hints and denoise', () {
+      final plain = ColorizeService.keyFor('/a.cbz', 1);
+      final dn = ColorizeService.keyFor('/a.cbz', 1, denoise: true);
+      final h1 = ColorizeService.keyFor('/a.cbz', 1, hints: const [ColorHint(0.1, 0.2, 0xff0000)]);
+      final h2 = ColorizeService.keyFor('/a.cbz', 1, hints: const [ColorHint(0.1, 0.2, 0x00ff00)]);
+      expect({plain, dn, h1, h2}, hasLength(4));
+      expect(ColorizeService.keyFor('/a.cbz', 1, hints: const [ColorHint(0.1, 0.2, 0xff0000)]), h1);
     });
 
     test('falls back to the tone filter without a model', () {
@@ -737,4 +795,21 @@ void main() {
     await tester.pump();
     expect(find.byType(FloatingActionButton), findsOneWidget);
   });
+}
+
+/// Halves every value, at the fake RGB model's input size.
+class _HalfDenoiser implements PageDenoiser {
+  int calls = 0;
+  @override
+  int get width => 64;
+  @override
+  int get height => 96;
+  @override
+  Float32List denoise(Float32List gray) {
+    calls++;
+    return Float32List.fromList([for (final v in gray) v / 2]);
+  }
+
+  @override
+  void close() {}
 }

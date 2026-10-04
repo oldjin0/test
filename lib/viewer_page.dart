@@ -12,6 +12,7 @@ import 'colorizer.dart';
 import 'comic_loader.dart';
 import 'curl_page_view.dart';
 import 'exporter.dart';
+import 'hint_editor.dart';
 import 'library_store.dart';
 import 'storage.dart';
 import 'updater.dart';
@@ -44,7 +45,9 @@ class _ViewerPageState extends State<ViewerPage> {
   ColorizeService? _service;
   bool _showUi = true;
   bool _showOriginal = false; // while the page is long-pressed
-  final _colored = <int, Future<ColorizeResult>>{};
+  /// Colorization per page, with the cache key it was requested under (the
+  /// key changes with the page's hints and the denoise setting).
+  final _colored = <int, (String, Future<ColorizeResult>)>{};
   final _vScroll = ItemScrollController();
   final _vPositions = ItemPositionsListener.create();
 
@@ -97,6 +100,7 @@ class _ViewerPageState extends State<ViewerPage> {
 
   late bool _curl = _store.curl;
   late bool _vertical = _store.vertical;
+  late bool _denoise = _store.denoise;
 
   void _onStore() {
     if (!mounted) return;
@@ -110,6 +114,10 @@ class _ViewerPageState extends State<ViewerPage> {
         _resetController();
       }
     });
+    if (_denoise != _store.denoise) {
+      _denoise = _store.denoise;
+      _warm();
+    }
     AppPlatform.keepScreenOn(_store.keepScreenOn);
   }
 
@@ -208,20 +216,59 @@ class _ViewerPageState extends State<ViewerPage> {
 
   // Colorization: the visible spread first, then the next one in the background.
 
-  String _key(int i) => ColorizeService.keyFor(widget.path, i);
+  String _key(int i) => ColorizeService.keyFor(
+    widget.path,
+    i,
+    hints: _store.hintsOf(widget.path, i),
+    denoise: _store.denoise,
+  );
 
   Future<ColorizeResult> _colorFor(int i) {
-    return _colored.putIfAbsent(i, () {
-      final book = _book!;
-      final f = _service!.colorize(_key(i), () => book.page(i));
-      f.then(
-        (_) {},
-        onError: (Object e) {
-          if (isCancelled(e)) _colored.remove(i);
-        },
-      );
-      return f;
-    });
+    final key = _key(i);
+    final known = _colored[i];
+    if (known != null && known.$1 == key) return known.$2;
+    final book = _book!;
+    final f = _service!.colorize(
+      key,
+      () => book.page(i),
+      hints: _store.hintsOf(widget.path, i),
+      denoise: _store.denoise,
+    );
+    _colored[i] = (key, f);
+    f.then(
+      (_) {},
+      onError: (Object e) {
+        if (isCancelled(e) && _colored[i]?.$2 == f) _colored.remove(i);
+      },
+    );
+    return f;
+  }
+
+  /// Opens the color-hint editor for the visible page (the first of a spread).
+  Future<void> _editHints() async {
+    final book = _book, service = _service;
+    if (book == null || service == null) return;
+    final page = _page;
+    final hints = await Navigator.push<List<ColorHint>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => HintEditorPage(
+          title: '${page + 1}페이지 색 지정',
+          loadPage: () => book.page(page),
+          initial: _store.hintsOf(widget.path, page),
+          preview: (hints) => service.colorize(
+            ColorizeService.keyFor(widget.path, page, hints: hints, denoise: _store.denoise),
+            () => book.page(page),
+            hints: hints,
+            denoise: _store.denoise,
+          ),
+        ),
+      ),
+    );
+    if (hints == null || !mounted) return;
+    _store.setHints(widget.path, page, hints);
+    if (!_store.colorize) _store.setColorize(true);
+    _warm();
   }
 
   void _warm() {
@@ -297,6 +344,8 @@ class _ViewerPageState extends State<ViewerPage> {
                     'display' => _showDisplaySettings(),
                     'vertical' => _store.setVertical(!_store.vertical),
                     'savePage' => _savePage(),
+                    'hints' => _editHints(),
+                    'denoise' => _store.setDenoise(!_store.denoise),
                     'export' => _exportComic(),
                     _ => _toggleCurl(),
                   },
@@ -322,6 +371,17 @@ class _ViewerPageState extends State<ViewerPage> {
                       child: const Text('세로 스크롤 (웹툰)'),
                     ),
                     const PopupMenuItem(value: 'display', child: Text('채색 강도 · 화면 설정')),
+                    const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: 'hints',
+                      enabled: _service?.modelLoaded ?? false,
+                      child: const Text('이 페이지 색 지정 (힌트)'),
+                    ),
+                    CheckedPopupMenuItem(
+                      value: 'denoise',
+                      checked: _store.denoise,
+                      child: const Text('스크린톤 정리 후 채색 (느림)'),
+                    ),
                     const PopupMenuDivider(),
                     const PopupMenuItem(value: 'savePage', child: Text('현재 페이지를 갤러리에 저장')),
                     const PopupMenuItem(value: 'export', child: Text('컬러 만화(.cbz)로 저장')),
@@ -494,7 +554,12 @@ class _ViewerPageState extends State<ViewerPage> {
       for (var attempt = 0; attempt < 3; attempt++) {
         try {
           final book = _book!;
-          final r = await service.colorize(_key(i), () => book.page(i));
+          final r = await service.colorize(
+            _key(i),
+            () => book.page(i),
+            hints: _store.hintsOf(widget.path, i),
+            denoise: _store.denoise,
+          );
           return r.bytes;
         } catch (e) {
           if (!isCancelled(e)) rethrow; // cancelled by page flips: just ask again

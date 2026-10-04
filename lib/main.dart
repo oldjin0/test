@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'colorize_service.dart';
+import 'colorizer.dart' show denoiserAsset;
 import 'home_page.dart';
 import 'library_store.dart';
 
@@ -18,7 +19,11 @@ Future<void> main() async {
 Future<ColorizeService> startColorizer() async {
   final cache = Directory(p.join((await getApplicationCacheDirectory()).path, 'colorized'));
   await cache.create(recursive: true);
-  return ColorizeService.start(modelPath: await ensureModelFile(), cacheDir: cache);
+  return ColorizeService.start(
+    modelPath: await ensureModelFile(),
+    denoiserPath: await ensureModelFile(asset: denoiserAsset),
+    cacheDir: cache,
+  );
 }
 
 class MangaViewerApp extends StatelessWidget {

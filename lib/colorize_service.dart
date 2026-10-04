@@ -9,26 +9,27 @@ import 'package:path_provider/path_provider.dart';
 
 import 'colorizer.dart';
 
-/// Identifies the bundled model. Bump it whenever assets/models/colorizer.tflite
-/// or the post-processing changes: it names the extracted model file and keys
+/// Identifies the bundled models. Bump it whenever assets/models/*.tflite or
+/// the post-processing changes: it names the extracted model files and keys
 /// the page cache, so stale copies are replaced.
-const modelVersion = 'mcv2-448-fp16-v1';
+const modelVersion = 'mcv2-448-hint-v2';
 
-/// Extracts the bundled model to app storage once so the worker can
-/// memory-map it. Returns null when no model is bundled.
-Future<String?> ensureModelFile() async {
+/// Extracts the bundled model [asset] to app storage once so the worker can
+/// memory-map it. Returns null when it is not bundled.
+Future<String?> ensureModelFile({String asset = modelAsset}) async {
   try {
     final dir = await getApplicationSupportDirectory();
-    final file = File(p.join(dir.path, 'colorizer-$modelVersion.tflite'));
+    final prefix = '${p.basenameWithoutExtension(asset)}-';
+    final file = File(p.join(dir.path, '$prefix$modelVersion.tflite'));
     if (await file.exists() && await file.length() > 0) return file.path;
-    final bytes = await loadModelBytes();
+    final bytes = await loadModelBytes(asset);
     if (bytes == null) return null;
     final tmp = File('${file.path}.tmp');
     await tmp.writeAsBytes(bytes, flush: true);
     await tmp.rename(file.path);
     await for (final e in dir.list()) {
       final name = p.basename(e.path);
-      if (e is File && name.startsWith('colorizer-') && e.path != file.path) await e.delete();
+      if (e is File && name.startsWith(prefix) && e.path != file.path) await e.delete();
     }
     return file.path;
   } catch (_) {
@@ -37,9 +38,9 @@ Future<String?> ensureModelFile() async {
 }
 
 /// Loads the bundled model bytes, or null when the asset is missing.
-Future<Uint8List?> loadModelBytes() async {
+Future<Uint8List?> loadModelBytes([String asset = modelAsset]) async {
   try {
-    final data = await rootBundle.load(modelAsset);
+    final data = await rootBundle.load(asset);
     return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
   } catch (_) {
     return null;
@@ -47,11 +48,13 @@ Future<Uint8List?> loadModelBytes() async {
 }
 
 class _Job {
-  _Job(this.key, this.load) {
+  _Job(this.key, this.load, this.hints, this.denoise) {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
   }
   final String key;
+  final List<ColorHint> hints;
+  final bool denoise;
 
   /// Reads the page when the job reaches the front of the queue, so queued
   /// pages cost no memory.
@@ -77,29 +80,53 @@ class ColorizeService {
   bool modelLoaded = false;
   String? modelError;
 
-  static Future<ColorizeService> start({String? modelPath, Directory? cacheDir}) async {
+  static Future<ColorizeService> start({
+    String? modelPath,
+    String? denoiserPath,
+    Directory? cacheDir,
+  }) async {
     final s = ColorizeService._(cacheDir);
     final port = ReceivePort();
     port.listen(s._onMessage);
     final guard = modelPath == null ? null : '$modelPath.xnnpack-guard';
-    await Isolate.spawn(_workerMain, [port.sendPort, modelPath, guard]);
+    await Isolate.spawn(_workerMain, [port.sendPort, modelPath, guard, denoiserPath]);
     await s._ready.future;
     if (cacheDir != null) unawaited(_pruneCache(cacheDir));
     return s;
   }
 
-  /// Cache key for page [index] of the comic at [comicId].
-  static String keyFor(String comicId, int index) =>
-      '${md5.convert(comicId.codeUnits)}_${index}_$modelVersion';
+  /// Cache key for page [index] of the comic at [comicId], colorized with
+  /// [hints] and optionally denoised.
+  static String keyFor(
+    String comicId,
+    int index, {
+    List<ColorHint> hints = const [],
+    bool denoise = false,
+  }) {
+    var key = '${md5.convert(comicId.codeUnits)}_${index}_$modelVersion';
+    if (denoise) key += '_dn';
+    if (hints.isNotEmpty) {
+      final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
+      key += '_h${md5.convert(h.join(';').codeUnits).toString().substring(0, 12)}';
+    }
+    return key;
+  }
 
   /// Queues the page behind [loadPage] and returns its colorized version
   /// (from the disk cache when possible). Queuing is synchronous so a
   /// following [focus] sees it; the page itself is read only when its turn
   /// comes.
-  Future<ColorizeResult> colorize(String key, Future<Uint8List> Function() loadPage) {
+  ///
+  /// [key] must reflect [hints] and [denoise] (see [keyFor]).
+  Future<ColorizeResult> colorize(
+    String key,
+    Future<Uint8List> Function() loadPage, {
+    List<ColorHint> hints = const [],
+    bool denoise = false,
+  }) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
-    final job = _Job(key, loadPage);
+    final job = _Job(key, loadPage, hints, denoise);
     _queue[key] = job;
     unawaited(_pump());
     return job.completer.future;
@@ -139,6 +166,10 @@ class ColorizeService {
       _worker!.send([
         id,
         TransferableTypedData.fromList([bytes]),
+        [
+          for (final h in job.hints) ...[h.x, h.y, h.color.toDouble()],
+        ],
+        job.denoise,
       ]);
     } catch (e) {
       _running = null;
@@ -232,6 +263,7 @@ void _workerMain(List args) {
   // is being set up and used for the first time; if it is still there on the
   // next launch, that attempt crashed and the plain interpreter is used.
   final guard = args[2] == null ? null : File(args[2] as String);
+  final denoiserPath = args[3] as String?;
   // Remembers that half precision produced invalid output on this device.
   final noFp16 = modelPath == null ? null : File('$modelPath.no-fp16');
   var guarded = false;
@@ -254,6 +286,23 @@ void _workerMain(List args) {
       error = '$e';
     }
   }
+  // Loaded on first use: only readers who turn denoising on pay for it.
+  TfliteDenoiser? denoiser;
+  var denoiserFailed = false;
+  PageDenoiser? denoiserFor(bool wanted) {
+    if (!wanted || model == null || denoiserPath == null || denoiserFailed) return null;
+    try {
+      return denoiser ??= TfliteDenoiser.fromFile(
+        denoiserPath,
+        xnnpack: xnnpack,
+        fp16: !(noFp16?.existsSync() ?? false),
+      );
+    } catch (_) {
+      denoiserFailed = true;
+      return null;
+    }
+  }
+
   final port = ReceivePort();
   reply.send(port.sendPort);
   reply.send(['ready', model != null, error]);
@@ -261,15 +310,29 @@ void _workerMain(List args) {
     final m = msg as List;
     final id = m[0] as int;
     final bytes = (m[1] as TransferableTypedData).materialize().asUint8List();
+    final flat = (m[2] as List).cast<double>();
+    final hints = [
+      for (var i = 0; i + 2 < flat.length; i += 3)
+        ColorHint(flat[i], flat[i + 1], flat[i + 2].toInt()),
+    ];
+    final wantDenoise = m[3] as bool;
     try {
-      var r = colorizePage(bytes, model);
-      final m = model;
-      if (m is TfliteColorModel && m.fp16 && m.sawInvalidOutput) {
+      var r = colorizePage(bytes, model, hints: hints, denoiser: denoiserFor(wantDenoise));
+      final cm = model, dn = denoiser;
+      final badModel = cm is TfliteColorModel && cm.fp16 && cm.sawInvalidOutput;
+      final badDenoiser = dn != null && dn.fp16 && dn.sawInvalidOutput;
+      if (badModel || badDenoiser) {
         // FP16 gave NaN/infinity here: reload in full precision for good.
         noFp16?.writeAsStringSync('1');
-        m.close();
-        model = TfliteColorModel.fromFile(modelPath!, xnnpack: xnnpack, fp16: false);
-        r = colorizePage(bytes, model);
+        if (badModel) {
+          cm.close();
+          model = TfliteColorModel.fromFile(modelPath!, xnnpack: xnnpack, fp16: false);
+        }
+        if (badDenoiser) {
+          dn.close();
+          denoiser = null;
+        }
+        r = colorizePage(bytes, model, hints: hints, denoiser: denoiserFor(wantDenoise));
       }
       if (guarded && r.mode == ColorizeMode.ai) {
         guarded = false;

@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'colorizer.dart' show ColorHint;
+
 class ReadProgress {
   ReadProgress(this.path, this.title, this.page, this.total, this.updatedAt);
 
@@ -61,6 +63,9 @@ class LibraryStore extends ChangeNotifier {
   final List<String> folders = [];
   final Map<String, ReadProgress> _progress = {};
   final List<Bookmark> _bookmarks = [];
+
+  /// Color hints per comic path and page.
+  final Map<String, Map<int, List<ColorHint>>> _hints = {};
   bool rtl = true;
   bool dual = false;
   bool colorize = true;
@@ -79,6 +84,9 @@ class LibraryStore extends ChangeNotifier {
 
   /// In-app dimming of the page (0.2..1.0); 1.0 is no dimming.
   double brightness = 1.0;
+
+  /// Clean screentone/noise before colorizing (slower, often cleaner color).
+  bool denoise = false;
 
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());
@@ -102,7 +110,44 @@ class LibraryStore extends ChangeNotifier {
     vertical = p.getBool('vertical') ?? vertical;
     keepScreenOn = p.getBool('keepScreenOn') ?? keepScreenOn;
     brightness = p.getDouble('brightness') ?? brightness;
+    denoise = p.getBool('denoise') ?? denoise;
+    _readHints(p.getString('hints'));
   }
+
+  void _readHints(String? raw) {
+    if (raw == null) return;
+    try {
+      _mergeHints(jsonDecode(raw), replace: true);
+    } catch (_) {}
+  }
+
+  /// Adds hints from their JSON form; existing pages are kept unless [replace].
+  int _mergeHints(Object? data, {required bool replace}) {
+    if (data is! Map) return 0;
+    var n = 0;
+    for (final MapEntry(key: path, value: pages) in data.entries) {
+      if (path is! String || pages is! Map) continue;
+      for (final MapEntry(key: page, value: list) in pages.entries) {
+        final index = int.tryParse('$page');
+        if (index == null || list is! List) continue;
+        final hints = [for (final h in list) ?ColorHint.fromJson(h)];
+        final byPage = _hints.putIfAbsent(path, () => {});
+        if (hints.isEmpty || (!replace && byPage.containsKey(index))) continue;
+        byPage[index] = hints;
+        n++;
+      }
+    }
+    return n;
+  }
+
+  Map<String, Object> _hintsJson() => {
+    for (final MapEntry(key: path, value: pages) in _hints.entries)
+      if (pages.isNotEmpty)
+        path: {
+          for (final MapEntry(key: page, value: list) in pages.entries)
+            '$page': [for (final h in list) h.toJson()],
+        },
+  };
 
   static List<Map<String, dynamic>> _decodeList(String? raw) {
     if (raw == null) return const [];
@@ -126,6 +171,8 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('vertical', vertical);
     _prefs.setBool('keepScreenOn', keepScreenOn);
     _prefs.setDouble('brightness', brightness);
+    _prefs.setBool('denoise', denoise);
+    _prefs.setString('hints', jsonEncode(_hintsJson()));
   }
 
   // Backup
@@ -137,6 +184,7 @@ class LibraryStore extends ChangeNotifier {
     'folders': folders,
     'progress': [for (final r in _progress.values) r.toJson()],
     'bookmarks': [for (final b in _bookmarks) b.toJson()],
+    'hints': _hintsJson(),
   };
 
   /// Merges a backup from [exportData]: folders and bookmarks are added, and
@@ -166,6 +214,7 @@ class LibraryStore extends ChangeNotifier {
         changed++;
       }
     }
+    changed += _mergeHints(data['hints'], replace: false);
     _changed();
     return changed;
   }
@@ -207,6 +256,11 @@ class LibraryStore extends ChangeNotifier {
     _changed();
   }
 
+  void setDenoise(bool v) {
+    denoise = v;
+    _changed();
+  }
+
   void setCurl(bool v) {
     curl = v;
     _changed();
@@ -242,6 +296,24 @@ class LibraryStore extends ChangeNotifier {
 
   void removeProgress(String path) {
     _progress.remove(path);
+    _changed();
+  }
+
+  // Color hints
+
+  List<ColorHint> hintsOf(String path, int page) => _hints[path]?[page] ?? const [];
+
+  /// Pages of [path] that have hints.
+  Set<int> hintedPages(String path) => _hints[path]?.keys.toSet() ?? const {};
+
+  void setHints(String path, int page, List<ColorHint> hints) {
+    final byPage = _hints.putIfAbsent(path, () => {});
+    if (hints.isEmpty) {
+      byPage.remove(page);
+      if (byPage.isEmpty) _hints.remove(path);
+    } else {
+      byPage[page] = List.unmodifiable(hints);
+    }
     _changed();
   }
 

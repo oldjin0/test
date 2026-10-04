@@ -119,6 +119,22 @@ Uint8List simplePdf(List<double> grays) {
   return Uint8List.fromList(latin1.encode(b.toString()));
 }
 
+/// Mean (blue - red) in a small window around (fx, fy) of the image.
+double blueness(Uint8List jpg, double fx, double fy) {
+  final im = img.decodeImage(jpg)!;
+  final cx = (im.width * fx).round(), cy = (im.height * fy).round();
+  final r = math.max(4, im.width ~/ 30);
+  var sum = 0.0, n = 0;
+  for (var y = cy - r; y <= cy + r; y++) {
+    for (var x = cx - r; x <= cx + r; x++) {
+      final p = im.getPixel(x, y);
+      sum += p.b - p.r;
+      n++;
+    }
+  }
+  return sum / n;
+}
+
 double meanChroma(Uint8List jpg) {
   final im = img.decodeImage(jpg)!;
   var sum = 0.0, n = 0;
@@ -252,7 +268,40 @@ void main() {
     final xnn = model.usesXnnpack;
     final backend = model.backend;
     expect(model.sawInvalidOutput, isFalse);
+
+    // A blue hint in the middle of the page turns its surroundings bluer.
+    expect(model.inChannels, 5, reason: 'model with hint input expected');
+    const blue = ColorHint(0.5, 0.5, 0x3A78D8);
+    final hinted = colorizePage(page, model, hints: const [blue]);
+    final before = blueness(r.bytes, 0.5, 0.5),
+        after = blueness(hinted.bytes, 0.5, 0.5);
+
+    // The denoiser runs at the model's input size and keeps the output sane.
+    final dnPath = await ensureModelFile(asset: denoiserAsset);
+    expect(
+      dnPath,
+      isNotNull,
+      reason: 'assets/models/denoiser.tflite must be bundled',
+    );
+    final dn = TfliteDenoiser.fromFile(dnPath!);
+    expect([dn.width, dn.height], [model.inWidth, model.inHeight]);
+    sw.reset();
+    final denoised = colorizePage(page, model, denoiser: dn);
+    final dnMs = sw.elapsedMilliseconds;
+    expect(dn.sawInvalidOutput, isFalse);
+    expect(denoised.mode, ColorizeMode.ai);
+    dn.close();
     model.close();
+    // ignore: avoid_print
+    print(
+      'HINT blueness ${before.toStringAsFixed(1)} -> ${after.toStringAsFixed(1)}; '
+      'DENOISE+colorize ${dnMs}ms, chroma ${meanChroma(denoised.bytes).toStringAsFixed(2)}',
+    );
+    expect(
+      after,
+      greaterThan(before + 8),
+      reason: 'the hint should steer the color',
+    );
 
     final chroma = meanChroma(r.bytes);
     // ignore: avoid_print

@@ -5,7 +5,10 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:flutter/material.dart';
+import 'package:manga_viewer/colorizer.dart';
 import 'package:manga_viewer/comic_loader.dart';
+import 'package:manga_viewer/hint_editor.dart';
 import 'package:manga_viewer/exporter.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/storage.dart';
@@ -136,6 +139,114 @@ void main() {
       expect(c.importData(backup), 3);
       expect(c.progressOf('/c/x.cbz')!.page, 10);
       expect(() => c.importData({'app': 'other'}), throwsFormatException);
+    });
+  });
+
+  group('color hints', () {
+    setUp(() => SharedPreferences.setMockInitialValues({}));
+
+    test('are kept per comic page, persisted, and restored from backups', () async {
+      final a = await LibraryStore.load();
+      const red = ColorHint(0.25, 0.5, 0xD83030);
+      const blue = ColorHint(0.7, 0.1, 0x3A78D8);
+      a.setHints('/c/x.cbz', 2, const [red, blue]);
+      a.setHints('/c/x.cbz', 5, const [blue]);
+      a.setDenoise(true);
+      expect(a.hintsOf('/c/x.cbz', 2), [red, blue]);
+      expect(a.hintsOf('/c/x.cbz', 3), isEmpty);
+      expect(a.hintedPages('/c/x.cbz'), {2, 5});
+
+      final again = await LibraryStore.load();
+      expect(again.hintsOf('/c/x.cbz', 2), [red, blue]);
+      expect(again.denoise, isTrue);
+      again.setHints('/c/x.cbz', 5, const []);
+      expect(again.hintedPages('/c/x.cbz'), {2});
+      final backup = again.exportData();
+
+      SharedPreferences.setMockInitialValues({});
+      final b = await LibraryStore.load();
+      b.setHints('/c/x.cbz', 2, const [blue]); // edited here: kept on restore
+      expect(b.importData(backup), 0);
+      expect(b.hintsOf('/c/x.cbz', 2), [blue]);
+      SharedPreferences.setMockInitialValues({});
+      final c = await LibraryStore.load();
+      expect(c.importData(backup), 1);
+      expect(c.hintsOf('/c/x.cbz', 2), [red, blue]);
+    });
+
+    testWidgets('editor: tap adds a hint in page coordinates, tap again removes it', (
+      tester,
+    ) async {
+      // A 200x100 page shown in an 800x600 surface's canvas.
+      final page = png(200, 100, 128);
+      final previews = <List<ColorHint>>[];
+      List<ColorHint>? saved;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Center(
+                child: TextButton(
+                  onPressed: () async {
+                    saved = await Navigator.push<List<ColorHint>>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => HintEditorPage(
+                          title: 'p1',
+                          loadPage: () async => page,
+                          initial: const [],
+                          preview: (h) async {
+                            previews.add(h);
+                            return ColorizeResult(page, ColorizeMode.ai, 1);
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.byType(Image), findsOneWidget);
+
+      final canvas = tester.getRect(find.byKey(const ValueKey('hint-canvas')));
+      // The page is fitted by width: 200x100 -> canvas.width x canvas.width/2, centered.
+      final pageH = canvas.width / 2;
+      final top = canvas.center.dy - pageH / 2;
+      final spot = Offset(canvas.left + canvas.width * 0.75, top + pageH * 0.5);
+
+      await tester.tap(find.byKey(ValueKey('hint-color-${0x3A78D8}')));
+      await tester.tapAt(spot);
+      await tester.pump();
+      await tester.tapAt(Offset(canvas.left + 2, canvas.top + 2)); // outside the page: ignored
+      await tester.pump();
+      await tester.tap(find.text('미리보기'));
+      await tester.pump();
+      expect(previews, hasLength(1));
+      expect(previews.single, hasLength(1));
+      final h = previews.single.single;
+      expect(h.color, 0x3A78D8);
+      expect(h.x, closeTo(0.75, 0.01));
+      expect(h.y, closeTo(0.5, 0.01));
+
+      await tester.tapAt(spot); // removes it
+      await tester.pump();
+      await tester.tapAt(spot); // and adds it back
+      await tester.pump();
+      await tester.tap(find.byTooltip('되돌리기')); // undo the last add
+      await tester.pump();
+      await tester.tapAt(Offset(canvas.left + canvas.width * 0.25, top + pageH * 0.25));
+      await tester.pump();
+      await tester.tap(find.text('저장'));
+      await tester.pumpAndSettle();
+      expect(saved, hasLength(1));
+      expect(saved!.single.x, closeTo(0.25, 0.01));
+      expect(saved!.single.y, closeTo(0.25, 0.01));
     });
   });
 

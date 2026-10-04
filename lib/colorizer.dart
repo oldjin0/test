@@ -8,6 +8,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'xnnpack.dart';
 
 const modelAsset = 'assets/models/colorizer.tflite';
+const denoiserAsset = 'assets/models/denoiser.tflite';
 
 /// Long side cap for the colorized output. Pages larger than this are scaled
 /// down first; phone screens do not show more detail than this anyway.
@@ -40,19 +41,156 @@ enum ModelOutput {
   rgb,
 }
 
+/// A color the reader wants at one spot of a page.
+class ColorHint {
+  const ColorHint(this.x, this.y, this.color);
+
+  /// Position as a fraction of the page width / height (0..1).
+  final double x, y;
+
+  /// 0xRRGGBB.
+  final int color;
+
+  Map<String, Object> toJson() => {'x': x, 'y': y, 'c': color};
+
+  static ColorHint? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final x = j['x'], y = j['y'], c = j['c'];
+    if (x is! num || y is! num || c is! int) return null;
+    return ColorHint(x.toDouble(), y.toDouble(), c);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is ColorHint && other.x == x && other.y == y && other.color == color;
+
+  @override
+  int get hashCode => Object.hash(x, y, color);
+}
+
+/// Radius of a hint disc in the model input, as a fraction of its width.
+const hintRadius = 0.018;
+
 /// A colorization network with a fixed input size.
 abstract class ColorModel {
   int get inWidth;
   int get inHeight;
+
+  /// 1: gray only. 5: gray + color hints (r*m, g*m, b*m in -1..1, then m).
+  int get inChannels;
   int get outWidth;
   int get outHeight;
   ModelOutput get output;
 
-  /// [input]: inHeight*inWidth values, row-major; L*/100 for [ModelOutput.lab],
-  /// gray 0..1 for [ModelOutput.rgb]. Returns outHeight*outWidth*channels values.
+  /// [input]: inHeight*inWidth*inChannels values, row-major, channels last;
+  /// channel 0 is L*/100 for [ModelOutput.lab], gray 0..1 for
+  /// [ModelOutput.rgb]. Returns outHeight*outWidth*channels values.
   Float32List predict(Float32List input);
 
   void close() {}
+}
+
+/// Cleans screentone dots and noise from the gray model input before
+/// colorizing (tools/model/convert_denoiser.py).
+abstract class PageDenoiser {
+  int get width;
+  int get height;
+
+  /// [gray]: height*width values 0..1; returns the same layout.
+  Float32List denoise(Float32List gray);
+
+  void close() {}
+}
+
+typedef _Opened = ({Interpreter it, XnnpackDelegate? xnn, bool fp16});
+
+/// The prebuilt LiteRT does not apply XNNPACK on its own through this API;
+/// without it the models run several times slower. Half precision is tried
+/// first and silently dropped where the CPU lacks it.
+_Opened _openInterpreter(
+  Interpreter Function(InterpreterOptions) open,
+  int threads,
+  bool xnnpack,
+  bool fp16,
+) {
+  if (xnnpack) {
+    for (final half in fp16 ? const [true, false] : const [false]) {
+      XnnpackDelegate? xnn;
+      try {
+        xnn = XnnpackDelegate(threads: threads, fp16: half);
+        final it = open(
+          InterpreterOptions()
+            ..threads = threads
+            ..addDelegate(xnn),
+        );
+        return (it: it, xnn: xnn, fp16: half);
+      } catch (_) {
+        xnn?.delete();
+      }
+    }
+  }
+  return (it: open(InterpreterOptions()..threads = threads), xnn: null, fp16: false);
+}
+
+bool _allFinite(Float32List v) {
+  for (final x in v) {
+    if (!x.isFinite) return false;
+  }
+  return true;
+}
+
+/// [PageDenoiser] backed by a TFLite file.
+class TfliteDenoiser implements PageDenoiser {
+  factory TfliteDenoiser.fromFile(
+    String path, {
+    int threads = 4,
+    bool xnnpack = true,
+    bool fp16 = true,
+  }) {
+    final o = _openInterpreter(
+      (opt) => Interpreter.fromFile(File(path), options: opt),
+      threads,
+      xnnpack,
+      fp16,
+    );
+    return TfliteDenoiser._(o.it, o.xnn, o.fp16);
+  }
+
+  TfliteDenoiser._(this._it, this._xnn, this.fp16) {
+    final i = _it.getInputTensor(0).shape;
+    final o = _it.getOutputTensor(0).shape;
+    if (i.length != 4 || i[3] != 1 || o.length != 4 || o[1] != i[1] || o[2] != i[2] || o[3] != 1) {
+      close();
+      throw ArgumentError('Unexpected denoiser shapes: in $i, out $o');
+    }
+    height = i[1];
+    width = i[2];
+  }
+
+  final Interpreter _it;
+  final XnnpackDelegate? _xnn;
+  final bool fp16;
+  bool sawInvalidOutput = false;
+
+  @override
+  late final int width, height;
+
+  @override
+  Float32List denoise(Float32List gray) {
+    final out = Float32List(width * height);
+    _it.run(gray.buffer.asUint8List(), out.buffer.asUint8List());
+    if (!_allFinite(out)) {
+      sawInvalidOutput = true;
+      return gray;
+    }
+    return out;
+  }
+
+  @override
+  void close() {
+    _it.close();
+    _xnn?.delete();
+  }
 }
 
 /// [ColorModel] backed by a TFLite file (see tools/model/convert_manga.py).
@@ -63,52 +201,41 @@ class TfliteColorModel implements ColorModel {
     int threads = 4,
     bool xnnpack = true,
     bool fp16 = true,
-  }) => _create((o) => Interpreter.fromFile(File(path), options: o), threads, xnnpack, fp16);
+  }) {
+    final o = _openInterpreter(
+      (opt) => Interpreter.fromFile(File(path), options: opt),
+      threads,
+      xnnpack,
+      fp16,
+    );
+    return TfliteColorModel._(o.it, o.xnn, fp16: o.fp16);
+  }
 
   factory TfliteColorModel.fromBuffer(
     Uint8List bytes, {
     int threads = 4,
     bool xnnpack = true,
     bool fp16 = true,
-  }) => _create((o) => Interpreter.fromBuffer(bytes, options: o), threads, xnnpack, fp16);
-
-  static TfliteColorModel _create(
-    Interpreter Function(InterpreterOptions) open,
-    int threads,
-    bool xnnpack,
-    bool fp16,
-  ) {
-    // The prebuilt LiteRT does not apply XNNPACK on its own through this API;
-    // without it the manga model runs several times slower. Half precision is
-    // tried first and silently dropped where the CPU lacks it.
-    if (xnnpack) {
-      for (final half in fp16 ? const [true, false] : const [false]) {
-        XnnpackDelegate? xnn;
-        try {
-          xnn = XnnpackDelegate(threads: threads, fp16: half);
-          final it = open(
-            InterpreterOptions()
-              ..threads = threads
-              ..addDelegate(xnn),
-          );
-          return TfliteColorModel._(it, xnn, fp16: half);
-        } catch (_) {
-          xnn?.delete();
-        }
-      }
-    }
-    return TfliteColorModel._(open(InterpreterOptions()..threads = threads), null);
+  }) {
+    final o = _openInterpreter(
+      (opt) => Interpreter.fromBuffer(bytes, options: opt),
+      threads,
+      xnnpack,
+      fp16,
+    );
+    return TfliteColorModel._(o.it, o.xnn, fp16: o.fp16);
   }
 
   TfliteColorModel._(this._it, this._xnn, {this.fp16 = false}) {
     final i = _it.getInputTensor(0).shape;
     final o = _it.getOutputTensor(0).shape;
-    if (i.length != 4 || i[3] != 1 || o.length != 4 || (o[3] != 2 && o[3] != 3)) {
+    if (i.length != 4 || (i[3] != 1 && i[3] != 5) || o.length != 4 || (o[3] != 2 && o[3] != 3)) {
       close();
       throw ArgumentError('Unexpected model shapes: in $i, out $o');
     }
     inHeight = i[1];
     inWidth = i[2];
+    inChannels = i[3];
     outHeight = o[1];
     outWidth = o[2];
     output = o[3] == 3 ? ModelOutput.rgb : ModelOutput.lab;
@@ -128,7 +255,7 @@ class TfliteColorModel implements ColorModel {
 
   String get backend => _xnn == null ? 'cpu' : (fp16 ? 'xnnpack-fp16' : 'xnnpack');
   @override
-  late final int inWidth, inHeight, outWidth, outHeight;
+  late final int inWidth, inHeight, inChannels, outWidth, outHeight;
   @override
   late final ModelOutput output;
 
@@ -140,12 +267,7 @@ class TfliteColorModel implements ColorModel {
     final out = Float32List(outHeight * outWidth * (output == ModelOutput.rgb ? 3 : 2));
     // Raw byte buffers avoid building nested Dart lists for large tensors.
     _it.run(input.buffer.asUint8List(), out.buffer.asUint8List());
-    for (final v in out) {
-      if (!v.isFinite) {
-        sawInvalidOutput = true;
-        break;
-      }
-    }
+    if (!_allFinite(out)) sawInvalidOutput = true;
     return out;
   }
 
@@ -211,7 +333,16 @@ bool isColorPage(img.Image src) {
 /// predicted, and only their chroma is merged with the page's full-resolution
 /// luminance so the line art stays sharp. Without a model, a tone-correction
 /// filter is applied. Pages that are already in color are returned unchanged.
-ColorizeResult colorizePage(Uint8List pageBytes, ColorModel? model, {double? saturation}) {
+///
+/// [hints] steer the colors where the model takes hint input; [denoiser]
+/// cleans the model's input first (it must match the model input size).
+ColorizeResult colorizePage(
+  Uint8List pageBytes,
+  ColorModel? model, {
+  double? saturation,
+  List<ColorHint> hints = const [],
+  PageDenoiser? denoiser,
+}) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
   if (decoded == null) return ColorizeResult(pageBytes, ColorizeMode.alreadyColor, 0);
@@ -235,7 +366,7 @@ ColorizeResult colorizePage(Uint8List pageBytes, ColorModel? model, {double? sat
   if (model != null) {
     // The manga model is already vivid; the photo-trained Lab model is not.
     final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
-    out = _composeChroma(src, _predictChroma(src, model, sat));
+    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser));
     mode = ColorizeMode.ai;
   } else {
     out = _toneFilter(src);
@@ -246,22 +377,31 @@ ColorizeResult colorizePage(Uint8List pageBytes, ColorModel? model, {double? sat
 
 /// Letterboxes the page into the model input, runs the model, and returns
 /// the page area of the prediction as a YCbCr chroma image (Cb in r, Cr in g).
-img.Image _predictChroma(img.Image src, ColorModel model, double saturation) {
+img.Image _predictChroma(
+  img.Image src,
+  ColorModel model,
+  double saturation,
+  List<ColorHint> hints,
+  PageDenoiser? denoiser,
+) {
   final iw = model.inWidth, ih = model.inHeight;
   final s = math.min(iw / src.width, ih / src.height);
   final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
   final small = img.copyResize(src, width: pw, height: ph, interpolation: img.Interpolation.linear);
   final sb = small.getBytes(order: img.ChannelOrder.rgb);
   final lab = model.output == ModelOutput.lab;
-  final input = Float32List(iw * ih)..fillRange(0, iw * ih, 1.0); // white paper
+  var gray = Float32List(iw * ih)..fillRange(0, iw * ih, 1.0); // white paper
   for (var y = 0; y < ph; y++) {
     for (var x = 0; x < pw; x++) {
       final j = (y * pw + x) * 3;
       final v = _luma(sb[j], sb[j + 1], sb[j + 2]);
-      input[y * iw + x] = lab ? lStarLut[v] : v / 255;
+      gray[y * iw + x] = lab ? lStarLut[v] : v / 255;
     }
   }
-  final pred = model.predict(input);
+  if (denoiser != null && !lab && denoiser.width == iw && denoiser.height == ih) {
+    gray = denoiser.denoise(gray);
+  }
+  final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, hints) : gray);
 
   // Crop the page area out of the (possibly smaller) prediction.
   final ow = model.outWidth;
@@ -297,6 +437,31 @@ img.Image _predictChroma(img.Image src, ColorModel model, double saturation) {
     }
   }
   return chroma;
+}
+
+/// Model input with hint channels: [gray] (ih*iw) interleaved with the
+/// hints painted as discs over the page area (pw x ph at the top left).
+Float32List hintInput(Float32List gray, int iw, int ih, int pw, int ph, List<ColorHint> hints) {
+  final input = Float32List(iw * ih * 5);
+  for (var i = 0; i < iw * ih; i++) {
+    input[i * 5] = gray[i];
+  }
+  final r = math.max(2, (iw * hintRadius).round());
+  for (final h in hints) {
+    final cx = (h.x.clamp(0.0, 1.0) * pw).round(), cy = (h.y.clamp(0.0, 1.0) * ph).round();
+    final rgb = [(h.color >> 16) & 0xff, (h.color >> 8) & 0xff, h.color & 0xff];
+    for (var y = math.max(0, cy - r); y <= math.min(ih - 1, cy + r); y++) {
+      for (var x = math.max(0, cx - r); x <= math.min(iw - 1, cx + r); x++) {
+        if ((x - cx) * (x - cx) + (y - cy) * (y - cy) > r * r) continue;
+        final k = (y * iw + x) * 5;
+        for (var c = 0; c < 3; c++) {
+          input[k + 1 + c] = rgb[c] / 127.5 - 1;
+        }
+        input[k + 4] = 1;
+      }
+    }
+  }
+  return input;
 }
 
 /// Merges low-resolution chroma with the page's own luminance.
