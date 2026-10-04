@@ -380,7 +380,7 @@ class _ViewerPageState extends State<ViewerPage> {
                     CheckedPopupMenuItem(
                       value: 'denoise',
                       checked: _store.denoise,
-                      child: const Text('스크린톤 정리 후 채색 (느림)'),
+                      child: const Text('스크린톤 정리 후 채색'),
                     ),
                     const PopupMenuDivider(),
                     const PopupMenuItem(value: 'savePage', child: Text('현재 페이지를 갤러리에 저장')),

@@ -85,8 +85,9 @@ class LibraryStore extends ChangeNotifier {
   /// In-app dimming of the page (0.2..1.0); 1.0 is no dimming.
   double brightness = 1.0;
 
-  /// Clean screentone/noise before colorizing (slower, often cleaner color).
-  bool denoise = false;
+  /// Clean screentone dots before colorizing, as the model's own pipeline
+  /// does: printed pages get fuller color, for ~20% more time per page.
+  bool denoise = true;
 
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());

@@ -151,14 +151,15 @@ void main() {
       const blue = ColorHint(0.7, 0.1, 0x3A78D8);
       a.setHints('/c/x.cbz', 2, const [red, blue]);
       a.setHints('/c/x.cbz', 5, const [blue]);
-      a.setDenoise(true);
+      expect(a.denoise, isTrue, reason: 'on by default, as in the model project');
+      a.setDenoise(false);
       expect(a.hintsOf('/c/x.cbz', 2), [red, blue]);
       expect(a.hintsOf('/c/x.cbz', 3), isEmpty);
       expect(a.hintedPages('/c/x.cbz'), {2, 5});
 
       final again = await LibraryStore.load();
       expect(again.hintsOf('/c/x.cbz', 2), [red, blue]);
-      expect(again.denoise, isTrue);
+      expect(again.denoise, isFalse);
       again.setHints('/c/x.cbz', 5, const []);
       expect(again.hintedPages('/c/x.cbz'), {2});
       final backup = again.exportData();
