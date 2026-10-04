@@ -46,6 +46,28 @@ void main() {
     });
   });
 
+  group('formats', () {
+    test('a .cbr that is really a zip is read in Dart; PDF and real RAR go native', () async {
+      final archive = Archive()..addFile(ArchiveFile('1.png', 0, png(2, 2, 7)));
+      final zipCbr = File('${dir.path}/zip.cbr')..writeAsBytesSync(ZipEncoder().encode(archive));
+      final rar = File('${dir.path}/real.cbr')..writeAsBytesSync([...'Rar!'.codeUnits, 0x1A, 7, 0]);
+      final pdf = File('${dir.path}/b.pdf')..writeAsStringSync('%PDF-1.4');
+      expect(await needsNativeReader(zipCbr.path), isFalse);
+      expect(await needsNativeReader(rar.path), isTrue);
+      expect(await needsNativeReader(pdf.path), isTrue);
+      expect(await needsNativeReader('${dir.path}/x.cbz'), isFalse);
+
+      final book = await ComicBook.open(zipCbr.path);
+      expect(book.length, 1);
+      expect(img.decodeImage(await book.page(0))!.getPixel(0, 0).r, 7);
+      for (final ext in ['zip', 'cbz', 'cbr', 'rar', 'pdf']) {
+        expect(isComicFile('a/b.$ext'), isTrue);
+        expect(isComicFile('a/b.${ext.toUpperCase()}'), isTrue);
+      }
+      expect(isComicFile('a/b.epub'), isFalse);
+    });
+  });
+
   group('export', () {
     test('writeCbz stores pages in order and they read back unchanged', () async {
       final pages = [

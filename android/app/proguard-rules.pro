@@ -6,3 +6,8 @@
 -dontwarn org.tensorflow.lite.gpu.GpuDelegateFactory$Options$GpuBackend
 -keep class com.google.ai.edge.litert.** { *; }
 -dontwarn com.google.ai.edge.litert.**
+
+# junrar (CBR support) and its optional logging backend
+-keep class com.github.junrar.** { *; }
+-dontwarn com.github.junrar.**
+-dontwarn org.slf4j.**

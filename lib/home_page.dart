@@ -242,7 +242,10 @@ class _HomePageState extends State<HomePage> {
   Widget _recent() {
     final items = _store.recent;
     if (items.isEmpty) {
-      return _empty(Icons.history, '읽은 만화가 여기에 표시됩니다.\n폴더를 추가하거나 우측 상단 버튼으로 .zip / .cbz 파일을 여세요.');
+      return _empty(
+        Icons.history,
+        '읽은 만화가 여기에 표시됩니다.\n폴더를 추가하거나 우측 상단 버튼으로 .zip · .cbz · .cbr · .pdf 파일을 여세요.',
+      );
     }
     return ListView(
       children: [
@@ -276,7 +279,10 @@ class _HomePageState extends State<HomePage> {
 
   Widget _folders() {
     if (_store.folders.isEmpty) {
-      return _empty(Icons.folder_open, '만화가 있는 폴더를 추가하면\n폴더 안의 .zip / .cbz 목록을 볼 수 있습니다.');
+      return _empty(
+        Icons.folder_open,
+        '만화가 있는 폴더를 추가하면\n폴더 안의 .zip · .cbz · .cbr · .pdf 목록을 볼 수 있습니다.',
+      );
     }
     return ListView(
       children: [

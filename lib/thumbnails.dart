@@ -39,7 +39,15 @@ Uint8List? shrinkToCover(Uint8List page) {
   return img.encodeJpg(small, quality: 80);
 }
 
-Future<Uint8List?> _coverInBackground(String path) => Isolate.run(() => makeCover(path));
+Future<Uint8List?> _coverInBackground(String path) async {
+  if (await needsNativeReader(path)) {
+    // PDF / RAR pages come from the Android side, which is not reachable from
+    // a background isolate: read the first page here, shrink it there.
+    final first = await (await ComicBook.open(path, window: 1)).page(0);
+    return Isolate.run(() => shrinkToCover(first));
+  }
+  return Isolate.run(() => makeCover(path));
+}
 
 /// First-page covers for the library lists: made once in the background
 /// (two at a time), then read from the disk cache.

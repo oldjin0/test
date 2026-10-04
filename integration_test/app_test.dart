@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math' as math;
@@ -9,6 +10,8 @@ import 'package:image/image.dart' as img;
 import 'package:integration_test/integration_test.dart';
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/colorizer.dart';
+import 'package:manga_viewer/comic_loader.dart';
+import 'package:manga_viewer/thumbnails.dart';
 import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
@@ -28,6 +31,73 @@ Uint8List samplePage(int seed) {
   img.fillCircle(im, x: 300 + seed * 60, y: 300, radius: 120, color: img.ColorRgb8(235, 235, 235));
   img.drawRect(im, x1: 40, y1: 40, x2: 860, y2: 1260, color: img.ColorRgb8(0, 0, 0), thickness: 6);
   return img.encodeJpg(im, quality: 90);
+}
+
+/// RAR 4 archive with stored (uncompressed) entries, built by hand: there is
+/// no RAR writer to use, and this exercises the real junrar reader.
+Uint8List storedRar(Map<String, List<int>> files) {
+  final out = BytesBuilder();
+  void header(int type, int flags, List<int> body) {
+    final rest = BytesBuilder()
+      ..addByte(type)
+      ..add(_u16(flags))
+      ..add(_u16(7 + body.length))
+      ..add(body);
+    final bytes = rest.toBytes();
+    out
+      ..add(_u16(getCrc32(bytes) & 0xFFFF))
+      ..add(bytes);
+  }
+
+  out.add([0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00]);
+  header(0x73, 0, [..._u16(0), ..._u32(0)]);
+  files.forEach((name, data) {
+    final n = utf8.encode(name);
+    header(0x74, 0x8000, [
+      ..._u32(data.length),
+      ..._u32(data.length),
+      2,
+      ..._u32(getCrc32(data)),
+      ..._u32(0x00210000),
+      20,
+      0x30,
+      ..._u16(n.length),
+      ..._u32(0x20),
+      ...n,
+    ]);
+    out.add(data);
+  });
+  header(0x7B, 0x4000, const []);
+  return out.toBytes();
+}
+
+List<int> _u16(int v) => [v & 0xFF, (v >> 8) & 0xFF];
+List<int> _u32(int v) => [for (var i = 0; i < 4; i++) (v >> (8 * i)) & 0xFF];
+
+/// Minimal PDF: each page is a gray background with a black box at the bottom left.
+Uint8List simplePdf(List<double> grays) {
+  final objs = <String>[];
+  final kids = [for (var i = 0; i < grays.length; i++) '${3 + 2 * i} 0 R'].join(' ');
+  objs.add('<< /Type /Catalog /Pages 2 0 R >>');
+  objs.add('<< /Type /Pages /Kids [$kids] /Count ${grays.length} >>');
+  for (var i = 0; i < grays.length; i++) {
+    final content = '${grays[i]} g 0 0 300 420 re f 0 g 10 10 150 210 re f';
+    objs.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 420] /Contents ${4 + 2 * i} 0 R >>');
+    objs.add('<< /Length ${content.length} >>\nstream\n$content\nendstream');
+  }
+  final b = StringBuffer('%PDF-1.4\n');
+  final offsets = <int>[];
+  for (var i = 0; i < objs.length; i++) {
+    offsets.add(b.length);
+    b.write('${i + 1} 0 obj\n${objs[i]}\nendobj\n');
+  }
+  final xref = b.length;
+  b.write('xref\n0 ${objs.length + 1}\n0000000000 65535 f \n');
+  for (final o in offsets) {
+    b.write('${o.toString().padLeft(10, '0')} 00000 n \n');
+  }
+  b.write('trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n');
+  return Uint8List.fromList(latin1.encode(b.toString()));
 }
 
 double meanChroma(Uint8List jpg) {
@@ -74,6 +144,38 @@ void main() {
     print('SAVED $picture and $download');
     expect(picture, contains('Pictures/MangaViewer'));
     expect(download, contains('Download/MangaViewer'));
+  });
+
+  testWidgets('PDF and CBR (RAR 4) comics open through the Android side', (tester) async {
+    final dir = await Directory.systemTemp.createTemp('formats');
+    Uint8List grayPng(int v) {
+      final im = img.Image(width: 30, height: 40, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(v, v, v));
+      return img.encodePng(im);
+    }
+
+    final pages = {'p10.png': grayPng(100), 'p2.png': grayPng(50), 'dir/p1.png': grayPng(20)};
+    final cbr = File('${dir.path}/book.cbr')..writeAsBytesSync(storedRar(pages));
+    final rarBook = await ComicBook.open(cbr.path);
+    expect(rarBook.names, ['dir/p1.png', 'p2.png', 'p10.png']);
+    expect(await rarBook.page(1), pages['p2.png']);
+    expect(await rarBook.page(2), pages['p10.png']);
+
+    final pdf = File('${dir.path}/book.pdf')..writeAsBytesSync(simplePdf([0.8, 0.3]));
+    final pdfBook = await ComicBook.open(pdf.path);
+    expect(pdfBook.length, 2);
+    for (final (i, gray) in [(0, 204), (1, 76)]) {
+      final page = img.decodeImage(await pdfBook.page(i))!;
+      expect(page.width, pdfRenderWidth);
+      expect(page.height, (pdfRenderWidth * 420 / 300).round());
+      expect(page.getPixel(page.width - 20, 20).r, closeTo(gray, 6), reason: 'page ${i + 1} paper');
+      expect(page.getPixel(40, page.height - 40).r, lessThan(30), reason: 'black box');
+    }
+    // ignore: avoid_print
+    print('FORMATS rar ${rarBook.names} pdf ${pdfBook.length} pages');
+
+    final cover = await Thumbnails.instance.of(pdf.path);
+    expect(cover, isNotNull);
   });
 
   testWidgets('bundled AI model loads and colorizes on device', (tester) async {

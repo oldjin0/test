@@ -20,6 +20,8 @@ import java.io.IOException
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "manga_viewer/comics")
+            .setMethodCallHandler(NativeComics())
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "manga_viewer/app")
             .setMethodCallHandler { call, result ->
                 try {

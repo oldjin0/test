@@ -1,12 +1,45 @@
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/services.dart';
 
 const _imageExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
 
-const comicExts = ['.zip', '.cbz'];
+const comicExts = ['.zip', '.cbz', '.cbr', '.rar', '.pdf'];
+
+/// Width PDF pages are rendered at (sharp on phone screens, modest memory).
+const pdfRenderWidth = 1600;
+
+const _native = MethodChannel('manga_viewer/comics');
+
+/// True when [path] starts like a zip file (many .cbr files are zips).
+Future<bool> _looksLikeZip(String path) async {
+  final f = await File(path).open();
+  try {
+    final head = await f.read(2);
+    return head.length == 2 && head[0] == 0x50 && head[1] == 0x4B; // "PK"
+  } finally {
+    await f.close();
+  }
+}
+
+/// Whether [path] is read by the Android side (PDF, real RAR) rather than in Dart.
+Future<bool> needsNativeReader(String path) async {
+  final lower = path.toLowerCase();
+  if (lower.endsWith('.pdf')) return true;
+  if (lower.endsWith('.cbr') || lower.endsWith('.rar')) return !await _looksLikeZip(path);
+  return false;
+}
+
+Never _nativeError(Object e) {
+  if (e is PlatformException && e.code == 'rar5') {
+    throw const FormatException('RAR5 형식의 CBR은 지원하지 않습니다. (RAR4 이하 또는 CBZ로 변환해 주세요)');
+  }
+  if (e is MissingPluginException) throw const FormatException('이 형식은 여기서 열 수 없습니다.');
+  if (e is PlatformException) throw FormatException(e.message ?? e.code);
+  throw e;
+}
 
 bool isComicFile(String path) => comicExts.any(path.toLowerCase().endsWith);
 
@@ -64,7 +97,8 @@ List<String> listImageFiles(String dir) => [
 
 Future<List<String>> _listImagesInBackground(String dir) => Isolate.run(() => listImageFiles(dir));
 
-/// A comic opened for reading: a .zip/.cbz archive or a folder of images.
+/// A comic opened for reading: a .zip/.cbz archive, a folder of images, a
+/// PDF, or a .cbr/.rar archive (the last two through the Android side).
 /// Pages are read one at a time (archives on background isolates) and only a
 /// small window of recent pages is kept, so memory use does not grow with the
 /// size of the comic.
@@ -82,9 +116,42 @@ class ComicBook {
 
   static Future<ComicBook> open(String path, {int window = 12}) async {
     final ComicBook book;
+    final lower = path.toLowerCase();
     if (await FileSystemEntity.isDirectory(path)) {
       final names = await _listImagesInBackground(path);
       book = ComicBook._(path, names, (i) => File('$path/${names[i]}').readAsBytes(), window);
+    } else if (lower.endsWith('.pdf')) {
+      final count = await _native
+          .invokeMethod<int>('pdfPageCount', {'path': path})
+          .catchError(_nativeError);
+      book = ComicBook._(
+        path,
+        [for (var i = 1; i <= (count ?? 0); i++) '$i'],
+        (i) async => (await _native
+            .invokeMethod<Uint8List>('pdfRender', {
+              'path': path,
+              'index': i,
+              'width': pdfRenderWidth,
+            })
+            .catchError(_nativeError))!,
+        window,
+      );
+    } else if (await needsNativeReader(path)) {
+      final all = await _native
+          .invokeListMethod<String>('rarList', {'path': path})
+          .catchError(_nativeError);
+      final names = [
+        for (final n in all ?? const <String>[])
+          if (_isPageName(n)) n,
+      ]..sort((a, b) => naturalCompare(a.toLowerCase(), b.toLowerCase()));
+      book = ComicBook._(
+        path,
+        names,
+        (i) async => (await _native
+            .invokeMethod<Uint8List>('rarRead', {'path': path, 'name': names[i]})
+            .catchError(_nativeError))!,
+        window,
+      );
     } else {
       final names = await _listInBackground(path);
       book = ComicBook._(path, names, (i) => _readInBackground(path, names[i]), window);

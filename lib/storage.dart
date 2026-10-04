@@ -26,7 +26,10 @@ Future<bool> hasStorageAccess() async {
 /// Lets the user pick a single comic and copies it into app storage so it
 /// keeps a stable path for reading positions and bookmarks.
 Future<String?> importComicFile() async {
-  final file = await FilePicker.pickFile(type: FileType.custom, allowedExtensions: ['zip', 'cbz']);
+  final file = await FilePicker.pickFile(
+    type: FileType.custom,
+    allowedExtensions: ['zip', 'cbz', 'cbr', 'rar', 'pdf'],
+  );
   if (file == null) return null;
   final docs = await getApplicationDocumentsDirectory();
   final dir = Directory(p.join(docs.path, 'imported'));

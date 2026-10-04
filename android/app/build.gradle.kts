@@ -78,4 +78,6 @@ flutter {
 dependencies {
     // FileProvider / PackageInfoCompat for in-app updates (MainActivity.kt).
     implementation("androidx.core:core-ktx:1.13.1")
+    // .cbr/.rar comics (RAR 4 and older; RAR5 is reported as unsupported).
+    implementation("com.github.junrar:junrar:7.5.5")
 }
