@@ -163,6 +163,17 @@ void main() {
       for (var i = 0; i < 120 && !log.existsSync(); i++) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
+      if (!log.existsSync()) {
+        // Diagnostics for CI: is the helper script itself fine when run in the open?
+        final script = p.join(Directory.systemTemp.path, 'manga_viewer_update.ps1');
+        final r = await Process.run('powershell.exe', [
+          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, //
+        ]);
+        // ignore: avoid_print
+        print('helper never finished; direct run: exit ${r.exitCode}\n${r.stdout}\n${r.stderr}');
+        // ignore: avoid_print
+        print('log now: ${log.existsSync() ? log.readAsStringSync() : "none"}');
+      }
       expect(log.existsSync(), isTrue, reason: 'the helper never finished');
       expect(log.readAsStringSync().trim(), 'copied');
       expect(
