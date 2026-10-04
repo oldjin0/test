@@ -1,0 +1,25 @@
+== Manga Viewer PC benchmark ==
+os: Windows-10-10.0.26100-SP0
+python: 3.11.9
+onnxruntime: 1.24.4
+providers: ['DmlExecutionProvider', 'CPUExecutionProvider']
+cpu_count: 4
+cpu: ['Intel(R) Xeon(R) 6973P-C']
+gpus: ['Microsoft Hyper-V Video / 0 MB']
+ram_gb: ['16']
+model fp32: colorizer_fp32.onnx (123 MB)
+
+DirectML adapter 0: not usable (DmlExecutionProvider not active (got ['CPUExecutionProvider']))
+engine                                  size   load s  1st run s  median s   min s   note
+CPU (4 threads) fp32                 448x640      0.4       3.03      2.83    2.83   
+CPU (4 threads) fp32                 576x832      0.4       4.17      4.20    4.20   
+CPU (4 threads) fp32                704x1024      0.4       6.84      6.71    6.71   
+CPU (4 threads) fp32                768x1120      0.3       7.79      8.57    8.57   
+
+fastest engine: CPU (4 threads) fp32
+  448x640: 2.83 s per page on CPU (4 threads) fp32
+  576x832: 4.20 s per page on CPU (4 threads) fp32
+  704x1024: 6.71 s per page on CPU (4 threads) fp32
+  768x1120: 8.57 s per page on CPU (4 threads) fp32
+largest size within 3 s per page: 448x640 on CPU (4 threads) fp32
+quality preview: columns = screentoned page, 448px, 576px, 704px, 768px, original
