@@ -436,7 +436,97 @@ img.Image _predictChroma(
       chroma.setPixelRgb(x, y, (128 + cb).clamp(0, 255), (128 + cr).clamp(0, 255), 0);
     }
   }
+  if (hints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, hints);
   return chroma;
+}
+
+/// Gray (0..1) below which a pixel counts as line art when filling.
+const _lineGray = 0.45;
+
+/// Paints each hint's color into the area around it bounded by line art
+/// (like a paint bucket), keeping the page's shading: the model alone
+/// follows hints only faintly. [gray] is the model input (stride [iw]) with
+/// the page in its top-left [pw] x [ph].
+void _fillHints(img.Image chroma, Float32List gray, int iw, int pw, int ph, List<ColorHint> hints) {
+  final cw = chroma.width, ch = chroma.height;
+  for (final h in hints) {
+    final mask = hintFillMask(gray, iw, pw, ph, h.x, h.y);
+    final r = (h.color >> 16) & 0xff, g = (h.color >> 8) & 0xff, b = h.color & 0xff;
+    final cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+    final cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+    for (var y = 0; y < ch; y++) {
+      final my = math.min(ph - 1, y * ph ~/ ch);
+      for (var x = 0; x < cw; x++) {
+        final w = mask[my * pw + math.min(pw - 1, x * pw ~/ cw)];
+        if (w == 0) continue;
+        final p = chroma.getPixel(x, y);
+        chroma.setPixelRgb(x, y, p.r + (cb - p.r) * w, p.g + (cr - p.g) * w, 0);
+      }
+    }
+  }
+}
+
+/// Weights (pw*ph, 0..1) of the area a hint at ([fx], [fy]) of the page
+/// fills: pixels reachable from it without crossing line art, softened at
+/// the border. When that area is open (over 40% of the page), a disc
+/// around the hint is used instead.
+Float32List hintFillMask(Float32List gray, int stride, int pw, int ph, double fx, double fy) {
+  final mask = Float32List(pw * ph);
+  var sx = (fx.clamp(0.0, 1.0) * (pw - 1)).round(), sy = (fy.clamp(0.0, 1.0) * (ph - 1)).round();
+  bool open(int x, int y) => gray[y * stride + x] >= _lineGray;
+  // A tap on a line: start from the nearest paper pixel.
+  if (!open(sx, sy)) {
+    var best = -1, bestD = 1 << 30;
+    for (var y = math.max(0, sy - 4); y <= math.min(ph - 1, sy + 4); y++) {
+      for (var x = math.max(0, sx - 4); x <= math.min(pw - 1, sx + 4); x++) {
+        final d = (x - sx) * (x - sx) + (y - sy) * (y - sy);
+        if (open(x, y) && d < bestD) (best, bestD) = (y * pw + x, d);
+      }
+    }
+    if (best >= 0) (sx, sy) = (best % pw, best ~/ pw);
+  }
+  final maxArea = pw * ph * 2 ~/ 5;
+  final queue = <int>[sy * pw + sx];
+  final seen = Uint8List(pw * ph)..[sy * pw + sx] = 1;
+  var bounded = open(sx, sy);
+  for (var q = 0; bounded && q < queue.length; q++) {
+    if (queue.length > maxArea) bounded = false;
+    final i = queue[q], x = i % pw, y = i ~/ pw;
+    for (final (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]) {
+      if (nx < 0 || ny < 0 || nx >= pw || ny >= ph) continue;
+      final j = ny * pw + nx;
+      if (seen[j] != 0) continue;
+      seen[j] = 1;
+      if (open(nx, ny)) queue.add(j);
+    }
+  }
+  if (bounded) {
+    for (final i in queue) {
+      mask[i] = 1;
+    }
+    // Reach under the line art next to the area, so no paper-colored seam
+    // is left along the lines.
+    for (final i in queue) {
+      final x = i % pw, y = i ~/ pw;
+      for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+          final nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= pw || ny >= ph) continue;
+          final j = ny * pw + nx;
+          if (mask[j] == 0) mask[j] = 0.5;
+        }
+      }
+    }
+  } else {
+    final r = math.max(3.0, pw * 0.06);
+    for (var y = math.max(0, (sy - r).floor()); y <= math.min(ph - 1, (sy + r).ceil()); y++) {
+      for (var x = math.max(0, (sx - r).floor()); x <= math.min(pw - 1, (sx + r).ceil()); x++) {
+        final d = math.sqrt((x - sx) * (x - sx) + (y - sy) * (y - sy)) / r;
+        if (d < 1) mask[y * pw + x] = d < 0.6 ? 1 : (1 - d) / 0.4;
+      }
+    }
+  }
+  return mask;
 }
 
 /// Model input with hint channels: [gray] (ih*iw) interleaved with the

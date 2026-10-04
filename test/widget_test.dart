@@ -258,6 +258,62 @@ void main() {
       expect(plain.r - plain.b, greaterThan(30));
     });
 
+    test('hint fills the area bounded by line art, keeping shading', () {
+      // Paper (not pure white: the fake model paints that as padding) with a
+      // closed black frame; the hint goes inside it.
+      final im = img.Image(width: 120, height: 160, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(240, 240, 240));
+      img.fillRect(im, x1: 60, y1: 90, x2: 80, y2: 110, color: img.ColorRgb8(150, 150, 150));
+      img.drawRect(
+        im,
+        x1: 30,
+        y1: 40,
+        x2: 90,
+        y2: 120,
+        color: img.ColorRgb8(0, 0, 0),
+        thickness: 6,
+      );
+      final r = colorizePage(
+        img.encodePng(im),
+        FakeRgbModel(), // no hint input: the fill alone does it
+        hints: const [ColorHint(0.4, 0.4, 0x3A78D8)],
+      );
+      final out = img.decodeImage(r.bytes)!;
+      for (final pt in [const Point(45, 60), const Point(80, 112), const Point(40, 110)]) {
+        final px = out.getPixel(pt.x, pt.y);
+        expect(px.b - px.r, greaterThan(40), reason: 'inside the frame turns blue at $pt');
+      }
+      final shade = out.getPixel(70, 100), paper = out.getPixel(45, 60);
+      expect(
+        shade.r + shade.g + shade.b,
+        lessThan(paper.r + paper.g + paper.b - 100),
+        reason: 'shading is kept',
+      );
+      for (final pt in [
+        const Point(8, 8),
+        const Point(110, 150),
+        const Point(110, 60),
+        const Point(60, 20),
+      ]) {
+        final px = out.getPixel(pt.x, pt.y);
+        expect(px.r - px.b, greaterThan(30), reason: 'outside the frame stays model color at $pt');
+      }
+    });
+
+    test('hint on an open area paints a disc only', () {
+      final im = img.Image(width: 120, height: 160, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(250, 250, 250));
+      final r = colorizePage(
+        img.encodePng(im),
+        FakeRgbModel(),
+        hints: const [ColorHint(0.5, 0.5, 0x3A78D8)],
+      );
+      final out = img.decodeImage(r.bytes)!;
+      final c = out.getPixel(60, 80), far = out.getPixel(10, 10);
+      expect(c.b - c.r, greaterThan(20));
+      expect(far.r - far.b, greaterThan(20));
+    });
+
     test('denoiser cleans the model input', () {
       final model = FakeRgbModel();
       final dn = _HalfDenoiser();
