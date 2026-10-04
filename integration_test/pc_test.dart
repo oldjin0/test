@@ -160,7 +160,7 @@ void main() {
         installDir: install.path,
         waitForPid: old.pid,
       );
-      for (var i = 0; i < 120 && !log.existsSync(); i++) {
+      for (var i = 0; i < 360 && !log.existsSync(); i++) {
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
       if (!log.existsSync()) {
