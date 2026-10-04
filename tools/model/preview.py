@@ -147,8 +147,8 @@ def main():
     for r in rows:
         sheet.paste(r, (0, y))
         y += r.height
-    sheet.save(out_png)
-    print("wrote", out_png)
+    sheet.save(args.out_png)
+    print("wrote", args.out_png)
 
 
 if __name__ == "__main__":
