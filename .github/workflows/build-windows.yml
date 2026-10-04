@@ -59,10 +59,14 @@ jobs:
           Copy-Item libs/pdfium/bin/pdfium.dll libs/
           Get-ChildItem libs | Format-Table Name, Length
       - name: Build
+        env:
+          # permission_handler_windows uses <experimental/coroutine>, which the newest MSVC rejects
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
         run: flutter build windows --release --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}
       - name: Integration test on Windows (real DLLs)
         shell: pwsh
         env:
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
           MANGA_MODEL_DIR: ${{ github.workspace }}\onnx
           ORT_LIBRARY: ${{ github.workspace }}\libs\onnxruntime.dll
           PDFIUM_LIBRARY: ${{ github.workspace }}\libs\pdfium.dll
