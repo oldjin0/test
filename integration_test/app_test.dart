@@ -28,8 +28,22 @@ Uint8List samplePage(int seed) {
       im.setPixelRgb(x, y, v, v, v);
     }
   }
-  img.fillCircle(im, x: 300 + seed * 60, y: 300, radius: 120, color: img.ColorRgb8(235, 235, 235));
-  img.drawRect(im, x1: 40, y1: 40, x2: 860, y2: 1260, color: img.ColorRgb8(0, 0, 0), thickness: 6);
+  img.fillCircle(
+    im,
+    x: 300 + seed * 60,
+    y: 300,
+    radius: 120,
+    color: img.ColorRgb8(235, 235, 235),
+  );
+  img.drawRect(
+    im,
+    x1: 40,
+    y1: 40,
+    x2: 860,
+    y2: 1260,
+    color: img.ColorRgb8(0, 0, 0),
+    thickness: 6,
+  );
   return img.encodeJpg(im, quality: 90);
 }
 
@@ -77,12 +91,15 @@ List<int> _u32(int v) => [for (var i = 0; i < 4; i++) (v >> (8 * i)) & 0xFF];
 /// Minimal PDF: each page is a gray background with a black box at the bottom left.
 Uint8List simplePdf(List<double> grays) {
   final objs = <String>[];
-  final kids = [for (var i = 0; i < grays.length; i++) '${3 + 2 * i} 0 R'].join(' ');
+  final kids = [for (var i = 0; i < grays.length; i++) '${3 + 2 * i} 0 R']
+      .join(' ');
   objs.add('<< /Type /Catalog /Pages 2 0 R >>');
   objs.add('<< /Type /Pages /Kids [$kids] /Count ${grays.length} >>');
   for (var i = 0; i < grays.length; i++) {
     final content = '${grays[i]} g 0 0 300 420 re f 0 g 10 10 150 210 re f';
-    objs.add('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 420] /Contents ${4 + 2 * i} 0 R >>');
+    objs.add(
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 420] /Contents ${4 + 2 * i} 0 R >>',
+    );
     objs.add('<< /Length ${content.length} >>\nstream\n$content\nendstream');
   }
   final b = StringBuffer('%PDF-1.4\n');
@@ -96,7 +113,9 @@ Uint8List simplePdf(List<double> grays) {
   for (final o in offsets) {
     b.write('${o.toString().padLeft(10, '0')} 00000 n \n');
   }
-  b.write('trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n');
+  b.write(
+    'trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n',
+  );
   return Uint8List.fromList(latin1.encode(b.toString()));
 }
 
@@ -117,36 +136,43 @@ double meanChroma(Uint8List jpg) {
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('native app channel answers (version, ABIs, install permission)', (tester) async {
-    final v = await AppPlatform.version();
-    // ignore: avoid_print
-    print('APP version ${v.name} (${v.code}) abis ${v.abis}');
-    expect(v.code, greaterThan(0));
-    expect(v.abis, isNotEmpty);
-    expect(await AppPlatform.canInstall(), isA<bool>());
+  testWidgets(
+    'native app channel answers (version, ABIs, install permission)',
+    (tester) async {
+      final v = await AppPlatform.version();
+      // ignore: avoid_print
+      print('APP version ${v.name} (${v.code}) abis ${v.abis}');
+      expect(v.code, greaterThan(0));
+      expect(v.abis, isNotEmpty);
+      expect(await AppPlatform.canInstall(), isA<bool>());
 
-    // Saving to the gallery and Download (MediaStore) works on the device.
-    final tmp = File('${(await Directory.systemTemp.createTemp('pub')).path}/p.png');
-    await tmp.writeAsBytes(img.encodePng(img.Image(width: 8, height: 8)));
-    final picture = await AppPlatform.publish(
-      tmp.path,
-      name: 'test_${DateTime.now().millisecondsSinceEpoch}.png',
-      mime: 'image/png',
-      pictures: true,
-    );
-    final download = await AppPlatform.publish(
-      tmp.path,
-      name: 'test_${DateTime.now().millisecondsSinceEpoch}.cbz',
-      mime: 'application/vnd.comicbook+zip',
-      pictures: false,
-    );
-    // ignore: avoid_print
-    print('SAVED $picture and $download');
-    expect(picture, contains('Pictures/MangaViewer'));
-    expect(download, contains('Download/MangaViewer'));
-  });
+      // Saving to the gallery and Download (MediaStore) works on the device.
+      final tmp = File(
+        '${(await Directory.systemTemp.createTemp('pub')).path}/p.png',
+      );
+      await tmp.writeAsBytes(img.encodePng(img.Image(width: 8, height: 8)));
+      final picture = await AppPlatform.publish(
+        tmp.path,
+        name: 'test_${DateTime.now().millisecondsSinceEpoch}.png',
+        mime: 'image/png',
+        pictures: true,
+      );
+      final download = await AppPlatform.publish(
+        tmp.path,
+        name: 'test_${DateTime.now().millisecondsSinceEpoch}.cbz',
+        mime: 'application/vnd.comicbook+zip',
+        pictures: false,
+      );
+      // ignore: avoid_print
+      print('SAVED $picture and $download');
+      expect(picture, contains('Pictures/MangaViewer'));
+      expect(download, contains('Download/MangaViewer'));
+    },
+  );
 
-  testWidgets('PDF and CBR (RAR 4) comics open through the Android side', (tester) async {
+  testWidgets('PDF and CBR (RAR 4) comics open through the Android side', (
+    tester,
+  ) async {
     final dir = await Directory.systemTemp.createTemp('formats');
     Uint8List grayPng(int v) {
       final im = img.Image(width: 30, height: 40, numChannels: 3);
@@ -154,22 +180,37 @@ void main() {
       return img.encodePng(im);
     }
 
-    final pages = {'p10.png': grayPng(100), 'p2.png': grayPng(50), 'dir/p1.png': grayPng(20)};
-    final cbr = File('${dir.path}/book.cbr')..writeAsBytesSync(storedRar(pages));
+    final pages = {
+      'p10.png': grayPng(100),
+      'p2.png': grayPng(50),
+      'dir/p1.png': grayPng(20),
+    };
+    final cbr = File('${dir.path}/book.cbr')
+      ..writeAsBytesSync(storedRar(pages));
     final rarBook = await ComicBook.open(cbr.path);
     expect(rarBook.names, ['dir/p1.png', 'p2.png', 'p10.png']);
     expect(await rarBook.page(1), pages['p2.png']);
     expect(await rarBook.page(2), pages['p10.png']);
 
-    final pdf = File('${dir.path}/book.pdf')..writeAsBytesSync(simplePdf([0.8, 0.3]));
+    final pdf = File('${dir.path}/book.pdf')
+      ..writeAsBytesSync(simplePdf([0.8, 0.3]));
     final pdfBook = await ComicBook.open(pdf.path);
     expect(pdfBook.length, 2);
     for (final (i, gray) in [(0, 204), (1, 76)]) {
       final page = img.decodeImage(await pdfBook.page(i))!;
       expect(page.width, pdfRenderWidth);
       expect(page.height, (pdfRenderWidth * 420 / 300).round());
-      expect(page.getPixel(page.width - 20, 20).r, closeTo(gray, 6), reason: 'page ${i + 1} paper');
-      expect(page.getPixel(40, page.height - 40).r, lessThan(30), reason: 'black box');
+      expect(
+        page.getPixel(page.width - 20, 20).r,
+        closeTo(gray, 6),
+        reason: 'page ${i + 1} paper',
+      );
+      // The box covers x 10..160 / y 10..220 of 300x420 pt (origin bottom left).
+      expect(
+        page.getPixel(page.width ~/ 4, page.height * 3 ~/ 4).r,
+        lessThan(30),
+        reason: 'black box',
+      );
     }
     // ignore: avoid_print
     print('FORMATS rar ${rarBook.names} pdf ${pdfBook.length} pages');
@@ -180,7 +221,11 @@ void main() {
 
   testWidgets('bundled AI model loads and colorizes on device', (tester) async {
     final path = await ensureModelFile();
-    expect(path, isNotNull, reason: 'assets/models/colorizer.tflite must be bundled');
+    expect(
+      path,
+      isNotNull,
+      reason: 'assets/models/colorizer.tflite must be bundled',
+    );
     final sw = Stopwatch()..start();
     final model = TfliteColorModel.fromFile(path!);
     expect(model.usesXnnpack, isTrue);
@@ -221,7 +266,9 @@ void main() {
     expect(chroma, greaterThan(gray + 2), reason: 'output should carry color');
   });
 
-  testWidgets('viewer auto-colorizes, remembers position and bookmarks', (tester) async {
+  testWidgets('viewer auto-colorizes, remembers position and bookmarks', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     final store = await LibraryStore.load();
     expect(store.colorize, isTrue);
@@ -253,10 +300,15 @@ void main() {
       }
     }
 
-    await waitFor(() => find.byType(CurlPageView).evaluate().isNotEmpty, 'pages to load');
+    await waitFor(
+      () => find.byType(CurlPageView).evaluate().isNotEmpty,
+      'pages to load',
+    );
     expect(store.progressOf(path)?.total, 3);
     await waitFor(
-      () => find.text('AI 채색 중…').evaluate().isEmpty && find.text('AI 모델 준비 중…').evaluate().isEmpty,
+      () =>
+          find.text('AI 채색 중…').evaluate().isEmpty &&
+          find.text('AI 모델 준비 중…').evaluate().isEmpty,
       'colorization',
     );
     expect(find.textContaining('AI 모델 없음'), findsNothing);
