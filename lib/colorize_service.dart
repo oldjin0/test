@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'colorizer.dart';
 import 'onnx_engine.dart';
+import 'pc_platform.dart';
 
 /// Identifies the bundled models. Bump it whenever assets/models/*.tflite or
 /// the post-processing changes: it names the extracted model files and keys
@@ -94,7 +95,9 @@ class ColorizeService {
   String backend = '';
 
   /// [onnx] selects the PC engine (ONNX Runtime): `cpu` and optional `gpu`
-  /// model paths, the input `width`, and an optional `denoiser` path.
+  /// model paths, the input `width`, an optional `denoiser` path, and an
+  /// optional writable `state` folder for the engine's markers (the program
+  /// folder may be read-only).
   static Future<ColorizeService> start({
     String? modelPath,
     String? denoiserPath,
@@ -104,11 +107,17 @@ class ColorizeService {
     final s = ColorizeService._(cacheDir);
     final port = ReceivePort();
     port.listen(s._onMessage);
+    final state = onnx?['state'] as String?;
     final basis = onnx == null ? modelPath : onnx['cpu'] as String?;
-    final guard = basis == null ? null : '$basis.xnnpack-guard';
+    final guard = state != null
+        ? p.join(state, 'gpu.guard')
+        : basis == null
+        ? null
+        : '$basis.xnnpack-guard';
     await Isolate.spawn(_workerMain, [port.sendPort, modelPath, guard, denoiserPath, onnx]);
     await s._ready.future;
-    if (cacheDir != null) unawaited(_pruneCache(cacheDir));
+    // The PC colors whole books ahead and has the disk for it.
+    if (cacheDir != null) unawaited(_pruneCache(cacheDir, maxBytes: isPc ? 3 << 30 : 300 << 20));
     return s;
   }
 
@@ -298,8 +307,8 @@ class ColorizeService {
     } catch (_) {}
   }
 
-  /// Keeps the disk cache under ~300 MB by deleting the oldest files.
-  static Future<void> _pruneCache(Directory dir, {int maxBytes = 300 << 20}) async {
+  /// Keeps the disk cache under [maxBytes] by deleting the oldest files.
+  static Future<void> _pruneCache(Directory dir, {required int maxBytes}) async {
     try {
       final files = await dir.list().where((e) => e is File).cast<File>().toList();
       final stats = {for (final f in files) f: await f.stat()};
@@ -332,6 +341,10 @@ abstract class _Engine {
 
   /// Whether the model or denoiser produced NaN/infinity.
   bool get sawInvalid;
+
+  /// Whether setting up already ran the model once on its device (then the
+  /// crash guard is not needed for the first page).
+  bool get provenBySetup;
 
   /// Switches to a safer setup after [sawInvalid] (full precision / CPU).
   /// Returns false when there is nothing safer.
@@ -380,6 +393,9 @@ class _TfliteEngine implements _Engine {
   }
 
   @override
+  bool get provenBySetup => false;
+
+  @override
   bool get sawInvalid {
     final m = model, d = _denoiser;
     return (m is TfliteColorModel && m.fp16 && m.sawInvalidOutput) ||
@@ -406,7 +422,9 @@ class _OnnxEngine implements _Engine {
       _gpu = onnx['gpu'] as String?,
       _denoiserPath = onnx['denoiser'] as String?,
       _width = onnx['width'] as int,
-      _noGpu = File('${onnx['cpu']}.no-gpu') {
+      _noGpu = File(
+        onnx['state'] != null ? p.join(onnx['state'] as String, 'no-gpu') : '${onnx['cpu']}.no-gpu',
+      ) {
     try {
       final r = openPcModel(
         gpuModel: _gpu,
@@ -461,6 +479,10 @@ class _OnnxEngine implements _Engine {
     }
   }
 
+  /// [openPcModel] makes a check run on the graphics card.
+  @override
+  bool get provenBySetup => model != null;
+
   @override
   bool get sawInvalid {
     final m = model;
@@ -472,7 +494,9 @@ class _OnnxEngine implements _Engine {
     final m = model;
     if (m is! OnnxColorModel || m.device == OnnxDevice.cpu) return false;
     // The graphics path produced garbage: processor only from now on.
-    _noGpu.writeAsStringSync('1');
+    try {
+      _noGpu.writeAsStringSync('1');
+    } catch (_) {}
     m.close();
     _denoiser?.close();
     _denoiser = null;
@@ -485,29 +509,48 @@ class _OnnxEngine implements _Engine {
 void _workerMain(List args) {
   final reply = args[0] as SendPort;
   final modelPath = args[1] as String?;
-  // A native crash cannot be caught. The guard file exists only while the
-  // accelerated path (XNNPACK, DirectML) is being set up and used for the
-  // first time; if it is still there on the next launch, that attempt crashed
-  // and the plain engine is used.
+  // A native crash cannot be caught. The guard file exists only while native
+  // code of the accelerated path (XNNPACK, DirectML) runs for the first time:
+  // during setup and around each page until one went through the model. If
+  // it is still there on the next launch, that attempt crashed and the plain
+  // engine is used. It must not outlive the native call: an app closed
+  // before any page reached the model (cached pages, color pages) would
+  // otherwise lose the accelerated path for good.
   final guard = args[2] == null ? null : File(args[2] as String);
   final denoiserPath = args[3] as String?;
   final onnx = args[4] as Map?;
-  var guarded = false;
+  final accelerated = guard == null || !guard.existsSync();
+  var proven = !accelerated || guard == null; // nothing left to guard
+  void arm() {
+    if (proven) return;
+    try {
+      guard!.writeAsStringSync('1', flush: true);
+    } catch (_) {
+      proven = true; // cannot write markers here: run unguarded
+    }
+  }
+
+  void disarm() {
+    if (proven) return;
+    try {
+      guard!.deleteSync();
+    } catch (_) {}
+  }
+
   _Engine? engine;
   String? setupError;
   if (modelPath != null || onnx != null) {
     try {
-      final accelerated = guard == null || !guard.existsSync();
-      if (accelerated && guard != null) {
-        guard.writeAsStringSync('1', flush: true);
-        guarded = true;
-      }
+      arm();
       engine = onnx != null
           ? _OnnxEngine(onnx, accelerated)
           : _TfliteEngine(modelPath!, denoiserPath, accelerated);
     } catch (e) {
       setupError = '$e';
+    } finally {
+      disarm();
     }
+    if (engine?.provenBySetup ?? false) proven = true;
   }
   final port = ReceivePort();
   reply.send(port.sendPort);
@@ -529,12 +572,15 @@ void _workerMain(List args) {
         hints: hints,
         denoiser: engine?.denoiserFor(wantDenoise),
       );
-      var r = run();
-      if (engine != null && engine.sawInvalid && engine.recover()) r = run();
-      if (guarded && r.mode == ColorizeMode.ai) {
-        guarded = false;
-        guard?.deleteSync();
+      ColorizeResult r;
+      arm();
+      try {
+        r = run();
+        if (engine != null && engine.sawInvalid && engine.recover()) r = run();
+      } finally {
+        disarm();
       }
+      if (r.mode == ColorizeMode.ai) proven = true;
       reply.send([
         id,
         TransferableTypedData.fromList([r.bytes]),

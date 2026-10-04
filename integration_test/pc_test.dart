@@ -17,6 +17,7 @@ import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
 import 'package:manga_viewer/onnx_engine.dart';
 import 'package:manga_viewer/pc_platform.dart';
+import 'package:manga_viewer/pdfium.dart';
 import 'package:manga_viewer/updater.dart';
 import 'package:manga_viewer/viewer_page.dart';
 import 'package:path/path.dart' as p;
@@ -218,6 +219,23 @@ void main() {
         page.getPixel(page.width ~/ 4, page.height * 3 ~/ 4).r,
         lessThan(30),
         reason: 'black box',
+      );
+    }
+    // Many pages at once (reading ahead, covers): pdfium is not thread-safe,
+    // so they must queue up rather than crash; a second PDF in between too.
+    final other = File(p.join(dir.path, 'other.pdf'))
+      ..writeAsBytesSync(simplePdf([0.5]));
+    final burst = await Future.wait([
+      for (var k = 0; k < 6; k++)
+        renderPdfPage(k == 3 ? other.path : pdf.path, k == 3 ? 0 : k % 2, 400),
+    ]);
+    for (final (k, jpg) in burst.indexed) {
+      final page = img.decodeImage(jpg)!;
+      final expected = k == 3 ? 128 : (k.isEven ? 204 : 76);
+      expect(
+        page.getPixel(page.width - 10, 10).r,
+        closeTo(expected, 6),
+        reason: 'burst page $k',
       );
     }
   });

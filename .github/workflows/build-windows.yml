@@ -76,6 +76,12 @@ jobs:
         run: |
           $rel = "build/windows/x64/runner/Release"
           Copy-Item libs/onnxruntime.dll, libs/DirectML.dll, libs/pdfium.dll $rel
+          # The Visual C++ runtime the program and onnxruntime.dll need: PCs without
+          # the redistributable installed would not start the program otherwise
+          # (app-local copies are allowed by Microsoft).
+          foreach ($dll in 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
+            Copy-Item "$env:SystemRoot/System32/$dll" $rel
+          }
           New-Item -ItemType Directory "$rel/models" | Out-Null
           Copy-Item onnx/colorizer_fp32.onnx, onnx/colorizer_fp16.onnx, onnx/denoiser.onnx "$rel/models"
           Set-Content -Path "$rel/version.json" -Value '{"code": ${{ github.run_number }}, "name": "1.0.${{ github.run_number }}"}'
@@ -86,7 +92,15 @@ jobs:
       - name: The packaged program starts and stays up
         shell: pwsh
         run: |
-          $exe = (Resolve-Path "build/windows/x64/runner/Release/manga_viewer.exe").Path
+          # Unpack the zip the way the in-app updater does (the system tar) and
+          # start that copy: proves the archive itself is complete and readable.
+          New-Item -ItemType Directory unpacked | Out-Null
+          & "$env:SystemRoot/System32/tar.exe" -xf MangaViewer-windows.zip -C unpacked
+          if ($LASTEXITCODE -ne 0) { throw "tar could not unpack the release zip" }
+          foreach ($f in 'manga_viewer.exe', 'data/app.so', 'flutter_windows.dll', 'models/colorizer_fp32.onnx', 'vcruntime140_1.dll', 'version.json') {
+            if (-not (Test-Path "unpacked/$f")) { throw "missing in the zip: $f" }
+          }
+          $exe = (Resolve-Path "unpacked/manga_viewer.exe").Path
           $p = Start-Process $exe -PassThru
           Start-Sleep -Seconds 12
           if ($p.HasExited) { throw "manga_viewer.exe exited with code $($p.ExitCode)" }

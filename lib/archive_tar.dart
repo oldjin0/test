@@ -19,16 +19,48 @@ Future<Directory> extractedArchivesDir() async {
   return Directory(p.join(base.path, 'archives'));
 }
 
-/// Extracts the archive at [path] (rar, 7z, ...) once into the cache and
-/// returns the folder; later calls reuse it. Throws [FormatException] when
-/// the archive cannot be read.
-Future<Directory> extractWithTar(String path) async {
+Future<Directory> _dirFor(String path) async {
   final stat = await File(path).stat();
   final key = md5
       .convert('$path|${stat.size}|${stat.modified.millisecondsSinceEpoch}'.codeUnits)
       .toString();
-  final root = await extractedArchivesDir();
-  final dir = Directory(p.join(root.path, key));
+  return Directory(p.join((await extractedArchivesDir()).path, key));
+}
+
+/// The folder [path] was already extracted to, or null (nothing is extracted).
+Future<Directory?> extractedIfPresent(String path) async {
+  try {
+    final dir = await _dirFor(path);
+    return await File(p.join(dir.path, '.complete')).exists() ? dir : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// How many archives were unpacked in this run (covers look again after one).
+int archivesExtracted = 0;
+
+// Extractions in progress: a cover and the reader asking for the same
+// archive must not unpack it into the same folder at once.
+final _running = <String, Future<Directory>>{};
+
+/// Extracts the archive at [path] (rar, 7z, ...) once into the cache and
+/// returns the folder; later calls reuse it. Throws [FormatException] when
+/// the archive cannot be read.
+Future<Directory> extractWithTar(String path) async {
+  final dir = await _dirFor(path);
+  final running = _running[dir.path];
+  if (running != null) return running;
+  final job = _extract(path, dir);
+  _running[dir.path] = job;
+  try {
+    return await job;
+  } finally {
+    _running.remove(dir.path);
+  }
+}
+
+Future<Directory> _extract(String path, Directory dir) async {
   final done = File(p.join(dir.path, '.complete'));
   if (await done.exists()) {
     await done.setLastModified(DateTime.now()); // recently used: pruned last
@@ -37,13 +69,26 @@ Future<Directory> extractWithTar(String path) async {
   if (await dir.exists()) await dir.delete(recursive: true);
   await dir.create(recursive: true);
   final r = await Process.run(_tarExe, ['-xf', path, '-C', dir.path]);
-  if (r.exitCode != 0) {
-    await dir.delete(recursive: true);
-    final why = '${r.stderr}'.trim();
-    throw FormatException('압축 파일을 열 수 없습니다.${why.isEmpty ? '' : '\n${why.split('\n').first}'}');
+  if (r.exitCode == 0) {
+    await done.writeAsString('1');
+    archivesExtracted++;
+    return dir;
   }
-  await done.writeAsString('1');
-  return dir;
+  // tar also fails for a single entry it could not write (an odd name): the
+  // pages that did come out are shown, but not kept as complete, so the next
+  // opening tries again.
+  if (await _hasImages(dir)) return dir;
+  await dir.delete(recursive: true);
+  final why = '${r.stderr}'.trim();
+  throw FormatException('압축 파일을 열 수 없습니다.${why.isEmpty ? '' : '\n${why.split('\n').first}'}');
+}
+
+Future<bool> _hasImages(Directory dir) async {
+  const exts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+  await for (final e in dir.list(recursive: true)) {
+    if (e is File && exts.contains(p.extension(e.path).toLowerCase())) return true;
+  }
+  return false;
 }
 
 /// Keeps extracted archives under [maxBytes] by deleting the least recently

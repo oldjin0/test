@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'colorizer.dart';
 import 'third_party/onnxruntime/ort.dart';
@@ -9,7 +10,27 @@ import 'third_party/onnxruntime/ort.dart';
 /// Where the PC version looks for its models: `models/` next to the
 /// executable (the build copies the ONNX files there; they are too big to
 /// live in the Flutter assets, which the phone build would also carry).
-String pcModelDir() => p.join(File(Platform.resolvedExecutable).parent.path, 'models');
+String pcModelDir() =>
+    Platform.environment['MANGA_MODEL_DIR'] ??
+    p.join(File(Platform.resolvedExecutable).parent.path, 'models');
+
+/// Writable folder for the engine's markers (a crash guard, "the graphics
+/// card gave bad output"): the program folder may be read-only.
+Future<Directory> pcEngineStateDir() async =>
+    Directory(p.join((await getApplicationSupportDirectory()).path, 'engine'))
+        .create(recursive: true);
+
+/// Forgets that the graphics card failed or crashed before, so the next
+/// start tries it again (the reader switched the graphics card back on).
+Future<void> pcResetGpuMarkers() async {
+  try {
+    final dir = await pcEngineStateDir();
+    for (final name in ['gpu.guard', 'no-gpu']) {
+      final f = File(p.join(dir.path, name));
+      if (f.existsSync()) f.deleteSync();
+    }
+  } catch (_) {}
+}
 
 /// Model height for an input [width] (both multiples of 32, as the network
 /// needs; the page aspect ratio of manga).

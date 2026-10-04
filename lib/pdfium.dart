@@ -138,7 +138,8 @@ class _Doc {
   }
 }
 
-/// Number of pages in the PDF at [path]. Runs in the calling isolate.
+/// Number of pages in the PDF at [path]. Runs in the calling isolate; not
+/// for concurrent use.
 int pdfPageCountSync(String path) {
   final d = _Doc(path);
   try {
@@ -149,53 +150,120 @@ int pdfPageCountSync(String path) {
 }
 
 /// Page [index] of the PDF at [path] as JPEG, [width] pixels wide (white
-/// background). Runs in the calling isolate.
+/// background). Runs in the calling isolate; not for concurrent use.
 Uint8List renderPdfPageSync(String path, int index, int width) {
   final d = _Doc(path);
   try {
-    final count = _pdfium.pageCount(d.handle);
-    if (index < 0 || index >= count) throw PdfException('PDF에 $index쪽이 없습니다.');
-    final page = _pdfium.loadPage(d.handle, index);
-    if (page == ffi.nullptr) throw PdfException('${index + 1}쪽을 읽을 수 없습니다.');
-    try {
-      final w = math.max(64, math.min(width, 4000));
-      final ratio = _pdfium.pageHeight(page) / math.max(1.0, _pdfium.pageWidth(page));
-      final h = math.max(64, (w * ratio).round());
-      final bmp = _pdfium.bitmapCreate(w, h, 0); // BGRx
-      if (bmp == ffi.nullptr) throw const PdfException('메모리가 부족합니다.');
-      try {
-        _pdfium.bitmapFill(bmp, 0, 0, w, h, 0xFFFFFFFF);
-        // flag 1: draw annotations too
-        _pdfium.render(bmp, page, 0, 0, w, h, 0, 1);
-        final stride = _pdfium.bitmapStride(bmp);
-        final src = _pdfium.bitmapBuffer(bmp).asTypedList(stride * h);
-        final rgb = Uint8List(w * h * 3);
-        var o = 0;
-        for (var y = 0; y < h; y++) {
-          var s = y * stride;
-          for (var x = 0; x < w; x++) {
-            rgb[o++] = src[s + 2];
-            rgb[o++] = src[s + 1];
-            rgb[o++] = src[s];
-            s += 4;
-          }
-        }
-        final image = img.Image.fromBytes(width: w, height: h, bytes: rgb.buffer, numChannels: 3);
-        return img.encodeJpg(image, quality: 92);
-      } finally {
-        _pdfium.bitmapDestroy(bmp);
-      }
-    } finally {
-      _pdfium.closePage(page);
-    }
+    return _renderPage(d, index, width);
   } finally {
     d.close();
   }
 }
 
-/// [pdfPageCountSync] off the UI isolate.
-Future<int> pdfPageCount(String path) => Isolate.run(() => pdfPageCountSync(path));
+Uint8List _renderPage(_Doc d, int index, int width) {
+  final count = _pdfium.pageCount(d.handle);
+  if (index < 0 || index >= count) throw PdfException('PDF에 $index쪽이 없습니다.');
+  final page = _pdfium.loadPage(d.handle, index);
+  if (page == ffi.nullptr) throw PdfException('${index + 1}쪽을 읽을 수 없습니다.');
+  try {
+    final w = math.max(64, math.min(width, 4000));
+    final ratio = _pdfium.pageHeight(page) / math.max(1.0, _pdfium.pageWidth(page));
+    final h = math.max(64, (w * ratio).round());
+    final bmp = _pdfium.bitmapCreate(w, h, 0); // BGRx
+    if (bmp == ffi.nullptr) throw const PdfException('메모리가 부족합니다.');
+    try {
+      _pdfium.bitmapFill(bmp, 0, 0, w, h, 0xFFFFFFFF);
+      // flag 1: draw annotations too
+      _pdfium.render(bmp, page, 0, 0, w, h, 0, 1);
+      final stride = _pdfium.bitmapStride(bmp);
+      final src = _pdfium.bitmapBuffer(bmp).asTypedList(stride * h);
+      final rgb = Uint8List(w * h * 3);
+      var o = 0;
+      for (var y = 0; y < h; y++) {
+        var s = y * stride;
+        for (var x = 0; x < w; x++) {
+          rgb[o++] = src[s + 2];
+          rgb[o++] = src[s + 1];
+          rgb[o++] = src[s];
+          s += 4;
+        }
+      }
+      final image = img.Image.fromBytes(width: w, height: h, bytes: rgb.buffer, numChannels: 3);
+      return img.encodeJpg(image, quality: 92);
+    } finally {
+      _pdfium.bitmapDestroy(bmp);
+    }
+  } finally {
+    _pdfium.closePage(page);
+  }
+}
 
-/// [renderPdfPageSync] off the UI isolate.
-Future<Uint8List> renderPdfPage(String path, int index, int width) =>
-    Isolate.run(() => renderPdfPageSync(path, index, width));
+// pdfium is not thread-safe, and each Isolate.run is another thread: all
+// PDF work goes to one long-lived isolate, one request at a time. It keeps
+// the last document open, so turning pages does not re-read the file.
+Future<SendPort>? _worker;
+
+Future<SendPort> _startWorker() async {
+  final ready = ReceivePort();
+  await Isolate.spawn(_pdfWorkerMain, ready.sendPort);
+  return await ready.first as SendPort;
+}
+
+void _pdfWorkerMain(SendPort ready) {
+  final requests = ReceivePort();
+  ready.send(requests.sendPort);
+  String? openKey;
+  _Doc? doc;
+  _Doc open(String path) {
+    final st = File(path).statSync();
+    final key = '$path|${st.size}|${st.modified.millisecondsSinceEpoch}';
+    if (key != openKey || doc == null) {
+      doc?.close();
+      doc = null;
+      openKey = null;
+      doc = _Doc(path);
+      openKey = key;
+    }
+    return doc!;
+  }
+
+  requests.listen((msg) {
+    final m = msg as List;
+    final reply = m[0] as SendPort;
+    try {
+      final d = open(m[2] as String);
+      switch (m[1]) {
+        case 'count':
+          reply.send([true, _pdfium.pageCount(d.handle)]);
+        default:
+          final jpg = _renderPage(d, m[3] as int, m[4] as int);
+          reply.send([
+            true,
+            TransferableTypedData.fromList([jpg]),
+          ]);
+      }
+    } catch (e) {
+      reply.send([false, '$e']);
+    }
+  });
+}
+
+Future<Object?> _ask(List<Object> request) async {
+  final worker = await (_worker ??= _startWorker());
+  final reply = ReceivePort();
+  worker.send([reply.sendPort, ...request]);
+  final r = await reply.first as List;
+  reply.close();
+  if (r[0] != true) throw PdfException(r[1] as String);
+  return r[1];
+}
+
+/// Number of pages in the PDF at [path] (off the UI isolate).
+Future<int> pdfPageCount(String path) async => await _ask(['count', path]) as int;
+
+/// Page [index] of the PDF at [path] as JPEG, [width] pixels wide (off the
+/// UI isolate).
+Future<Uint8List> renderPdfPage(String path, int index, int width) async =>
+    (await _ask(['render', path, index, width]) as TransferableTypedData)
+        .materialize()
+        .asUint8List();

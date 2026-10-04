@@ -6,9 +6,12 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'archive_tar.dart';
 import 'comic_loader.dart';
+import 'pc_platform.dart';
 import 'text_book.dart';
 
 const _thumbWidth = 160;
@@ -40,7 +43,22 @@ Uint8List? shrinkToCover(Uint8List page) {
   return img.encodeJpg(small, quality: 80);
 }
 
+/// RAR / 7z on the PC: read by unpacking the whole archive, too much for a
+/// cover. Those get one once the book has been opened (and unpacked).
+bool _unpackedOnPc(String path) {
+  final lower = path.toLowerCase();
+  return isPc && ['.rar', '.cbr', '.7z', '.cb7'].any(lower.endsWith);
+}
+
 Future<Uint8List?> _coverInBackground(String path) async {
+  if (_unpackedOnPc(path) && await needsNativeReader(path)) {
+    final dir = await extractedIfPresent(path);
+    if (dir == null) return null;
+    final names = await Isolate.run(() => listImagesRecursive(dir.path));
+    if (names.isEmpty) return null;
+    final first = await File(p.join(dir.path, names.first)).readAsBytes();
+    return Isolate.run(() => shrinkToCover(first));
+  }
   if (await needsNativeReader(path)) {
     // PDF / RAR pages come from the Android side, which is not reachable from
     // a background isolate: read the first page here, shrink it there.
@@ -59,6 +77,7 @@ class Thumbnails {
 
   final Future<Uint8List?> Function(String path) _make;
   final _memory = <String, Future<Uint8List?>>{};
+  final _unpackings = <String, int>{};
   Future<Directory?>? _dir;
   int _running = 0;
   final _waiting = <Completer<void>>[];
@@ -74,7 +93,12 @@ class Thumbnails {
 
   /// The cover of [path], or null if none can be made.
   Future<Uint8List?> of(String path) {
-    final existing = _memory.remove(path);
+    var existing = _memory.remove(path);
+    if (_unpackedOnPc(path)) {
+      // No cover until the archive is unpacked: look again after an unpacking.
+      if (_unpackings[path] != archivesExtracted) existing = null;
+      _unpackings[path] = archivesExtracted;
+    }
     final future = existing ?? _load(path);
     _memory[path] = future; // most recently used last
     while (_memory.length > 200) {

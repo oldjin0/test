@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'library_store.dart';
@@ -180,12 +182,12 @@ List<Widget> _pcSection(LibraryStore s, String? engine) => [
     s.pcWidth,
     (v) => s.update((s) => s.pcWidth = v),
   ),
-  _switch(
-    '그래픽카드(DirectML) 사용',
-    s.pcGpu,
-    (v) => s.update((s) => s.pcGpu = v),
-    subtitle: '안 되면 자동으로 CPU를 씁니다. 바꾼 설정은 앱을 다시 시작하면 적용됩니다',
-  ),
+  _switch('그래픽카드(DirectML) 사용', s.pcGpu, (v) {
+    // Switching it back on gives a card that failed before another try.
+    if (v) unawaited(pcResetGpuMarkers());
+    s.update((s) => s.pcGpu = v);
+  }, subtitle: '안 되면 자동으로 CPU를 씁니다'),
+  const Text('입력 크기와 그래픽카드 설정은 앱을 다시 시작하면 적용됩니다.', style: TextStyle(fontSize: 12)),
 ];
 
 List<Widget> _screenSection(LibraryStore s, {required bool comic}) => [

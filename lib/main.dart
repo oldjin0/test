@@ -49,7 +49,7 @@ Future<ColorizeService> startColorizer([LibraryStore? store]) async {
   await cache.create(recursive: true);
   if (isPc) {
     // The PC version: ONNX Runtime (DirectML graphics, or the processor).
-    final models = Platform.environment['MANGA_MODEL_DIR'] ?? pcModelDir();
+    final models = pcModelDir();
     final cpu = File(p.join(models, 'colorizer_fp32.onnx'));
     final gpu = File(p.join(models, 'colorizer_fp16.onnx'));
     final denoiser = File(p.join(models, 'denoiser.onnx'));
@@ -65,6 +65,7 @@ Future<ColorizeService> startColorizer([LibraryStore? store]) async {
         'gpu': (store?.pcGpu ?? true) && gpu.existsSync() ? gpu.path : null,
         'denoiser': denoiser.existsSync() ? denoiser.path : null,
         'width': width,
+        'state': (await pcEngineStateDir()).path,
       },
     );
   }
@@ -112,6 +113,7 @@ final einkTheme = ThemeData(
       TargetPlatform.android: _NoTransition(),
       TargetPlatform.iOS: _NoTransition(),
       TargetPlatform.linux: _NoTransition(),
+      TargetPlatform.windows: _NoTransition(),
     },
   ),
 );
