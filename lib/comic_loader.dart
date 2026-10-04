@@ -3,10 +3,23 @@ import 'dart:isolate';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+
+import 'archive_tar.dart';
+import 'pc_platform.dart';
+import 'pdfium.dart';
 
 const _imageExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
 
-const comicExts = ['.zip', '.cbz', '.cbr', '.rar', '.pdf'];
+/// Comic file types. The PC version also reads 7z (through the system tar).
+List<String> get comicExts => [
+  '.zip',
+  '.cbz',
+  '.cbr',
+  '.rar',
+  '.pdf',
+  if (isPc) ...['.7z', '.cb7'],
+];
 
 /// Width PDF pages are rendered at (sharp on phone screens, modest memory).
 const pdfRenderWidth = 1600;
@@ -24,10 +37,12 @@ Future<bool> _looksLikeZip(String path) async {
   }
 }
 
-/// Whether [path] is read by the Android side (PDF, real RAR) rather than in Dart.
+/// Whether [path] is read by the platform side (PDF, real RAR; on the phone
+/// the Android code, on the PC pdfium and the system tar) rather than as a zip.
 Future<bool> needsNativeReader(String path) async {
   final lower = path.toLowerCase();
   if (lower.endsWith('.pdf')) return true;
+  if (lower.endsWith('.7z') || lower.endsWith('.cb7')) return true;
   if (lower.endsWith('.cbr') || lower.endsWith('.rar')) return !await _looksLikeZip(path);
   return false;
 }
@@ -97,6 +112,14 @@ List<String> listImageFiles(String dir) => [
 
 Future<List<String>> _listImagesInBackground(String dir) => Isolate.run(() => listImageFiles(dir));
 
+/// Image files anywhere under [dir] (an extracted archive), as '/'-separated
+/// paths relative to it, in reading order.
+List<String> listImagesRecursive(String dir) => [
+  for (final e in Directory(dir).listSync(recursive: true, followLinks: false))
+    if (e is File && _isPageName(p.relative(e.path, from: dir).replaceAll(r'\', '/')))
+      p.relative(e.path, from: dir).replaceAll(r'\', '/'),
+]..sort((a, b) => naturalCompare(a.toLowerCase(), b.toLowerCase()));
+
 /// A comic opened for reading: a .zip/.cbz archive, a folder of images, a
 /// PDF, or a .cbr/.rar archive (the last two through the Android side).
 /// Pages are read one at a time (archives on background isolates) and only a
@@ -120,6 +143,24 @@ class ComicBook {
     if (await FileSystemEntity.isDirectory(path)) {
       final names = await _listImagesInBackground(path);
       book = ComicBook._(path, names, (i) => File('$path/${names[i]}').readAsBytes(), window);
+    } else if (isPc && lower.endsWith('.pdf')) {
+      final count = await pdfPageCount(path);
+      book = ComicBook._(
+        path,
+        [for (var i = 1; i <= count; i++) '$i'],
+        (i) => renderPdfPage(path, i, pdfRenderWidth),
+        window,
+      );
+    } else if (isPc && await needsNativeReader(path)) {
+      // RAR / 7z: unpacked once by the system tar, then read as a folder.
+      final dir = await extractWithTar(path);
+      final names = await Isolate.run(() => listImagesRecursive(dir.path));
+      book = ComicBook._(
+        path,
+        names,
+        (i) => File(p.join(dir.path, names[i])).readAsBytes(),
+        window,
+      );
     } else if (lower.endsWith('.pdf')) {
       final count = await _native
           .invokeMethod<int>('pdfPageCount', {'path': path})

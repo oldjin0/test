@@ -129,6 +129,13 @@ class LibraryStore extends ChangeNotifier {
   /// Folder lists: 'name' or 'date' (newest first).
   String sortBy = 'name';
 
+  // PC engine (applied at the next start)
+  /// Model input width of the PC version (448, 576, 704 or 768).
+  int pcWidth = 576;
+
+  /// Use the graphics card (DirectML) when it works.
+  bool pcGpu = true;
+
   // Text reader
   double textSize = 20;
   double textLineHeight = 1.7;
@@ -172,6 +179,8 @@ class LibraryStore extends ChangeNotifier {
     showStatus = p.getBool('showStatus') ?? showStatus;
     refreshEvery = p.getInt('refreshEvery') ?? refreshEvery;
     sortBy = p.getString('sortBy') ?? sortBy;
+    pcWidth = p.getInt('pcWidth') ?? pcWidth;
+    pcGpu = p.getBool('pcGpu') ?? pcGpu;
     textSize = p.getDouble('textSize') ?? textSize;
     textLineHeight = p.getDouble('textLineHeight') ?? textLineHeight;
     textMargin = p.getDouble('textMargin') ?? textMargin;
@@ -249,6 +258,8 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('showStatus', showStatus);
     _prefs.setInt('refreshEvery', refreshEvery);
     _prefs.setString('sortBy', sortBy);
+    _prefs.setInt('pcWidth', pcWidth);
+    _prefs.setBool('pcGpu', pcGpu);
     _prefs.setDouble('textSize', textSize);
     _prefs.setDouble('textLineHeight', textLineHeight);
     _prefs.setDouble('textMargin', textMargin);

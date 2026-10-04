@@ -1,0 +1,95 @@
+name: Build Windows
+
+# Builds the PC version, tests it on Windows with the real native libraries
+# (ONNX Runtime, pdfium, the system tar), and packages MangaViewer-windows.zip.
+on:
+  push:
+    branches: [ccr-4d8e098a-xfwocj]
+    paths:
+      - lib/**
+      - windows/**
+      - pubspec.yaml
+      - pubspec.lock
+      - assets/**
+      - test/**
+      - integration_test/**
+      - tools/pc/**
+      - .github/workflows/build-windows.yml
+      - .github/workflows/pc-export.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    uses: ./.github/workflows/pc-export.yml
+
+  build:
+    needs: export
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - name: Unit tests (on Windows)
+        run: flutter test
+      - uses: actions/download-artifact@v4
+        with:
+          name: onnx
+          path: onnx
+      - name: Native libraries (ONNX Runtime with DirectML, pdfium)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory libs | Out-Null
+          # The wheel the benchmark ran on: onnxruntime.dll (DirectML build) and DirectML.dll.
+          pip download onnxruntime-directml==1.24.4 --no-deps --only-binary=:all: -d wheels
+          Copy-Item (Get-ChildItem wheels/*.whl).FullName wheels/ort.zip
+          Expand-Archive wheels/ort.zip -DestinationPath wheels/ort
+          Copy-Item wheels/ort/onnxruntime/capi/onnxruntime.dll, wheels/ort/onnxruntime/capi/DirectML.dll libs/
+          # pdfium (Chromium's PDF renderer) prebuilt for Windows.
+          Invoke-WebRequest https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz -OutFile pdfium.tgz
+          New-Item -ItemType Directory libs/pdfium | Out-Null
+          tar -xzf pdfium.tgz -C libs/pdfium
+          Copy-Item libs/pdfium/bin/pdfium.dll libs/
+          Get-ChildItem libs | Format-Table Name, Length
+      - name: Build
+        run: flutter build windows --release --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}
+      - name: Integration test on Windows (real DLLs)
+        shell: pwsh
+        env:
+          MANGA_MODEL_DIR: ${{ github.workspace }}\onnx
+          ORT_LIBRARY: ${{ github.workspace }}\libs\onnxruntime.dll
+          PDFIUM_LIBRARY: ${{ github.workspace }}\libs\pdfium.dll
+        run: flutter test integration_test/pc_test.dart -d windows --reporter expanded
+      - name: Package
+        shell: pwsh
+        run: |
+          $rel = "build/windows/x64/runner/Release"
+          Copy-Item libs/onnxruntime.dll, libs/DirectML.dll, libs/pdfium.dll $rel
+          New-Item -ItemType Directory "$rel/models" | Out-Null
+          Copy-Item onnx/colorizer_fp32.onnx, onnx/colorizer_fp16.onnx, onnx/denoiser.onnx "$rel/models"
+          Set-Content -Path "$rel/version.json" -Value '{"code": ${{ github.run_number }}, "name": "1.0.${{ github.run_number }}"}'
+          Set-Content -Path "$rel/README.txt" -Value "Manga Viewer for Windows`nRun manga_viewer.exe. Nothing is installed; delete the folder to remove it."
+          Get-ChildItem $rel | Format-Table Name, Length
+          Compress-Archive -Path "$rel/*" -DestinationPath MangaViewer-windows.zip -CompressionLevel Fastest
+          "{0:N0} MB" -f ((Get-Item MangaViewer-windows.zip).Length / 1MB)
+      - name: The packaged program starts and stays up
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "build/windows/x64/runner/Release/manga_viewer.exe").Path
+          $p = Start-Process $exe -PassThru
+          Start-Sleep -Seconds 12
+          if ($p.HasExited) { throw "manga_viewer.exe exited with code $($p.ExitCode)" }
+          Write-Output "running: $($p.MainWindowTitle)"
+          Stop-Process $p -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MangaViewer-windows
+          path: MangaViewer-windows.zip
+          compression-level: 0

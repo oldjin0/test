@@ -13,6 +13,8 @@ analyzer:
   exclude:
     - build/**
     - android/**
+    - lib/third_party/**  # vendored (MIT), kept as published
+    - windows/**
 
 linter:
   # The lint rules applied to this project can be customized in the

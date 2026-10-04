@@ -6,6 +6,9 @@ DirectML / CPU) and checks it against the PyTorch model.
   H and W are dynamic (multiples of 32); ONNX Runtime can pin them per session
   (free dimension overrides), which DirectML prefers.
 
+With --denoiser-weights also writes denoiser.onnx (FFDNet, sigma 25):
+  input : [1, 1, H, W] gray 0..1    output: [1, 1, H, W] denoised gray 0..1
+
 Writes colorizer_fp32.onnx and, when the half-precision conversion matches,
 colorizer_fp16.onnx (inputs/outputs stay float32).
 
@@ -46,6 +49,7 @@ def main():
     g.add_argument("--weights")
     g.add_argument("--random", action="store_true")
     ap.add_argument("--out-dir", default="out")
+    ap.add_argument("--denoiser-weights", help="FFDNet net_rgb.pth; with --random a random FFDNet is used")
     ap.add_argument("--fp16-tolerance", type=float, default=0.02, help="max mean abs diff to ship fp16")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -99,6 +103,29 @@ def main():
     except Exception as e:  # the fp32 model is the baseline
         print("fp16 conversion failed:", e)
         report["fp16"] = {"error": str(e), "shipped": False}
+
+    if args.denoiser_weights or args.random:
+        import convert_denoiser as cd  # tools/model
+
+        net = cd.load_ffdnet(args.denoiser_weights)
+        dn = cd.GrayDenoiser(net).eval()
+        path = os.path.join(args.out_dir, "denoiser.onnx")
+        dummy = torch.rand(1, 1, 640, 448)
+        torch.onnx.export(
+            dn, dummy, path, opset_version=17, input_names=["input"], output_names=["clean"],
+            dynamic_axes={"input": {2: "h", 3: "w"}, "clean": {2: "h", 3: "w"}}, dynamo=False)
+        sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+        res = {}
+        for h, w in ((640, 448), (832, 576)):
+            x = torch.from_numpy(cd.test_page(h, w))
+            with torch.no_grad():
+                ref = dn(x).numpy()
+            got = sess.run(None, {"input": x.numpy()})[0]
+            d = np.abs(got - ref)
+            res[f"{w}x{h}"] = {"mean": float(d.mean()), "max": float(d.max())}
+            print(f"denoiser onnx vs torch {w}x{h}: mean diff {d.mean():.7f} max {d.max():.6f}")
+            assert d.mean() < 1e-4, "denoiser ONNX does not match PyTorch"
+        report["denoiser"] = {"mb": round(os.path.getsize(path) / 1e6, 1), "parity": res}
 
     with open(os.path.join(args.out_dir, "export_report.json"), "w") as f:
         json.dump(report, f, indent=2)

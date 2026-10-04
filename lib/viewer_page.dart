@@ -417,7 +417,12 @@ class _ViewerPageState extends State<ViewerPage> {
                   onSelected: (v) => switch (v) {
                     'rtl' => _store.setRtl(!_store.rtl),
                     'dual' => _toggleDual(),
-                    'display' => showReaderSettings(context, _store, comic: true),
+                    'display' => showReaderSettings(
+                      context,
+                      _store,
+                      comic: true,
+                      engine: _service?.backend,
+                    ),
                     'vertical' => _store.setVertical(!_store.vertical),
                     'savePage' => _savePage(),
                     'hints' => _editHints(),

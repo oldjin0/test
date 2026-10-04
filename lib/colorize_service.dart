@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'colorizer.dart';
+import 'onnx_engine.dart';
 
 /// Identifies the bundled models. Bump it whenever assets/models/*.tflite or
 /// the post-processing changes: it names the extracted model files and keys
@@ -80,16 +81,27 @@ class ColorizeService {
   bool modelLoaded = false;
   String? modelError;
 
+  /// Names the model and its settings in the page cache keys; the PC version
+  /// sets it to include the input size, since that changes the colors.
+  static String cacheTag = modelVersion;
+
+  /// The engine the worker runs on ('xnnpack-fp16', 'directml', 'cpu', ...).
+  String backend = '';
+
+  /// [onnx] selects the PC engine (ONNX Runtime): `cpu` and optional `gpu`
+  /// model paths, the input `width`, and an optional `denoiser` path.
   static Future<ColorizeService> start({
     String? modelPath,
     String? denoiserPath,
     Directory? cacheDir,
+    Map<String, Object?>? onnx,
   }) async {
     final s = ColorizeService._(cacheDir);
     final port = ReceivePort();
     port.listen(s._onMessage);
-    final guard = modelPath == null ? null : '$modelPath.xnnpack-guard';
-    await Isolate.spawn(_workerMain, [port.sendPort, modelPath, guard, denoiserPath]);
+    final basis = onnx == null ? modelPath : onnx['cpu'] as String?;
+    final guard = basis == null ? null : '$basis.xnnpack-guard';
+    await Isolate.spawn(_workerMain, [port.sendPort, modelPath, guard, denoiserPath, onnx]);
     await s._ready.future;
     if (cacheDir != null) unawaited(_pruneCache(cacheDir));
     return s;
@@ -103,7 +115,7 @@ class ColorizeService {
     List<ColorHint> hints = const [],
     bool denoise = false,
   }) {
-    var key = '${md5.convert(comicId.codeUnits)}_${index}_$modelVersion';
+    var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag';
     if (denoise) key += '_dn';
     if (hints.isNotEmpty) {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
@@ -187,6 +199,7 @@ class ColorizeService {
     if (m[0] == 'ready') {
       modelLoaded = m[1] as bool;
       modelError = m[2] as String?;
+      backend = m[3] as String? ?? '';
       _ready.complete();
       return;
     }
@@ -256,56 +269,197 @@ class _Cancelled implements Exception {
 
 bool isCancelled(Object? error) => error is _Cancelled;
 
-void _workerMain(List args) {
-  final reply = args[0] as SendPort;
-  final modelPath = args[1] as String?;
-  // A native crash cannot be caught. The guard file exists only while XNNPACK
-  // is being set up and used for the first time; if it is still there on the
-  // next launch, that attempt crashed and the plain interpreter is used.
-  final guard = args[2] == null ? null : File(args[2] as String);
-  final denoiserPath = args[3] as String?;
-  // Remembers that half precision produced invalid output on this device.
-  final noFp16 = modelPath == null ? null : File('$modelPath.no-fp16');
-  var guarded = false;
-  ColorModel? model;
-  String? error;
-  var xnnpack = false;
-  if (modelPath != null) {
+/// What the worker computes with: owns the model and denoiser and how they
+/// recover from a bad device. One per platform.
+abstract class _Engine {
+  ColorModel? get model;
+  String? get error;
+  String get backend;
+
+  PageDenoiser? denoiserFor(bool wanted);
+
+  /// Whether the model or denoiser produced NaN/infinity.
+  bool get sawInvalid;
+
+  /// Switches to a safer setup after [sawInvalid] (full precision / CPU).
+  /// Returns false when there is nothing safer.
+  bool recover();
+}
+
+class _TfliteEngine implements _Engine {
+  _TfliteEngine(this.modelPath, this.denoiserPath, this.xnnpack) {
     try {
-      xnnpack = guard == null || !guard.existsSync();
-      if (xnnpack && guard != null) {
-        guard.writeAsStringSync('1', flush: true);
-        guarded = true;
-      }
-      model = TfliteColorModel.fromFile(
-        modelPath,
-        xnnpack: xnnpack,
-        fp16: !(noFp16?.existsSync() ?? false),
-      );
+      model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack, fp16: !_noFp16.existsSync());
     } catch (e) {
       error = '$e';
     }
   }
-  // Loaded on first use: only readers who turn denoising on pay for it.
-  TfliteDenoiser? denoiser;
-  var denoiserFailed = false;
+
+  final String modelPath;
+  final String? denoiserPath;
+  final bool xnnpack;
+
+  /// Remembers that half precision produced invalid output on this device.
+  late final _noFp16 = File('$modelPath.no-fp16');
+
+  @override
+  ColorModel? model;
+  @override
+  String? error;
+  TfliteDenoiser? _denoiser;
+  var _denoiserFailed = false;
+
+  @override
+  String get backend => (model is TfliteColorModel) ? (model as TfliteColorModel).backend : '';
+
+  @override
   PageDenoiser? denoiserFor(bool wanted) {
-    if (!wanted || model == null || denoiserPath == null || denoiserFailed) return null;
+    if (!wanted || model == null || denoiserPath == null || _denoiserFailed) return null;
     try {
-      return denoiser ??= TfliteDenoiser.fromFile(
-        denoiserPath,
+      return _denoiser ??= TfliteDenoiser.fromFile(
+        denoiserPath!,
         xnnpack: xnnpack,
-        fp16: !(noFp16?.existsSync() ?? false),
+        fp16: !_noFp16.existsSync(),
       );
     } catch (_) {
-      denoiserFailed = true;
+      _denoiserFailed = true;
       return null;
     }
   }
 
+  @override
+  bool get sawInvalid {
+    final m = model, d = _denoiser;
+    return (m is TfliteColorModel && m.fp16 && m.sawInvalidOutput) ||
+        (d != null && d.fp16 && d.sawInvalidOutput);
+  }
+
+  @override
+  bool recover() {
+    // FP16 gave NaN/infinity here: reload in full precision for good.
+    _noFp16.writeAsStringSync('1');
+    (model as TfliteColorModel).close();
+    model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack, fp16: false);
+    _denoiser?.close();
+    _denoiser = null;
+    return true;
+  }
+}
+
+/// The PC engine: ONNX Runtime on DirectML (any DirectX 12 graphics, integrated
+/// included) with a processor fallback.
+class _OnnxEngine implements _Engine {
+  _OnnxEngine(Map onnx, bool gpuAllowed)
+    : _cpu = onnx['cpu'] as String,
+      _gpu = onnx['gpu'] as String?,
+      _denoiserPath = onnx['denoiser'] as String?,
+      _width = onnx['width'] as int,
+      _noGpu = File('${onnx['cpu']}.no-gpu') {
+    try {
+      final r = openPcModel(
+        gpuModel: _gpu,
+        cpuModel: _cpu,
+        width: _width,
+        gpu: gpuAllowed && !_noGpu.existsSync(),
+        gpuId: (onnx['gpuId'] as int?) ?? 0,
+      );
+      model = r.model;
+      gpuProblem = r.gpuProblem;
+    } catch (e) {
+      error = '$e';
+    }
+  }
+
+  final String _cpu;
+  final String? _gpu, _denoiserPath;
+  final int _width;
+  final File _noGpu;
+
+  @override
+  ColorModel? model;
+  @override
+  String? error;
+
+  /// Why the graphics card was not used, if it was not.
+  String? gpuProblem;
+  OnnxDenoiser? _denoiser;
+  var _denoiserFailed = false;
+
+  @override
+  String get backend {
+    final m = model;
+    if (m is! OnnxColorModel) return '';
+    return m.backend + (gpuProblem == null ? '' : ' (GPU: $gpuProblem)');
+  }
+
+  @override
+  PageDenoiser? denoiserFor(bool wanted) {
+    final m = model;
+    if (!wanted || m is! OnnxColorModel || _denoiserPath == null || _denoiserFailed) return null;
+    try {
+      return _denoiser ??= OnnxDenoiser.open(
+        _denoiserPath,
+        width: m.inWidth,
+        height: m.inHeight,
+        device: m.device,
+      );
+    } catch (_) {
+      _denoiserFailed = true;
+      return null;
+    }
+  }
+
+  @override
+  bool get sawInvalid {
+    final m = model;
+    return (m is OnnxColorModel && m.sawInvalidOutput) || (_denoiser?.sawInvalidOutput ?? false);
+  }
+
+  @override
+  bool recover() {
+    final m = model;
+    if (m is! OnnxColorModel || m.device == OnnxDevice.cpu) return false;
+    // The graphics path produced garbage: processor only from now on.
+    _noGpu.writeAsStringSync('1');
+    m.close();
+    _denoiser?.close();
+    _denoiser = null;
+    model = OnnxColorModel.open(_cpu, width: m.inWidth, height: m.inHeight, device: OnnxDevice.cpu);
+    gpuProblem = 'invalid output';
+    return true;
+  }
+}
+
+void _workerMain(List args) {
+  final reply = args[0] as SendPort;
+  final modelPath = args[1] as String?;
+  // A native crash cannot be caught. The guard file exists only while the
+  // accelerated path (XNNPACK, DirectML) is being set up and used for the
+  // first time; if it is still there on the next launch, that attempt crashed
+  // and the plain engine is used.
+  final guard = args[2] == null ? null : File(args[2] as String);
+  final denoiserPath = args[3] as String?;
+  final onnx = args[4] as Map?;
+  var guarded = false;
+  _Engine? engine;
+  String? setupError;
+  if (modelPath != null || onnx != null) {
+    try {
+      final accelerated = guard == null || !guard.existsSync();
+      if (accelerated && guard != null) {
+        guard.writeAsStringSync('1', flush: true);
+        guarded = true;
+      }
+      engine = onnx != null
+          ? _OnnxEngine(onnx, accelerated)
+          : _TfliteEngine(modelPath!, denoiserPath, accelerated);
+    } catch (e) {
+      setupError = '$e';
+    }
+  }
   final port = ReceivePort();
   reply.send(port.sendPort);
-  reply.send(['ready', model != null, error]);
+  reply.send(['ready', engine?.model != null, engine?.error ?? setupError, engine?.backend]);
   port.listen((msg) {
     final m = msg as List;
     final id = m[0] as int;
@@ -317,23 +471,14 @@ void _workerMain(List args) {
     ];
     final wantDenoise = m[3] as bool;
     try {
-      var r = colorizePage(bytes, model, hints: hints, denoiser: denoiserFor(wantDenoise));
-      final cm = model, dn = denoiser;
-      final badModel = cm is TfliteColorModel && cm.fp16 && cm.sawInvalidOutput;
-      final badDenoiser = dn != null && dn.fp16 && dn.sawInvalidOutput;
-      if (badModel || badDenoiser) {
-        // FP16 gave NaN/infinity here: reload in full precision for good.
-        noFp16?.writeAsStringSync('1');
-        if (badModel) {
-          cm.close();
-          model = TfliteColorModel.fromFile(modelPath!, xnnpack: xnnpack, fp16: false);
-        }
-        if (badDenoiser) {
-          dn.close();
-          denoiser = null;
-        }
-        r = colorizePage(bytes, model, hints: hints, denoiser: denoiserFor(wantDenoise));
-      }
+      ColorizeResult run() => colorizePage(
+        bytes,
+        engine?.model,
+        hints: hints,
+        denoiser: engine?.denoiserFor(wantDenoise),
+      );
+      var r = run();
+      if (engine != null && engine.sawInvalid && engine.recover()) r = run();
       if (guarded && r.mode == ColorizeMode.ai) {
         guarded = false;
         guard?.deleteSync();

@@ -1,24 +1,50 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'archive_tar.dart';
 import 'colorize_service.dart';
 import 'colorizer.dart' show denoiserAsset;
+import 'onnx_engine.dart';
+import 'pc_platform.dart';
 import 'home_page.dart';
 import 'library_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await LibraryStore.load();
-  runApp(MangaViewerApp(store: store, colorizer: startColorizer()));
+  if (isPc) unawaited(pruneExtractedArchives());
+  runApp(MangaViewerApp(store: store, colorizer: startColorizer(store)));
 }
 
 /// Starts the background colorizer with the bundled model and a disk cache.
-Future<ColorizeService> startColorizer() async {
+Future<ColorizeService> startColorizer([LibraryStore? store]) async {
   final cache = Directory(p.join((await getApplicationCacheDirectory()).path, 'colorized'));
   await cache.create(recursive: true);
+  if (isPc) {
+    // The PC version: ONNX Runtime (DirectML graphics, or the processor).
+    final models = Platform.environment['MANGA_MODEL_DIR'] ?? pcModelDir();
+    final cpu = File(p.join(models, 'colorizer_fp32.onnx'));
+    final gpu = File(p.join(models, 'colorizer_fp16.onnx'));
+    final denoiser = File(p.join(models, 'denoiser.onnx'));
+    final width = store?.pcWidth ?? 576;
+    ColorizeService.cacheTag = 'mcv2-onnx-$width-v1';
+    if (!cpu.existsSync()) {
+      return ColorizeService.start(cacheDir: cache); // no model: tone filter
+    }
+    return ColorizeService.start(
+      cacheDir: cache,
+      onnx: {
+        'cpu': cpu.path,
+        'gpu': (store?.pcGpu ?? true) && gpu.existsSync() ? gpu.path : null,
+        'denoiser': denoiser.existsSync() ? denoiser.path : null,
+        'width': width,
+      },
+    );
+  }
   return ColorizeService.start(
     modelPath: await ensureModelFile(),
     denoiserPath: await ensureModelFile(asset: denoiserAsset),

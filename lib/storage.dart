@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'comic_loader.dart';
+import 'pc_platform.dart';
 import 'text_book.dart';
 
 /// Asks for access to shared storage so folders can be listed and comics
@@ -29,9 +30,20 @@ Future<bool> hasStorageAccess() async {
 Future<String?> importComicFile() async {
   final file = await FilePicker.pickFile(
     type: FileType.custom,
-    allowedExtensions: ['zip', 'cbz', 'cbr', 'rar', 'pdf', 'txt'],
+    allowedExtensions: [
+      'zip',
+      'cbz',
+      'cbr',
+      'rar',
+      'pdf',
+      'txt',
+      if (isPc) ...['7z', 'cb7'],
+    ],
   );
   if (file == null) return null;
+  // On the PC a file is read where it is: no copy, and the reading position
+  // stays with the file's own path.
+  if (isPc && file.path != null) return file.path;
   final docs = await getApplicationDocumentsDirectory();
   final dir = Directory(p.join(docs.path, 'imported'));
   await dir.create(recursive: true);

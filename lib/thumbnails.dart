@@ -121,11 +121,7 @@ class ComicCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (isTextFile(path)) {
-      return const SizedBox(
-        width: 40,
-        height: 56,
-        child: Icon(Icons.article_outlined),
-      );
+      return const SizedBox(width: 40, height: 56, child: Icon(Icons.article_outlined));
     }
     return SizedBox(
       width: 40,

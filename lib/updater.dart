@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
+import 'pc_platform.dart';
+
 /// GitHub repository whose releases carry the app's update APKs. CI publishes
 /// a release `build-<N>` after the build and the emulator test both pass.
 const updateRepo = 'oldjin0/test';
@@ -25,6 +27,10 @@ class AppPlatform {
   static const _channel = MethodChannel('manga_viewer/app');
 
   static Future<AppVersion> version() async {
+    if (isPc) {
+      final (code, name) = pcVersion();
+      return AppVersion(code, name, const ['windows-x64']);
+    }
     try {
       final m = await _channel.invokeMapMethod<String, Object?>('versionInfo');
       return AppVersion(
@@ -39,12 +45,15 @@ class AppPlatform {
 
   /// Whether this app may start the package installer (Android 8+ asks once).
   static Future<bool> canInstall() async =>
-      await _channel.invokeMethod<bool>('canInstall') ?? false;
+      isPc || (await _channel.invokeMethod<bool>('canInstall') ?? false);
 
-  static Future<void> openInstallSettings() => _channel.invokeMethod('openInstallSettings');
+  static Future<void> openInstallSettings() async {
+    if (!isPc) await _channel.invokeMethod('openInstallSettings');
+  }
 
   /// Keeps the display on (reading) or lets it time out again.
   static Future<void> keepScreenOn(bool on) async {
+    if (isPc) return pcKeepScreenOn(on);
     try {
       await _channel.invokeMethod('keepScreenOn', {'on': on});
     } on MissingPluginException {
@@ -59,14 +68,15 @@ class AppPlatform {
     required String name,
     required String mime,
     required bool pictures,
-  }) async =>
-      await _channel.invokeMethod<String>('publish', {
-        'path': path,
-        'name': name,
-        'mime': mime,
-        'collection': pictures ? 'pictures' : 'downloads',
-      }) ??
-      '';
+  }) async => isPc
+      ? pcPublish(path, name: name, pictures: pictures)
+      : await _channel.invokeMethod<String>('publish', {
+              'path': path,
+              'name': name,
+              'mime': mime,
+              'collection': pictures ? 'pictures' : 'downloads',
+            }) ??
+            '';
 
   /// Opens the system installer for the APK at [path] (in the cache's updates/ dir).
   static Future<void> install(String path) => _channel.invokeMethod('install', {'path': path});

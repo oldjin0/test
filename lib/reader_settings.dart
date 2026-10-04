@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'library_store.dart';
+import 'onnx_engine.dart';
+import 'pc_platform.dart';
 import 'reader_controls.dart';
 
 /// All reading settings in one scrollable sheet. [comic]: colorizing and
@@ -10,6 +12,7 @@ Future<void> showReaderSettings(
   LibraryStore store, {
   bool comic = false,
   bool text = false,
+  String? engine,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -27,6 +30,7 @@ Future<void> showReaderSettings(
           children: [
             if (text) ..._textSection(store),
             if (comic) ..._colorSection(store),
+            if (comic && isPc) ..._pcSection(store, engine),
             ..._screenSection(store, comic: comic),
             ..._turnSection(store, comic: comic),
             ..._einkSection(store),
@@ -162,6 +166,26 @@ List<Widget> _colorSection(LibraryStore s) => [
     (v) => s.update((s) => s.prefetchPages = v),
   ),
   _switch('스크린톤 정리 후 채색', s.denoise, s.setDenoise, subtitle: '인쇄 만화의 망점을 정리해 색이 선명해집니다'),
+];
+
+List<Widget> _pcSection(LibraryStore s, String? engine) => [
+  _header('PC 채색 엔진'),
+  Text(
+    engine == null || engine.isEmpty ? '엔진 준비 중…' : '지금 사용 중: $engine',
+    style: const TextStyle(fontSize: 12),
+  ),
+  _choices(
+    '입력 크기 (클수록 정밀하고 느림)',
+    {for (final w in pcWidths) w: '$w×${pcModelHeight(w)}'},
+    s.pcWidth,
+    (v) => s.update((s) => s.pcWidth = v),
+  ),
+  _switch(
+    '그래픽카드(DirectML) 사용',
+    s.pcGpu,
+    (v) => s.update((s) => s.pcGpu = v),
+    subtitle: '안 되면 자동으로 CPU를 씁니다. 바꾼 설정은 앱을 다시 시작하면 적용됩니다',
+  ),
 ];
 
 List<Widget> _screenSection(LibraryStore s, {required bool comic}) => [

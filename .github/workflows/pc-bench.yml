@@ -7,47 +7,14 @@ on:
   workflow_dispatch:
   push:
     branches: [ccr-4d8e098a-xfwocj]
-    paths: [tools/pc/**, .github/workflows/pc-bench.yml]
+    paths: [tools/pc/bench.py, .github/workflows/pc-bench.yml]
 
 permissions:
   contents: write
 
 jobs:
   export:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install
-        run: |
-          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
-          pip install onnx onnxruntime onnxconverter-common numpy pillow gdown
-      - name: Fetch manga-colorization-v2 code and generator weights
-        run: |
-          git clone --depth 1 https://github.com/qweasdd/manga-colorization-v2 /tmp/mcv2
-          gdown 1qmxUEKADkEM4iYLp1fpPLLKnfZ6tcF-t -O /tmp/mcv2/networks/generator.zip
-          test $(stat -c %s /tmp/mcv2/networks/generator.zip) -gt 50000000
-      - name: Export to ONNX and check against PyTorch
-        working-directory: tools/pc
-        env:
-          PYTHONPATH: /tmp/mcv2
-        run: python export_onnx.py --weights /tmp/mcv2/networks/generator.zip --out-dir "$GITHUB_WORKSPACE/onnx"
-      - name: Report
-        run: |
-          ls -la onnx
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          r = json.load(open("onnx/export_report.json"))
-          print("### ONNX export")
-          for k, v in r.items():
-              print(f"- **{k}**: {v}")
-          PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: onnx
-          path: onnx/
+    uses: ./.github/workflows/pc-export.yml
 
   bench:
     needs: export
