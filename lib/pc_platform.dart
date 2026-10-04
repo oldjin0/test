@@ -67,13 +67,15 @@ Future<void> pcRevealInFolder(String path) async {
 const _updateScript = r'''
 $ErrorActionPreference = 'Stop'
 $log = @LOG@
+'started' | Set-Content $log
 try {
   try { Wait-Process -Id @PID@ -Timeout 90 } catch {}
+  'waited' | Add-Content $log
   Start-Sleep -Milliseconds 400
   Copy-Item -Path (Join-Path @STAGE@ '*') -Destination @INSTALL@ -Recurse -Force
-  'copied' | Set-Content $log
+  'copied' | Add-Content $log
 } catch {
-  ('failed: ' + $_) | Set-Content $log
+  ('failed: ' + $_) | Add-Content $log
 }
 if ('@RESTART@' -eq '1') { Start-Process -FilePath (Join-Path @INSTALL@ 'manga_viewer.exe') }
 Remove-Item -Recurse -Force @STAGE@ -ErrorAction SilentlyContinue

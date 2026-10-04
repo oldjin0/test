@@ -2,6 +2,7 @@
 // -d windows) with the real native pieces: onnxruntime.dll, pdfium.dll and the
 // system tar. Environment: MANGA_MODEL_DIR (colorizer_fp32/fp16.onnx,
 // denoiser.onnx), ORT_LIBRARY, PDFIUM_LIBRARY, MANGA_CACHE_DIR.
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -149,34 +150,40 @@ void main() {
       );
       if (log.existsSync()) log.deleteSync();
 
-      // The "old program": a process that exits after ~3 s; the helper must wait for it.
+      // The "old program": a process that exits after ~3 s; the helper must
+      // wait for it. Detached, as the real program is no child of the test.
       final old = await Process.start('powershell.exe', [
         '-NoProfile',
         '-Command',
         'Start-Sleep -Seconds 3',
-      ]);
+      ], mode: ProcessStartMode.detached);
       final t = Stopwatch()..start();
       await pcInstallUpdate(
         zipFile.path,
         installDir: install.path,
         waitForPid: old.pid,
       );
-      for (var i = 0; i < 360 && !log.existsSync(); i++) {
+      String logText() => log.existsSync() ? log.readAsStringSync() : '';
+      for (var i = 0; i < 480; i++) {
+        final l = logText();
+        if (l.contains('copied') || l.contains('failed')) break;
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
-      if (!log.existsSync()) {
-        // Diagnostics for CI: is the helper script itself fine when run in the open?
-        final script = p.join(Directory.systemTemp.path, 'manga_viewer_update.ps1');
-        final r = await Process.run('powershell.exe', [
-          '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, //
+      if (!logText().contains('copied')) {
+        // Diagnostics: how far the helper got, and whether it is still alive.
+        final ps = await Process.run('powershell.exe', [
+          '-NoProfile',
+          '-Command',
+          r'''Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }''',
         ]);
         // ignore: avoid_print
-        print('helper never finished; direct run: exit ${r.exitCode}\n${r.stdout}\n${r.stderr}');
-        // ignore: avoid_print
-        print('log now: ${log.existsSync() ? log.readAsStringSync() : "none"}');
+        print('helper log after ${t.elapsed.inSeconds} s: "${logText()}"\n${ps.stdout}');
       }
-      expect(log.existsSync(), isTrue, reason: 'the helper never finished');
-      expect(log.readAsStringSync().trim(), 'copied');
+      expect(
+        const LineSplitter().convert(logText()),
+        ['started', 'waited', 'copied'],
+        reason: 'the helper ran to the end',
+      );
       expect(
         t.elapsed,
         greaterThan(const Duration(seconds: 2)),
