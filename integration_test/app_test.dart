@@ -15,6 +15,7 @@ import 'package:manga_viewer/thumbnails.dart';
 import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
+import 'package:manga_viewer/text_reader_page.dart';
 import 'package:manga_viewer/updater.dart';
 import 'package:manga_viewer/viewer_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -362,10 +363,22 @@ void main() {
     );
     expect(find.textContaining('AI 모델 없음'), findsNothing);
     final first = await service.colorize(
-      ColorizeService.keyFor(path, 0),
+      ColorizeService.keyFor(path, 0, denoise: true),
       () async => samplePage(0),
+      denoise: true,
     );
     expect(first.mode, ColorizeMode.ai);
+
+    // The following pages are colorized ahead: the status line (shown while
+    // the menu is hidden) counts them.
+    await tester.tapAt(tester.getCenter(find.byType(CurlPageView)));
+    await tester.pump(const Duration(milliseconds: 400));
+    await waitFor(
+      () => find.textContaining('채색 +2').evaluate().isNotEmpty,
+      'colorizing ahead',
+    );
+    await tester.tapAt(tester.getCenter(find.byType(CurlPageView)));
+    await tester.pump(const Duration(milliseconds: 400));
 
     // Defaults: right-to-left with the page-curl effect. Dragging right turns forward.
     expect(store.curl, isTrue);
@@ -387,5 +400,129 @@ void main() {
     final reopened = await LibraryStore.load();
     expect(reopened.progressOf(path)!.page, 2);
     expect(reopened.bookmarksOf(path).single.page, 1);
+  });
+
+  testWidgets('volume and e-reader page buttons turn pages on the device', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await LibraryStore.load();
+    store.setColorize(false);
+    store.setRtl(false);
+    store.setTurnStyle('none');
+    final dir = await Directory.systemTemp.createTemp('keys');
+    final archive = Archive();
+    for (var i = 0; i < 4; i++) {
+      final b = samplePage(i);
+      archive.addFile(ArchiveFile('p${i + 1}.jpg', b.length, b));
+    }
+    final path = '${dir.path}/keys.cbz';
+    await File(path).writeAsBytes(ZipEncoder().encode(archive));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ViewerPage(path: path, store: store, colorizer: startColorizer()),
+      ),
+    );
+    for (var i = 0; i < 100 && find.byType(Image).evaluate().isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    Future<void> press(int code) async {
+      await AppPlatform.pressKey(code);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    const volumeDown = 25, volumeUp = 24, pageDown = 93, pageUp = 92;
+    await press(volumeDown);
+    expect(store.progressOf(path)!.page, 1, reason: 'volume down: next page');
+    await press(volumeUp);
+    expect(store.progressOf(path)!.page, 0, reason: 'volume up: previous page');
+    await press(pageDown);
+    await press(pageDown);
+    expect(store.progressOf(path)!.page, 2, reason: 'page-down button');
+    await press(pageUp);
+    expect(store.progressOf(path)!.page, 1, reason: 'page-up button');
+    store.update((s) => s.volumeKeys = false);
+    await tester.pump();
+    await press(volumeDown);
+    expect(
+      store.progressOf(path)!.page,
+      1,
+      reason: 'option off: volume is volume again',
+    );
+  });
+
+  testWidgets('text books: CP949 file opens, pages turn, position is kept', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await LibraryStore.load();
+    final dir = await Directory.systemTemp.createTemp('txt');
+    final path = '${dir.path}/소설.txt';
+    // '가나다 똠방각하 쀍 abc' + CRLF + '제1장 시작' in CP949, then many lines.
+    final head = [
+      176,
+      161,
+      179,
+      170,
+      180,
+      217,
+      32,
+      140,
+      99,
+      185,
+      230,
+      176,
+      162,
+      199,
+      207,
+      32,
+      151,
+      205,
+      32,
+      97,
+      98,
+      99,
+      13,
+      10,
+      193,
+      166,
+      49,
+      192,
+      229,
+      32,
+      189,
+      195,
+      192,
+      219,
+      13,
+      10,
+    ];
+    final body = [
+      for (var i = 0; i < 400; i++) ...'line $i of the book\r\n'.codeUnits,
+    ];
+    await File(path).writeAsBytes([...head, ...body]);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TextReaderPage(path: path, store: store),
+      ),
+    );
+    final page = find.byKey(const ValueKey('text-page'));
+    for (var i = 0; i < 100 && page.evaluate().isEmpty; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    String text() => tester.widget<Text>(page).data!;
+    expect(text(), startsWith('가나다 똠방각하 쀍 abc\n제1장 시작\nline 0'));
+    final first = text();
+    await AppPlatform.pressKey(93); // e-reader page button
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump();
+    expect(text(), isNot(first));
+    expect(store.progressOf(path)!.page, greaterThan(0));
+    // ignore: avoid_print
+    print(
+      'TEXT page 2 starts at ${store.progressOf(path)!.page} of ${store.progressOf(path)!.total}',
+    );
   });
 }

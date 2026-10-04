@@ -34,10 +34,47 @@ class MangaViewerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Manga Viewer',
-      theme: ThemeData.dark(useMaterial3: true),
-      home: HomePage(store: store, colorizer: colorizer),
+    return ListenableBuilder(
+      listenable: store,
+      builder: (context, _) => MaterialApp(
+        title: 'Manga Viewer',
+        theme: store.eink ? einkTheme : ThemeData.dark(useMaterial3: true),
+        home: HomePage(store: store, colorizer: colorizer),
+      ),
     );
   }
+}
+
+/// E-ink screens: black on white, no grays to ghost, screens switch at once.
+final einkTheme = ThemeData(
+  useMaterial3: true,
+  colorScheme: const ColorScheme.light(
+    primary: Colors.black,
+    onPrimary: Colors.white,
+    secondary: Colors.black,
+    surface: Colors.white,
+    onSurface: Colors.black,
+  ),
+  scaffoldBackgroundColor: Colors.white,
+  splashFactory: NoSplash.splashFactory,
+  pageTransitionsTheme: const PageTransitionsTheme(
+    builders: {
+      TargetPlatform.android: _NoTransition(),
+      TargetPlatform.iOS: _NoTransition(),
+      TargetPlatform.linux: _NoTransition(),
+    },
+  ),
+);
+
+class _NoTransition extends PageTransitionsBuilder {
+  const _NoTransition();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) => child;
 }

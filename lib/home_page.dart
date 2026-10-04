@@ -9,7 +9,10 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'colorize_service.dart';
 import 'library_store.dart';
+import 'reader_settings.dart';
 import 'storage.dart';
+import 'text_book.dart';
+import 'text_reader_page.dart';
 import 'thumbnails.dart';
 import 'update_ui.dart';
 import 'updater.dart';
@@ -37,7 +40,9 @@ Future<void> openComic(
   if (!context.mounted) return;
   await Navigator.of(context).push(
     MaterialPageRoute<void>(
-      builder: (_) => ViewerPage(path: path, store: store, colorizer: colorizer, initialPage: page),
+      builder: (_) => isTextFile(path)
+          ? TextReaderPage(path: path, store: store, initialOffset: page)
+          : ViewerPage(path: path, store: store, colorizer: colorizer, initialPage: page),
     ),
   );
 }
@@ -60,9 +65,14 @@ String _ago(DateTime t) {
   return '${t.year}.${t.month}.${t.day}';
 }
 
-/// "12 / 180" style progress text and a 0..1 fraction.
+/// "12 / 180" style progress text (a percentage for text books) and a 0..1
+/// fraction.
 (String, double) progressLabel(ReadProgress r) {
   if (r.total <= 0) return ('', 0);
+  if (isTextFile(r.path)) {
+    final frac = (r.page / r.total).clamp(0.0, 1.0);
+    return (frac > 0.995 ? '다 읽음' : '${(frac * 1000).floor() / 10}%', frac);
+  }
   final done = r.page >= r.total - 2;
   return (done ? '다 읽음' : '${r.page + 1} / ${r.total}', (r.page + 1) / r.total);
 }
@@ -160,9 +170,19 @@ class _HomePageState extends State<HomePage> {
               onSelected: (v) => switch (v) {
                 'backup' => _exportBackup(),
                 'restore' => _importBackup(),
+                'settings' => showReaderSettings(context, _store, comic: true, text: true),
                 _ => checkForUpdate(context),
               },
               itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'settings',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.tune),
+                    title: Text('읽기 설정'),
+                    subtitle: Text('E-ink · 버튼 · 글자 · 채색'),
+                  ),
+                ),
                 const PopupMenuItem(
                   value: 'backup',
                   child: ListTile(
@@ -306,6 +326,13 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// "12페이지", or for text books where in the book the mark is.
+  String _markLabel(Bookmark b) {
+    if (!isTextFile(b.path)) return '${b.page + 1}페이지';
+    final total = _store.progressOf(b.path)?.total ?? 0;
+    return total > 0 ? '책갈피 ${(b.page * 1000 ~/ total) / 10}%' : '책갈피';
+  }
+
   Widget _bookmarks() {
     final marks = _store.bookmarks;
     if (marks.isEmpty) {
@@ -317,7 +344,7 @@ class _HomePageState extends State<HomePage> {
           ListTile(
             leading: const Icon(Icons.bookmark),
             title: Text(b.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text('${b.page + 1}페이지 · ${_ago(b.createdAt)}'),
+            subtitle: Text('${_markLabel(b)} · ${_ago(b.createdAt)}'),
             onTap: () => _open(b.path, page: b.page),
             trailing: IconButton(
               tooltip: '북마크 삭제',
@@ -343,20 +370,65 @@ class FolderPage extends StatefulWidget {
 }
 
 class _FolderPageState extends State<FolderPage> {
-  late Future<FolderListing> _listing = listFolder(widget.path);
+  late Future<FolderListing> _listing = listFolder(widget.path, sortBy: widget.store.sortBy);
+  String _query = '';
+  bool _searching = false;
+
+  bool _matches(String path) =>
+      _query.isEmpty || p.basename(path).toLowerCase().contains(_query.toLowerCase());
+
+  void _sort(String by) {
+    widget.store.update((s) => s.sortBy = by);
+    setState(() => _listing = listFolder(widget.path, sortBy: by));
+  }
 
   Future<void> _retry() async {
     if (!await ensureStorageAccess()) {
       if (mounted) showPermissionHint(context);
       return;
     }
-    setState(() => _listing = listFolder(widget.path));
+    setState(() => _listing = listFolder(widget.path, sortBy: widget.store.sortBy));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(p.basename(widget.path))),
+      appBar: AppBar(
+        title: _searching
+            ? TextField(
+                autofocus: true,
+                decoration: const InputDecoration(hintText: '이름으로 찾기', border: InputBorder.none),
+                onChanged: (v) => setState(() => _query = v),
+              )
+            : Text(p.basename(widget.path)),
+        actions: [
+          IconButton(
+            tooltip: _searching ? '검색 닫기' : '검색',
+            icon: Icon(_searching ? Icons.close : Icons.search),
+            onPressed: () => setState(() {
+              _searching = !_searching;
+              _query = '';
+            }),
+          ),
+          PopupMenuButton<String>(
+            tooltip: '정렬',
+            icon: const Icon(Icons.sort),
+            onSelected: _sort,
+            itemBuilder: (context) => [
+              CheckedPopupMenuItem(
+                value: 'name',
+                checked: widget.store.sortBy == 'name',
+                child: const Text('이름순'),
+              ),
+              CheckedPopupMenuItem(
+                value: 'date',
+                checked: widget.store.sortBy == 'date',
+                child: const Text('최근 수정순'),
+              ),
+            ],
+          ),
+        ],
+      ),
       body: FutureBuilder<FolderListing>(
         future: _listing,
         builder: (context, snap) {
@@ -378,21 +450,21 @@ class _FolderPageState extends State<FolderPage> {
           final l = snap.data;
           if (l == null) return const Center(child: CircularProgressIndicator());
           if (l.dirs.isEmpty && l.comics.isEmpty && l.images == 0) {
-            return const Center(child: Text('이 폴더에 만화 파일이나 이미지가 없습니다.'));
+            return const Center(child: Text('이 폴더에 만화 · 텍스트 파일이나 이미지가 없습니다.'));
           }
           return ListenableBuilder(
             listenable: widget.store,
             builder: (context, _) => ListView(
               children: [
                 // A folder of page images reads as one comic.
-                if (l.images > 0)
+                if (l.images > 0 && _query.isEmpty)
                   ListTile(
                     leading: ComicCover(widget.path),
                     title: Text('이 폴더의 이미지 ${l.images}장 보기'),
                     subtitle: _progressText(widget.path),
                     onTap: () => openComic(context, widget.store, widget.colorizer, widget.path),
                   ),
-                for (final d in l.dirs)
+                for (final d in l.dirs.where((d) => _matches(d.path)))
                   ListTile(
                     leading: const Icon(Icons.folder),
                     title: Text(p.basename(d.path)),
@@ -406,7 +478,7 @@ class _FolderPageState extends State<FolderPage> {
                       ),
                     ),
                   ),
-                for (final f in l.comics) _comicTile(f.path),
+                for (final f in l.comics.where((f) => _matches(f.path))) _comicTile(f.path),
               ],
             ),
           );

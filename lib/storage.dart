@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'comic_loader.dart';
+import 'text_book.dart';
 
 /// Asks for access to shared storage so folders can be listed and comics
 /// read by path. Android 11+ needs "All files access" for non-media files
@@ -28,7 +29,7 @@ Future<bool> hasStorageAccess() async {
 Future<String?> importComicFile() async {
   final file = await FilePicker.pickFile(
     type: FileType.custom,
-    allowedExtensions: ['zip', 'cbz', 'cbr', 'rar', 'pdf'],
+    allowedExtensions: ['zip', 'cbz', 'cbr', 'rar', 'pdf', 'txt'],
   );
   if (file == null) return null;
   final docs = await getApplicationDocumentsDirectory();
@@ -55,8 +56,9 @@ class FolderListing {
   final int images;
 }
 
-/// Subfolders and .zip/.cbz files in [path], sorted by natural name order.
-Future<FolderListing> listFolder(String path) async {
+/// Subfolders and books (comics, .txt) in [path], by natural name order or,
+/// with [sortBy] 'date', newest first.
+Future<FolderListing> listFolder(String path, {String sortBy = 'name'}) async {
   final dirs = <Directory>[];
   final comics = <File>[];
   var images = 0;
@@ -65,7 +67,7 @@ Future<FolderListing> listFolder(String path) async {
     if (name.startsWith('.')) continue;
     if (e is Directory) {
       dirs.add(e);
-    } else if (e is File && isComicFile(e.path)) {
+    } else if (e is File && (isComicFile(e.path) || isTextFile(e.path))) {
       comics.add(e);
     } else if (e is File && isImageFile(e.path)) {
       images++;
@@ -73,6 +75,17 @@ Future<FolderListing> listFolder(String path) async {
   }
   int byName(FileSystemEntity a, FileSystemEntity b) =>
       naturalCompare(p.basename(a.path).toLowerCase(), p.basename(b.path).toLowerCase());
+  if (sortBy == 'date') {
+    final modified = <String, DateTime>{
+      for (final e in [...dirs, ...comics]) e.path: (await e.stat()).modified,
+    };
+    int newest(FileSystemEntity a, FileSystemEntity b) {
+      final c = modified[b.path]!.compareTo(modified[a.path]!);
+      return c != 0 ? c : byName(a, b);
+    }
+
+    return FolderListing(dirs..sort(newest), comics..sort(newest), images);
+  }
   return FolderListing(dirs..sort(byName), comics..sort(byName), images);
 }
 

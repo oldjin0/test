@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
 import 'comic_loader.dart';
+import 'text_book.dart';
 
 const _thumbWidth = 160;
 
@@ -119,6 +120,13 @@ class ComicCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (isTextFile(path)) {
+      return const SizedBox(
+        width: 40,
+        height: 56,
+        child: Icon(Icons.article_outlined),
+      );
+    }
     return SizedBox(
       width: 40,
       height: 56,
@@ -127,7 +135,7 @@ class ComicCover extends StatelessWidget {
         builder: (context, snap) {
           final bytes = snap.data;
           if (bytes == null) {
-            return const Icon(Icons.menu_book_outlined, color: Colors.white54);
+            return const Icon(Icons.menu_book_outlined);
           }
           return ClipRRect(
             borderRadius: BorderRadius.circular(3),
