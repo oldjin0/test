@@ -21,6 +21,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           name: onnx
@@ -62,10 +64,26 @@ jobs:
         run: |
           ./python.exe bench.py --model colorizer_fp32.onnx colorizer_fp16.onnx --samples samples --out result --runs 2 --sizes 448,576
           Get-Content result/bench_result.txt | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Quality by input size (with the real weights)
+        shell: pwsh
+        working-directory: MangaBench
+        run: ./python.exe bench.py --model colorizer_fp32.onnx --samples samples --out quality --runs 1 --sizes 448,576,704,768
+      - name: Commit the preview for review
+        shell: bash
+        run: |
+          mkdir -p docs
+          cp MangaBench/quality/quality_by_size.png docs/pc_quality_by_size.png
+          cp MangaBench/quality/bench_result.txt docs/pc_bench_ci.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/pc_quality_by_size.png docs/pc_bench_ci.txt
+          git diff --cached --quiet || git commit -m "PC benchmark: quality by input size and CI timings [skip ci]"
+          git pull --rebase origin "${{ github.ref_name }}"
+          git push origin "HEAD:${{ github.ref_name }}"
       - name: Zip
         shell: pwsh
         run: |
-          Remove-Item -Recurse -Force MangaBench/result
+          Remove-Item -Recurse -Force MangaBench/result, MangaBench/quality
           Compress-Archive -Path MangaBench -DestinationPath MangaBench.zip -CompressionLevel Fastest
           (Get-Item MangaBench.zip).Length / 1MB
       - uses: actions/upload-artifact@v4
