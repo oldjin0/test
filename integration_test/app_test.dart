@@ -12,6 +12,7 @@ import 'package:manga_viewer/colorizer.dart';
 import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
+import 'package:manga_viewer/updater.dart';
 import 'package:manga_viewer/viewer_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -45,6 +46,15 @@ double meanChroma(Uint8List jpg) {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('native app channel answers (version, ABIs, install permission)', (tester) async {
+    final v = await AppPlatform.version();
+    // ignore: avoid_print
+    print('APP version ${v.name} (${v.code}) abis ${v.abis}');
+    expect(v.code, greaterThan(0));
+    expect(v.abis, isNotEmpty);
+    expect(await AppPlatform.canInstall(), isA<bool>());
+  });
 
   testWidgets('bundled AI model loads and colorizes on device', (tester) async {
     final path = await ensureModelFile();

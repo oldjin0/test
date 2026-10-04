@@ -7,6 +7,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'colorize_service.dart';
 import 'library_store.dart';
 import 'storage.dart';
+import 'update_ui.dart';
+import 'updater.dart';
 import 'viewer_page.dart';
 
 /// Opens [path] in the viewer, or reports that the file is gone.
@@ -72,6 +74,15 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _tab = 0;
+  final _version = AppPlatform.version();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) checkForUpdateQuietly(context);
+    });
+  }
 
   LibraryStore get _store => widget.store;
 
@@ -107,6 +118,26 @@ class _HomePageState extends State<HomePage> {
           title: const Text('Manga Viewer'),
           actions: [
             IconButton(tooltip: '파일 열기', icon: const Icon(Icons.file_open), onPressed: _import),
+            PopupMenuButton<String>(
+              tooltip: '메뉴',
+              onSelected: (v) => switch (v) {
+                _ => checkForUpdate(context),
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'update',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.system_update),
+                    title: const Text('업데이트 확인'),
+                    subtitle: FutureBuilder<AppVersion>(
+                      future: _version,
+                      builder: (context, v) => Text('현재 버전 ${v.data?.name ?? ''}'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
         body: switch (_tab) {

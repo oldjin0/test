@@ -61,28 +61,77 @@ jobs:
           tar xzf /tmp/signing.tgz -C android/app upload-keystore.jks
           tar xzf /tmp/signing.tgz -C android key.properties
           test -s android/app/upload-keystore.jks && test -s android/key.properties
-      - run: flutter build apk --release
-      - name: Verify the APK is signed with the persistent key
+      - name: Build release APKs (arm64 for phones, universal as fallback)
+        run: |
+          set -euo pipefail
+          # The run number is the app's version code, so every release installs over the last.
+          VER="--build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}"
+          mkdir -p dist
+          flutter build apk --release $VER
+          cp build/app/outputs/flutter-apk/app-release.apk dist/manga-viewer-universal.apk
+          flutter build apk --release $VER --target-platform android-arm64
+          cp build/app/outputs/flutter-apk/app-release.apk dist/manga-viewer-arm64.apk
+          ls -l dist
+      - name: Verify the APKs (persistent signing key, version code)
         run: |
           set -uo pipefail
-          APK=build/app/outputs/flutter-apk/app-release.apk
           APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
-          OUT=$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1) || { echo "$OUT"; exit 1; }
-          echo "$OUT" | grep -iE "verifies|certificate (DN|SHA-256)" || echo "$OUT"
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
           # The 64 hex digits of a SHA-256 digest, whatever text or colons surround them.
           hex64() { tr -d ':' | grep -oiE '[0-9a-f]{64}' | head -1 | tr 'A-F' 'a-f'; }
-          APK_FP=$(echo "$OUT" | grep -m1 -i "SHA-256 digest" | hex64)
           KEY_FP=$(keytool -list -keystore android/app/upload-keystore.jks \
             -storepass "$(grep '^storePassword=' android/key.properties | cut -d= -f2-)" \
             | grep -m1 "SHA-256" | hex64)
-          echo "APK signer SHA-256: $APK_FP"
           echo "Stored key SHA-256: $KEY_FP"
-          test -n "$APK_FP" && test "$APK_FP" = "$KEY_FP"
-      - run: ls -l build/app/outputs/flutter-apk/ && sha256sum build/app/outputs/flutter-apk/app-release.apk
+          test -n "$KEY_FP"
+          for APK in dist/*.apk; do
+            OUT=$("$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1) || { echo "$OUT"; exit 1; }
+            APK_FP=$(echo "$OUT" | grep -m1 -i "SHA-256 digest" | hex64)
+            echo "$APK signer SHA-256: $APK_FP"
+            test "$APK_FP" = "$KEY_FP"
+            "$AAPT2" dump badging "$APK" | grep -m1 -o "versionCode='[0-9]*' versionName='[^']*'"
+            "$AAPT2" dump badging "$APK" | grep -q "versionCode='${{ github.run_number }}'"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: manga-viewer-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: dist/*.apk
+
+  # Publishes the APKs the app's updater downloads, only when the build and
+  # the emulator test both passed.
+  release:
+    needs: [build, device-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: manga-viewer-release-apk
+          path: dist
+      - name: Publish release build-${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum manga-viewer-*.apk > SHA256SUMS && cat SHA256SUMS)
+          git log -1 --format='%s%n%n%b' | grep -vE '^(Co-Authored-By|Claude-Session):' > notes.md || true
+          gh release create "build-${{ github.run_number }}" \
+            dist/manga-viewer-arm64.apk dist/manga-viewer-universal.apk dist/SHA256SUMS \
+            --repo "$REPO" --target "${{ github.sha }}" --latest \
+            --title "Manga Viewer 1.0.${{ github.run_number }}" --notes-file notes.md
+      - name: Keep only the 3 newest builds
+        run: |
+          set -euo pipefail
+          gh release list --repo "$REPO" --limit 100 --json tagName,isDraft,createdAt \
+            -q '[.[] | select(.isDraft | not) | select(.tagName | startswith("build-"))]
+                | sort_by(.createdAt) | reverse | .[3:] | .[].tagName' |
+          while read -r TAG; do
+            echo "Deleting old release $TAG"
+            gh release delete "$TAG" --repo "$REPO" --yes --cleanup-tag
+          done
 
   device-test:
     runs-on: ubuntu-latest

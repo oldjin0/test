@@ -12,6 +12,7 @@ import 'package:manga_viewer/comic_loader.dart';
 import 'package:manga_viewer/curl_page_view.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/main.dart';
+import 'package:manga_viewer/updater.dart';
 import 'package:manga_viewer/viewer_page.dart';
 import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -582,6 +583,12 @@ void main() {
     await tester.fling(find.byType(PageView), const Offset(300, 0), 2000);
     await tester.pumpAndSettle();
     expect(store.progressOf(path)!.page, 2);
+  });
+
+  testWidgets('AppPlatform falls back when the native side is missing', (tester) async {
+    final v = (await tester.runAsync(AppPlatform.version))!;
+    expect(v.code, 0);
+    expect(v.abis, isEmpty);
   });
 
   testWidgets('home shows library tabs', (tester) async {

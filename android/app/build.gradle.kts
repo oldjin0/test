@@ -74,3 +74,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // FileProvider / PackageInfoCompat for in-app updates (MainActivity.kt).
+    implementation("androidx.core:core-ktx:1.13.1")
+}
