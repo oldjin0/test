@@ -83,12 +83,14 @@ void main() {
     final secondMs = sw.elapsedMilliseconds;
     final secondNative = model.lastInferenceMs;
     final xnn = model.usesXnnpack;
+    final backend = model.backend;
+    expect(model.sawInvalidOutput, isFalse);
     model.close();
 
     final chroma = meanChroma(r.bytes);
     // ignore: avoid_print
     print(
-      'MODEL xnnpack=$xnn load=${loadMs}ms '
+      'MODEL backend=$backend xnnpack=$xnn load=${loadMs}ms '
       'page1=${firstMs}ms (inference ${firstNative}ms) '
       'page2=${secondMs}ms (inference ${secondNative}ms) '
       'chroma gray=${gray.toStringAsFixed(2)} colorized=${chroma.toStringAsFixed(2)}',

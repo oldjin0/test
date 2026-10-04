@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'colorize_service.dart';
 import 'colorizer.dart';
@@ -10,6 +10,7 @@ import 'comic_loader.dart';
 import 'curl_page_view.dart';
 import 'library_store.dart';
 import 'storage.dart';
+import 'updater.dart';
 
 class ViewerPage extends StatefulWidget {
   const ViewerPage({
@@ -38,6 +39,7 @@ class _ViewerPageState extends State<ViewerPage> {
   PageController? _controller;
   ColorizeService? _service;
   bool _showUi = true;
+  bool _showOriginal = false; // while the page is long-pressed
   final _colored = <int, Future<ColorizeResult>>{};
 
   LibraryStore get _store => widget.store;
@@ -55,6 +57,7 @@ class _ViewerPageState extends State<ViewerPage> {
   void initState() {
     super.initState();
     _store.addListener(_onStore);
+    AppPlatform.keepScreenOn(_store.keepScreenOn);
     _load();
     widget.colorizer.then((s) {
       if (!mounted) return;
@@ -95,6 +98,7 @@ class _ViewerPageState extends State<ViewerPage> {
         _resetController();
       }
     });
+    AppPlatform.keepScreenOn(_store.keepScreenOn);
   }
 
   void _saveProgress() => _store.saveProgress(widget.path, _title, _page, _book?.length ?? 0);
@@ -213,6 +217,8 @@ class _ViewerPageState extends State<ViewerPage> {
 
   @override
   void dispose() {
+    AppPlatform.keepScreenOn(false);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _service?.focus(const []);
     _store.removeListener(_onStore);
     _controller?.dispose();
@@ -260,6 +266,7 @@ class _ViewerPageState extends State<ViewerPage> {
                   onSelected: (v) => switch (v) {
                     'rtl' => _store.setRtl(!_store.rtl),
                     'dual' => _toggleDual(),
+                    'display' => _showDisplaySettings(),
                     _ => _toggleCurl(),
                   },
                   itemBuilder: (context) => [
@@ -278,6 +285,7 @@ class _ViewerPageState extends State<ViewerPage> {
                       checked: _store.curl,
                       child: const Text('책 넘김 효과'),
                     ),
+                    const PopupMenuItem(value: 'display', child: Text('채색 강도 · 화면 설정')),
                   ],
                 ),
               ],
@@ -313,7 +321,14 @@ class _ViewerPageState extends State<ViewerPage> {
       );
     }
 
-    void toggleUi() => setState(() => _showUi = !_showUi);
+    void toggleUi() {
+      setState(() => _showUi = !_showUi);
+      // Hidden UI: hide the status and navigation bars too.
+      SystemChrome.setEnabledSystemUIMode(
+        _showUi ? SystemUiMode.edgeToEdge : SystemUiMode.immersiveSticky,
+      );
+    }
+
     final pager = _store.curl
         ? CurlPageView(
             index: _page ~/ _step,
@@ -335,8 +350,26 @@ class _ViewerPageState extends State<ViewerPage> {
           );
     return Stack(
       children: [
-        Positioned.fill(child: pager),
-        Positioned(right: 12, bottom: 12, child: _status()),
+        Positioned.fill(
+          child: GestureDetector(
+            // Hold to compare with the black-and-white original.
+            onLongPressStart: (_) => setState(() => _showOriginal = true),
+            onLongPressEnd: (_) => setState(() => _showOriginal = false),
+            onLongPressCancel: () => setState(() => _showOriginal = false),
+            child: pager,
+          ),
+        ),
+        if (_store.brightness < 1)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ColoredBox(color: Colors.black.withValues(alpha: 1 - _store.brightness)),
+            ),
+          ),
+        Positioned(
+          right: 12,
+          bottom: 12,
+          child: _showOriginal ? const _Chip(text: '원본') : _status(),
+        ),
       ],
     );
   }
@@ -357,9 +390,66 @@ class _ViewerPageState extends State<ViewerPage> {
         // The original stays on screen until the colorized page is ready.
         return FutureBuilder<ColorizeResult>(
           future: _colorFor(p),
-          builder: (context, snap) => image(snap.data?.bytes ?? original),
+          builder: (context, snap) {
+            final colored = snap.data;
+            if (colored == null || colored.mode == ColorizeMode.alreadyColor) {
+              return image(original);
+            }
+            final strength = _showOriginal ? 0.0 : _store.colorStrength;
+            if (strength >= 0.999) return image(colored.bytes);
+            // Colorized page faded over the original by the chosen strength.
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                image(original),
+                if (strength > 0.001) Opacity(opacity: strength, child: image(colored.bytes)),
+              ],
+            );
+          },
         );
       },
+    );
+  }
+
+  void _showDisplaySettings() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => ListenableBuilder(
+        listenable: _store,
+        builder: (context, _) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('채색 강도 ${(_store.colorStrength * 100).round()}%'),
+                Slider(
+                  key: const ValueKey('strength'),
+                  value: _store.colorStrength,
+                  divisions: 20,
+                  onChanged: _store.setColorStrength,
+                ),
+                Text('화면 밝기 ${(_store.brightness * 100).round()}%'),
+                Slider(
+                  key: const ValueKey('brightness'),
+                  value: _store.brightness,
+                  min: 0.2,
+                  divisions: 16,
+                  onChanged: _store.setBrightness,
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('읽는 동안 화면 켜짐 유지'),
+                  value: _store.keepScreenOn,
+                  onChanged: _store.setKeepScreenOn,
+                ),
+                const Text('페이지를 길게 누르고 있으면 원본(흑백)을 볼 수 있습니다.'),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 

@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -56,6 +57,14 @@ class MainActivity : FlutterActivity() {
                                 )
                             startActivity(intent)
                             result.success(true)
+                        }
+                        "keepScreenOn" -> {
+                            if (call.argument<Boolean>("on") == true) {
+                                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            } else {
+                                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                            }
+                            result.success(null)
                         }
                         else -> result.notImplemented()
                     }

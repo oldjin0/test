@@ -43,6 +43,15 @@ class AppPlatform {
 
   static Future<void> openInstallSettings() => _channel.invokeMethod('openInstallSettings');
 
+  /// Keeps the display on (reading) or lets it time out again.
+  static Future<void> keepScreenOn(bool on) async {
+    try {
+      await _channel.invokeMethod('keepScreenOn', {'on': on});
+    } on MissingPluginException {
+      // tests / non-Android
+    }
+  }
+
   /// Opens the system installer for the APK at [path] (in the cache's updates/ dir).
   static Future<void> install(String path) => _channel.invokeMethod('install', {'path': path});
 }

@@ -58,39 +58,49 @@ abstract class ColorModel {
 /// [ColorModel] backed by a TFLite file (see tools/model/convert_manga.py).
 class TfliteColorModel implements ColorModel {
   /// Memory-maps [path]; the model weights are not copied into the Dart heap.
-  factory TfliteColorModel.fromFile(String path, {int threads = 4, bool xnnpack = true}) =>
-      _create((o) => Interpreter.fromFile(File(path), options: o), threads, xnnpack);
+  factory TfliteColorModel.fromFile(
+    String path, {
+    int threads = 4,
+    bool xnnpack = true,
+    bool fp16 = true,
+  }) => _create((o) => Interpreter.fromFile(File(path), options: o), threads, xnnpack, fp16);
 
-  factory TfliteColorModel.fromBuffer(Uint8List bytes, {int threads = 4, bool xnnpack = true}) =>
-      _create((o) => Interpreter.fromBuffer(bytes, options: o), threads, xnnpack);
+  factory TfliteColorModel.fromBuffer(
+    Uint8List bytes, {
+    int threads = 4,
+    bool xnnpack = true,
+    bool fp16 = true,
+  }) => _create((o) => Interpreter.fromBuffer(bytes, options: o), threads, xnnpack, fp16);
 
   static TfliteColorModel _create(
     Interpreter Function(InterpreterOptions) open,
     int threads,
     bool xnnpack,
+    bool fp16,
   ) {
     // The prebuilt LiteRT does not apply XNNPACK on its own through this API;
-    // without it the manga model runs several times slower.
-    XnnpackDelegate? xnn;
+    // without it the manga model runs several times slower. Half precision is
+    // tried first and silently dropped where the CPU lacks it.
     if (xnnpack) {
-      try {
-        xnn = XnnpackDelegate(threads: threads);
-        return TfliteColorModel._(
-          open(
+      for (final half in fp16 ? const [true, false] : const [false]) {
+        XnnpackDelegate? xnn;
+        try {
+          xnn = XnnpackDelegate(threads: threads, fp16: half);
+          final it = open(
             InterpreterOptions()
               ..threads = threads
               ..addDelegate(xnn),
-          ),
-          xnn,
-        );
-      } catch (_) {
-        xnn?.delete();
+          );
+          return TfliteColorModel._(it, xnn, fp16: half);
+        } catch (_) {
+          xnn?.delete();
+        }
       }
     }
     return TfliteColorModel._(open(InterpreterOptions()..threads = threads), null);
   }
 
-  TfliteColorModel._(this._it, this._xnn) {
+  TfliteColorModel._(this._it, this._xnn, {this.fp16 = false}) {
     final i = _it.getInputTensor(0).shape;
     final o = _it.getOutputTensor(0).shape;
     if (i.length != 4 || i[3] != 1 || o.length != 4 || (o[3] != 2 && o[3] != 3)) {
@@ -108,6 +118,15 @@ class TfliteColorModel implements ColorModel {
   final XnnpackDelegate? _xnn;
 
   bool get usesXnnpack => _xnn != null;
+
+  /// Running in half precision (XNNPACK FP16).
+  final bool fp16;
+
+  /// Set when a prediction contained NaN/infinity; FP16 on some CPUs can
+  /// misbehave, and the caller should then reload without it.
+  bool sawInvalidOutput = false;
+
+  String get backend => _xnn == null ? 'cpu' : (fp16 ? 'xnnpack-fp16' : 'xnnpack');
   @override
   late final int inWidth, inHeight, outWidth, outHeight;
   @override
@@ -121,6 +140,12 @@ class TfliteColorModel implements ColorModel {
     final out = Float32List(outHeight * outWidth * (output == ModelOutput.rgb ? 3 : 2));
     // Raw byte buffers avoid building nested Dart lists for large tensors.
     _it.run(input.buffer.asUint8List(), out.buffer.asUint8List());
+    for (final v in out) {
+      if (!v.isFinite) {
+        sawInvalidOutput = true;
+        break;
+      }
+    }
     return out;
   }
 

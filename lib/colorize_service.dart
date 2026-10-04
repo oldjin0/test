@@ -232,17 +232,24 @@ void _workerMain(List args) {
   // is being set up and used for the first time; if it is still there on the
   // next launch, that attempt crashed and the plain interpreter is used.
   final guard = args[2] == null ? null : File(args[2] as String);
+  // Remembers that half precision produced invalid output on this device.
+  final noFp16 = modelPath == null ? null : File('$modelPath.no-fp16');
   var guarded = false;
   ColorModel? model;
   String? error;
+  var xnnpack = false;
   if (modelPath != null) {
     try {
-      final xnnpack = guard == null || !guard.existsSync();
+      xnnpack = guard == null || !guard.existsSync();
       if (xnnpack && guard != null) {
         guard.writeAsStringSync('1', flush: true);
         guarded = true;
       }
-      model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack);
+      model = TfliteColorModel.fromFile(
+        modelPath,
+        xnnpack: xnnpack,
+        fp16: !(noFp16?.existsSync() ?? false),
+      );
     } catch (e) {
       error = '$e';
     }
@@ -255,7 +262,15 @@ void _workerMain(List args) {
     final id = m[0] as int;
     final bytes = (m[1] as TransferableTypedData).materialize().asUint8List();
     try {
-      final r = colorizePage(bytes, model);
+      var r = colorizePage(bytes, model);
+      final m = model;
+      if (m is TfliteColorModel && m.fp16 && m.sawInvalidOutput) {
+        // FP16 gave NaN/infinity here: reload in full precision for good.
+        noFp16?.writeAsStringSync('1');
+        m.close();
+        model = TfliteColorModel.fromFile(modelPath!, xnnpack: xnnpack, fp16: false);
+        r = colorizePage(bytes, model);
+      }
       if (guarded && r.mode == ColorizeMode.ai) {
         guarded = false;
         guard?.deleteSync();

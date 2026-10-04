@@ -13,10 +13,14 @@ import 'package:tflite_flutter/tflite_flutter.dart' show Delegate;
 /// in the bundled LiteRT, so XNNPackDelegate(options: ...) makes the native
 /// side read past the allocation (SIGSEGV on device). Here the library fills
 /// the struct with its own defaults, into a buffer larger than any version of
-/// it, and only the first field (int32 num_threads) is changed.
+/// it, and only the first two fields (int32 num_threads, uint32 flags; their
+/// layout has not changed across versions) are touched.
 final class _XnnOptions extends Struct {
   @Int32()
   external int numThreads;
+
+  @Uint32()
+  external int flags;
 
   @Array(63)
   // ignore: unused_field
@@ -31,9 +35,15 @@ typedef _DeleteDart = void Function(Pointer<TfLiteDelegate>);
 DynamicLibrary _lib() =>
     Platform.isAndroid ? DynamicLibrary.open('libtensorflowlite_jni.so') : DynamicLibrary.process();
 
-/// XNNPACK CPU delegate with a thread pool of [threads].
+/// TFLITE_XNNPACK_DELEGATE_FLAG_FORCE_FP16: run float operators in half
+/// precision on CPUs with native FP16 arithmetic (most recent ARM phones).
+const _forceFp16 = 0x4;
+
+/// XNNPACK CPU delegate with a thread pool of [threads]. With [fp16] float
+/// models run in half precision, roughly twice as fast where the CPU supports
+/// it; creation fails (and callers fall back) where it does not.
 class XnnpackDelegate implements Delegate {
-  factory XnnpackDelegate({int threads = 4}) {
+  factory XnnpackDelegate({int threads = 4, bool fp16 = false}) {
     final lib = _lib();
     final defaults = lib.lookupFunction<_DefaultsC, _DefaultsC>(
       'TfLiteXNNPackDelegateOptionsDefault',
@@ -44,6 +54,7 @@ class XnnpackDelegate implements Delegate {
     final options = calloc<_XnnOptions>();
     options.ref = defaults();
     options.ref.numThreads = threads;
+    if (fp16) options.ref.flags |= _forceFp16;
     final d = create(options);
     if (d == nullptr) {
       calloc.free(options);

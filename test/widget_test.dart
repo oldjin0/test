@@ -283,6 +283,9 @@ void main() {
       expect(s.toggleBookmark('/c/a.cbz', 'a', 5), isFalse);
       s.addFolder('/c');
       s.setRtl(false);
+      s.setColorStrength(0.4);
+      s.setBrightness(0.1); // clamped to 0.2
+      s.setKeepScreenOn(false);
 
       final again = await LibraryStore.load();
       expect(again.progressOf('/c/a.cbz')!.page, 3);
@@ -290,6 +293,9 @@ void main() {
       expect(again.bookmarksOf('/c/a.cbz').map((b) => b.page), [9]);
       expect(again.folders, ['/c']);
       expect(again.rtl, isFalse);
+      expect(again.colorStrength, 0.4);
+      expect(again.brightness, 0.2);
+      expect(again.keepScreenOn, isFalse);
     });
   });
 
@@ -583,6 +589,84 @@ void main() {
     await tester.fling(find.byType(PageView), const Offset(300, 0), 2000);
     await tester.pumpAndSettle();
     expect(store.progressOf(path)!.page, 2);
+  });
+
+  testWidgets('viewer: colorize strength, hold for original, dimming, settings sheet', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await LibraryStore.load();
+    late final ColorizeService service;
+    late final String path;
+    await tester.runAsync(() async {
+      final dir = await Directory.systemTemp.createTemp('viewer2');
+      final archive = Archive();
+      for (var i = 0; i < 2; i++) {
+        final b = grayPage();
+        archive.addFile(ArchiveFile('p$i.png', b.length, b));
+      }
+      path = '${dir.path}/b.cbz';
+      await File(path).writeAsBytes(ZipEncoder().encode(archive));
+      final cache = await Directory('${dir.path}/cache').create();
+      service = await ColorizeService.start(cacheDir: cache); // no model: tone filter
+    });
+    store.setCurl(false); // plain pages: easy to find
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ViewerPage(path: path, store: store, colorizer: Future.value(service)),
+      ),
+    );
+
+    Finder opacity() => find.byType(Opacity);
+    Future<void> settle(bool Function() done) async {
+      for (var i = 0; i < 100 && !done(); i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+        await tester.pump();
+      }
+    }
+
+    // Wait until page 0 shows its colorized version (no chip spinner).
+    await settle(
+      () => find.text('AI 채색 중…').evaluate().isEmpty && find.byType(PageView).evaluate().isNotEmpty,
+    );
+    await settle(() => false); // let the result arrive and render
+    expect(find.text('AI 모델 없음 · 색조 필터'), findsOneWidget);
+    expect(opacity(), findsNothing, reason: 'full strength shows only the colored page');
+
+    store.setColorStrength(0.5);
+    await tester.pump();
+    expect(tester.widget<Opacity>(opacity().first).opacity, 0.5);
+
+    // Hold: original only, with a chip.
+    final g = await tester.startGesture(tester.getCenter(find.byType(PageView)));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('원본'), findsOneWidget);
+    expect(opacity(), findsNothing);
+    await g.up();
+    await tester.pump();
+    expect(find.text('원본'), findsNothing);
+    expect(opacity(), findsWidgets);
+
+    // Dimming overlay.
+    store.setBrightness(0.6);
+    await tester.pump();
+    final dim = tester
+        .widgetList<ColoredBox>(find.byType(ColoredBox))
+        .where((b) => b.color.a > 0.39 && b.color.a < 0.41);
+    expect(dim, isNotEmpty);
+
+    // Settings sheet from the menu.
+    await tester.tap(find.byTooltip('보기 설정'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('채색 강도 · 화면 설정'));
+    await tester.pumpAndSettle();
+    expect(find.text('채색 강도 50%'), findsOneWidget);
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+    expect(store.keepScreenOn, isFalse);
+    await tester.drag(find.byKey(const ValueKey('strength')), const Offset(500, 0));
+    await tester.pumpAndSettle();
+    expect(store.colorStrength, 1.0);
   });
 
   testWidgets('AppPlatform falls back when the native side is missing', (tester) async {

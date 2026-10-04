@@ -68,6 +68,15 @@ class LibraryStore extends ChangeNotifier {
   /// Page-curl ("book") turning instead of sliding.
   bool curl = true;
 
+  /// How strongly colorized pages are shown over the original (0..1).
+  double colorStrength = 1.0;
+
+  /// Keep the screen on while reading.
+  bool keepScreenOn = true;
+
+  /// In-app dimming of the page (0.2..1.0); 1.0 is no dimming.
+  double brightness = 1.0;
+
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());
     s._read();
@@ -86,6 +95,9 @@ class LibraryStore extends ChangeNotifier {
     dual = p.getBool('dual') ?? dual;
     colorize = p.getBool('colorize') ?? colorize;
     curl = p.getBool('curl') ?? curl;
+    colorStrength = p.getDouble('colorStrength') ?? colorStrength;
+    keepScreenOn = p.getBool('keepScreenOn') ?? keepScreenOn;
+    brightness = p.getDouble('brightness') ?? brightness;
   }
 
   static List<Map<String, dynamic>> _decodeList(String? raw) {
@@ -106,6 +118,9 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('dual', dual);
     _prefs.setBool('colorize', colorize);
     _prefs.setBool('curl', curl);
+    _prefs.setDouble('colorStrength', colorStrength);
+    _prefs.setBool('keepScreenOn', keepScreenOn);
+    _prefs.setDouble('brightness', brightness);
   }
 
   // Settings
@@ -122,6 +137,21 @@ class LibraryStore extends ChangeNotifier {
 
   void setColorize(bool v) {
     colorize = v;
+    _changed();
+  }
+
+  void setColorStrength(double v) {
+    colorStrength = v.clamp(0.0, 1.0);
+    _changed();
+  }
+
+  void setKeepScreenOn(bool v) {
+    keepScreenOn = v;
+    _changed();
+  }
+
+  void setBrightness(double v) {
+    brightness = v.clamp(0.2, 1.0);
     _changed();
   }
 
