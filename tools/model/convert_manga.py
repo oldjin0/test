@@ -1,13 +1,15 @@
 """Builds assets/models/colorizer.tflite from manga-colorization-v2.
 
 Model: https://github.com/qweasdd/manga-colorization-v2 (generator weights
-from the project's README). Automatic mode: the color-hint channels are zero.
+from the project's README). The four color-hint channels are model inputs:
+all zero colorizes automatically; a hint paints a color under a mask.
 
 Pipeline: PyTorch -> ONNX -> onnx2tf (NHWC, float16 weights) -> TFLite,
 then the TFLite output is checked against PyTorch on the same input.
 
 TFLite contract used by the app (lib/colorizer.dart):
-  input : [1, H, W, 1] float32, gray 0..1 (page letterboxed, padded white)
+  input : [1, H, W, 5] float32: gray 0..1 (page letterboxed, padded white),
+          then hint r*m, g*m, b*m (color in -1..1) and the hint mask m (0/1)
   output: [1, H, W, 3] float32, RGB 0..1
 
 Usage:
@@ -33,18 +35,21 @@ from torch import nn
 H, W = 832, 576
 
 
+IN_CH = 5
+
+
 class AutoColorizer(nn.Module):
-    """Generator forward without the training-only decoder branch, with the
-    four hint channels fixed to zero (fully automatic colorization)."""
+    """Generator forward without the training-only decoder branch. Input is
+    gray + hint channels, as MangaColorizator.colorize() concatenates them."""
 
     def __init__(self, generator):
         super().__init__()
         self.g = generator
 
-    def forward(self, gray):  # [1, 1, H, W] in 0..1
+    def forward(self, x):  # [1, 5, H, W]
         g = self.g
-        hint = torch.zeros_like(gray).repeat(1, 4, 1, 1)
-        x0 = g.to0(torch.cat([gray, hint], 1))
+        gray = x[:, 0:1]
+        x0 = g.to0(x)
         aux = g.to3(g.to2(g.to1(x0)))
         x1, x2, x3, x4 = g.encoder(gray)
         out = g.tunnel4(torch.cat([x4, aux], 1))
@@ -73,8 +78,8 @@ def load_generator(weights):
 def to_tflite(model, out_path):
     work = tempfile.mkdtemp()
     onnx_path = os.path.join(work, "colorizer.onnx")
-    torch.onnx.export(model, torch.rand(1, 1, H, W), onnx_path, opset_version=17,
-                      input_names=["gray"], output_names=["rgb"], dynamo=False)
+    torch.onnx.export(model, torch.rand(1, IN_CH, H, W), onnx_path, opset_version=17,
+                      input_names=["gray_hint"], output_names=["rgb"], dynamo=False)
     subprocess.run(["onnx2tf", "-i", onnx_path, "-o", os.path.join(work, "tf"), "-b", "1"],
                    check=True)
     fp16 = glob.glob(os.path.join(work, "tf", "*_float16.tflite"))[0]
@@ -88,7 +93,7 @@ def run_tflite(path, x_nhwc, threads=4):
     it = tf.lite.Interpreter(model_path=path, num_threads=threads)
     it.allocate_tensors()
     inp, out = it.get_input_details()[0], it.get_output_details()[0]
-    assert list(inp["shape"]) == [1, H, W, 1], inp["shape"]
+    assert list(inp["shape"]) == [1, H, W, IN_CH], inp["shape"]
     assert list(out["shape"]) == [1, H, W, 3], out["shape"]
     it.set_tensor(inp["index"], x_nhwc)
     t = time.perf_counter()
@@ -113,9 +118,10 @@ def main():
 
     # A page-like input: white paper with dark strokes and gray areas.
     rng = np.random.default_rng(0)
-    x = np.ones((1, 1, H, W), np.float32)
-    x[:, :, 100:700, 80:500] = 0.6
-    x[:, :, rng.integers(0, H, 4000), rng.integers(0, W, 4000)] = 0.0
+    x = np.zeros((1, IN_CH, H, W), np.float32)
+    x[:, 0] = 1.0
+    x[:, 0, 100:700, 80:500] = 0.6
+    x[:, 0, rng.integers(0, H, 4000), rng.integers(0, W, 4000)] = 0.0
     with torch.no_grad():
         ref = model(torch.from_numpy(x)).numpy().transpose(0, 2, 3, 1)
     lite, ms = run_tflite(args.out, x.transpose(0, 2, 3, 1))
@@ -124,6 +130,23 @@ def main():
           f"(output range {ref.min():.3f}..{ref.max():.3f}), {ms:.0f} ms, "
           f"{os.path.getsize(args.out) / 1e6:.1f} MB")
     assert err.mean() < 0.01, "converted model does not match PyTorch"
+
+    # A red hint (as lib/colorizer.dart paints it: discs of color under a
+    # mask) has to make that region redder in the converted model too.
+    hinted = x.copy()
+    yy, xx = np.mgrid[:H, :W]
+    disc = ((yy - 300) ** 2 + (xx - 220) ** 2) < 12 ** 2
+    hinted[0, 1][disc], hinted[0, 2][disc], hinted[0, 3][disc] = 1.0, -1.0, -1.0
+    hinted[0, 4][disc] = 1.0
+    red, _ = run_tflite(args.out, hinted.transpose(0, 2, 3, 1))
+    region = (slice(250, 350), slice(170, 270))
+
+    def redness(img):
+        r = img[0][region]
+        return float((r[..., 0] - (r[..., 1] + r[..., 2]) / 2).mean())
+
+    print(f"redness around a red hint: {redness(lite):.3f} -> {redness(red):.3f}")
+    assert redness(red) > redness(lite) + 0.05, "hint has no effect"
     print("wrote", args.out)
 
 

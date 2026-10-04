@@ -1,10 +1,14 @@
 """Runs colorizer.tflite on sample images with the same pre/post-processing as
 lib/colorizer.dart and writes a side-by-side preview (gray | colorized | original).
 
-Usage: python preview.py MODEL OUT_PNG IMAGE [IMAGE ...]
+With --denoiser, each sample is also screentoned (printed-manga halftone
+dots) and colorized with and without the denoiser first:
+  screentoned | colorized | denoised + colorized | original
+
+Usage: python preview.py MODEL OUT_PNG IMAGE [IMAGE ...] [--denoiser DENOISER]
 """
 
-import sys
+import argparse
 import time
 
 import numpy as np
@@ -38,12 +42,29 @@ def lab_to_rgb(L, a, b):
     return (rgb * 255).clip(0, 255)
 
 
-def colorize(it, gray_img):
+def run(it, x):
+    it.set_tensor(it.get_input_details()[0]["index"], x)
+    t = time.perf_counter()
+    it.invoke()
+    return it.get_tensor(it.get_output_details()[0]["index"]), (time.perf_counter() - t) * 1000
+
+
+def screentone(gray_img, period=4.0):
+    """Halftone dots at 45 degrees, like printed manga: each gray becomes
+    black dots on white whose size follows the darkness."""
+    g = np.asarray(gray_img, np.float32) / 255
+    yy, xx = np.mgrid[: g.shape[0], : g.shape[1]].astype(np.float32)
+    u, v = (xx + yy) / np.sqrt(2), (xx - yy) / np.sqrt(2)
+    cell = (np.cos(2 * np.pi * u / period) + np.cos(2 * np.pi * v / period) + 2) / 4  # 0..1
+    return Image.fromarray(np.where(cell < g, 255, 0).astype(np.uint8))
+
+
+def colorize(it, gray_img, denoiser=None):
     """gray_img: PIL 'L' image. Returns colorized PIL RGB at the same size.
 
     The page is letterboxed into the model input (padded white at the
     right/bottom), as lib/colorizer.dart does."""
-    _, h, w, _ = it.get_input_details()[0]["shape"]
+    _, h, w, in_c = it.get_input_details()[0]["shape"]
     out_c = it.get_output_details()[0]["shape"][3]
     s = min(w / gray_img.width, h / gray_img.height)
     pw, ph = max(1, round(gray_img.width * s)), max(1, round(gray_img.height * s))
@@ -51,11 +72,15 @@ def colorize(it, gray_img):
     canvas.paste(gray_img.resize((pw, ph), Image.BILINEAR), (0, 0))
     small = np.asarray(canvas, np.float32)
     x = (small / 255.0 if out_c == 3 else srgb_to_l(small) / 100.0).astype(np.float32)
-    it.set_tensor(it.get_input_details()[0]["index"], x[None, :, :, None])
-    t = time.perf_counter()
-    it.invoke()
-    ms = (time.perf_counter() - t) * 1000
-    y = it.get_tensor(it.get_output_details()[0]["index"])[0]
+    x = x[None, :, :, None]
+    ms = 0.0
+    if denoiser is not None:
+        x, ms = run(denoiser, x)
+    if in_c > 1:  # gray + empty hint channels
+        x = np.concatenate([x, np.zeros(x.shape[:3] + (in_c - 1,), np.float32)], -1)
+    y, ms2 = run(it, x)
+    ms += ms2
+    y = y[0]
     k = y.shape[1] / w  # output scale (ECCV16 predicts at 1/4 size)
     y = y[: max(1, round(ph * k)), : max(1, round(pw * k))]
     if out_c == 3:
@@ -75,20 +100,45 @@ def colorize(it, gray_img):
     return Image.fromarray(out.clip(0, 255).astype(np.uint8)), ms
 
 
-def main():
-    model, out_png, *paths = sys.argv[1:]
-    it = tf.lite.Interpreter(model_path=model, num_threads=4)
+def interpreter(path):
+    it = tf.lite.Interpreter(model_path=path, num_threads=4)
     it.allocate_tensors()
+    return it
+
+
+def saturation(im):
+    return np.asarray(im.convert("HSV"), np.float32)[..., 1].mean()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("model")
+    ap.add_argument("out_png")
+    ap.add_argument("images", nargs="+")
+    ap.add_argument("--denoiser")
+    args = ap.parse_args()
+    it = interpreter(args.model)
+    dn = interpreter(args.denoiser) if args.denoiser else None
     rows = []
-    for p in paths:
+    for p in args.images:
         orig = Image.open(p).convert("RGB")
         orig.thumbnail((640, 640))
         gray = orig.convert("L")
-        col, ms = colorize(it, gray)
-        sat = np.asarray(col.convert("HSV"), np.float32)[..., 1].mean()
-        print(f"{p}: {orig.size} inference {ms:.0f} ms, mean saturation {sat:.1f}/255")
-        row = Image.new("RGB", (orig.width * 3, orig.height))
-        for i, im in enumerate([gray.convert("RGB"), col, orig]):
+        if dn is None:
+            col, ms = colorize(it, gray)
+            print(f"{p}: {orig.size} inference {ms:.0f} ms, mean saturation {saturation(col):.1f}/255")
+            panels = [gray.convert("RGB"), col, orig]
+        else:
+            # Print-like page: screentone at 2x, then shrunk as a page would be.
+            big = gray.resize((gray.width * 2, gray.height * 2), Image.BICUBIC)
+            toned = screentone(big).resize(gray.size, Image.BILINEAR)
+            plain, ms = colorize(it, toned)
+            clean, ms_dn = colorize(it, toned, dn)
+            print(f"{p}: screentoned; colorize {ms:.0f} ms sat {saturation(plain):.1f}, "
+                  f"denoise+colorize {ms_dn:.0f} ms sat {saturation(clean):.1f}")
+            panels = [toned.convert("RGB"), plain, clean, orig]
+        row = Image.new("RGB", (orig.width * len(panels), orig.height))
+        for i, im in enumerate(panels):
             row.paste(im, (i * orig.width, 0))
         rows.append(row)
     W = max(r.width for r in rows)
