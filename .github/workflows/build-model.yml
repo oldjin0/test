@@ -37,20 +37,27 @@ jobs:
           ls -la /tmp/dn.bin && file /tmp/dn.bin
           python -c "import zipfile,sys; z='/tmp/dn.bin'; print(zipfile.ZipFile(z).namelist()[:20] if zipfile.is_zipfile(z) else 'not a zip')"
           test $(stat -c %s /tmp/dn.bin) -gt 1000000
-      - name: Convert and verify against PyTorch
+      - name: Sample images
+        working-directory: tools/model
+        run: python fetch_samples.py /tmp/samples
+      - name: Probe how strongly color hints steer the model
         working-directory: tools/model
         env:
           PYTHONPATH: /tmp/mcv2
-        run: python convert_manga.py --weights /tmp/mcv2/networks/generator.zip --width 448 --out ../../assets/models/colorizer.tflite
+        run: python probe_hints.py --weights /tmp/mcv2/networks/generator.zip $(ls /tmp/samples/* | head -3)
       - name: Convert the denoiser and verify against the project's FFDNet
         working-directory: tools/model
         env:
           PYTHONPATH: /tmp/mcv2
         run: python convert_denoiser.py --weights /tmp/dn.bin --width 448 --out ../../assets/models/denoiser.tflite
+      - name: Convert and verify against PyTorch
+        working-directory: tools/model
+        env:
+          PYTHONPATH: /tmp/mcv2
+        run: python convert_manga.py --weights /tmp/mcv2/networks/generator.zip --width 448 --out ../../assets/models/colorizer.tflite
       - name: Preview on sample images (plain, and screentoned with/without denoise)
         working-directory: tools/model
         run: |
-          python fetch_samples.py /tmp/samples
           mkdir -p ../../docs
           python preview.py ../../assets/models/colorizer.tflite ../../docs/colorize_preview.png /tmp/samples/*
           python preview.py ../../assets/models/colorizer.tflite ../../docs/denoise_preview.png /tmp/samples/* \
