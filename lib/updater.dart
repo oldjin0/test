@@ -70,6 +70,43 @@ class AppPlatform {
 
   /// Opens the system installer for the APK at [path] (in the cache's updates/ dir).
   static Future<void> install(String path) => _channel.invokeMethod('install', {'path': path});
+
+  static StreamController<String>? _keys;
+
+  /// Page-turn presses of the volume buttons ('next' / 'prev') while
+  /// [volumeKeys] is on.
+  static Stream<String> get keys {
+    final c = _keys ??= StreamController<String>.broadcast();
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'key') c.add(call.arguments as String);
+    });
+    return c.stream;
+  }
+
+  /// Lets the volume buttons turn pages (true) or change the volume again.
+  static Future<void> volumeKeys(bool on) async {
+    try {
+      await _channel.invokeMethod('volumeKeys', {'on': on});
+    } on MissingPluginException {
+      // tests / non-Android
+    }
+  }
+
+  /// Battery level in percent, or null when unknown.
+  static Future<int?> battery() async {
+    try {
+      final v = await _channel.invokeMethod<int>('battery');
+      return v == null || v < 0 ? null : v;
+    } on MissingPluginException {
+      return null;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Device tests: presses a hardware key (Android key code) through the
+  /// activity's real key dispatch.
+  static Future<void> pressKey(int code) => _channel.invokeMethod('pressKey', {'code': code});
 }
 
 class UpdateInfo {

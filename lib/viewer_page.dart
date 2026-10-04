@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +13,9 @@ import 'curl_page_view.dart';
 import 'exporter.dart';
 import 'hint_editor.dart';
 import 'library_store.dart';
+import 'reader_controls.dart';
+import 'reader_pages.dart';
+import 'reader_settings.dart';
 import 'storage.dart';
 import 'updater.dart';
 
@@ -24,6 +26,7 @@ class ViewerPage extends StatefulWidget {
     required this.store,
     required this.colorizer,
     this.initialPage,
+    this.decodeImages = true,
   });
 
   final String path;
@@ -33,23 +36,29 @@ class ViewerPage extends StatefulWidget {
   /// Page to open at; defaults to the saved reading position.
   final int? initialPage;
 
+  /// Decode upcoming pages before they are shown (off in widget tests,
+  /// where image decoding never completes).
+  final bool decodeImages;
+
   @override
   State<ViewerPage> createState() => _ViewerPageState();
 }
 
 class _ViewerPageState extends State<ViewerPage> {
   ComicBook? _book;
+  ReaderPages? _pages;
   Object? _error;
   int _page = 0; // first page of the visible spread
   PageController? _controller;
   ColorizeService? _service;
   bool _showUi = true;
   bool _showOriginal = false; // while the page is long-pressed
-  /// Colorization per page, with the cache key it was requested under (the
-  /// key changes with the page's hints and the denoise setting).
-  final _colored = <int, (String, Future<ColorizeResult>)>{};
+  final _curlKey = GlobalKey<CurlPageViewState>();
   final _vScroll = ItemScrollController();
   final _vPositions = ItemPositionsListener.create();
+  late final _auto = AutoTurn(() => _turn(true));
+  int _turns = 0; // page turns, for e-ink refreshes
+  int _flash = 0;
 
   LibraryStore get _store => widget.store;
   String get _title => comicTitle(widget.path);
@@ -70,11 +79,13 @@ class _ViewerPageState extends State<ViewerPage> {
     _store.addListener(_onStore);
     _vPositions.itemPositions.addListener(_onVerticalScroll);
     AppPlatform.keepScreenOn(_store.keepScreenOn);
+    applyOrientation(_store.orientation);
+    _auto.configure(_store.autoTurnSeconds);
     _load();
     widget.colorizer.then((s) {
       if (!mounted) return;
       setState(() => _service = s);
-      _warm();
+      _pages?.setColorizer(s, colorize: _store.colorize);
     });
   }
 
@@ -86,21 +97,39 @@ class _ViewerPageState extends State<ViewerPage> {
         book.length - 1,
       );
       if (!mounted) return;
+      final pages = ReaderPages(
+        book: book,
+        colorKey: _key,
+        colorOptions: (i) =>
+            ColorOptions(hints: _store.hintsOf(widget.path, i), denoise: _store.denoise),
+        decode: widget.decodeImages ? (b) => precacheImage(MemoryImage(b), context) : null,
+        margins: _store.autoCrop ? findMargins : null,
+      )..addListener(_onPages);
       setState(() {
         _book = book;
+        _pages = pages;
         _page = start - start % _step;
         _controller = PageController(initialPage: start ~/ _step);
       });
+      if (_service != null) pages.setColorizer(_service, colorize: _store.colorize);
       _saveProgress();
-      _warm();
+      _focus();
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
   }
 
+  void _onPages() {
+    if (mounted) setState(() {});
+  }
+
   late bool _curl = _store.curl;
   late bool _vertical = _store.vertical;
+  late bool _colorize = _store.colorize;
   late bool _denoise = _store.denoise;
+  late bool _autoCrop = _store.autoCrop;
+  late int _prefetch = _store.prefetchPages;
+  late String _orientation = _store.orientation;
 
   void _onStore() {
     if (!mounted) return;
@@ -114,30 +143,101 @@ class _ViewerPageState extends State<ViewerPage> {
         _resetController();
       }
     });
-    if (_denoise != _store.denoise) {
-      _denoise = _store.denoise;
-      _warm();
+    final pages = _pages;
+    if (pages != null) {
+      if (_colorize != _store.colorize) {
+        _colorize = _store.colorize;
+        pages.setColorizer(_service, colorize: _colorize);
+      }
+      if (_autoCrop != _store.autoCrop) {
+        _autoCrop = _store.autoCrop;
+        pages.margins = _autoCrop ? findMargins : null;
+        pages.refresh();
+      }
+      if (_denoise != _store.denoise || _prefetch != _store.prefetchPages) {
+        _denoise = _store.denoise;
+        _prefetch = _store.prefetchPages;
+        _focus();
+      }
     }
+    if (_orientation != _store.orientation) {
+      _orientation = _store.orientation;
+      applyOrientation(_orientation);
+    }
+    _auto.configure(_store.autoTurnSeconds);
     AppPlatform.keepScreenOn(_store.keepScreenOn);
   }
 
   void _saveProgress() => _store.saveProgress(widget.path, _title, _page, _book?.length ?? 0);
 
+  /// Tells the page cache where the reader is: the visible spread, the
+  /// pages to colorize ahead, and the spread just read.
+  void _focus() {
+    final pages = _pages, book = _book;
+    if (pages == null || book == null) return;
+    final sp = _spreads;
+    final cur = (_page ~/ _step).clamp(0, sp.length - 1);
+    final visible = sp[cur];
+    final last = visible.last;
+    pages.focus(
+      PageFocus(
+        visible: visible,
+        ahead: [for (var i = last + 1; i < book.length && i <= last + _store.prefetchPages; i++) i],
+        behind: cur > 0 ? sp[cur - 1].reversed.toList() : const [],
+      ),
+      spread: _step,
+    );
+  }
+
   void _onPageChanged(int spread) {
-    setState(() => _page = _spreads[spread].first);
+    final sp = _spreads;
+    if (spread < 0 || spread >= sp.length) return;
+    setState(() => _page = sp[spread].first);
     _saveProgress();
-    _warm();
+    _focus();
+    _auto.restart();
+    if (_store.eink && _store.refreshEvery > 0 && ++_turns % _store.refreshEvery == 0) {
+      setState(() => _flash++);
+    }
+  }
+
+  /// One page (spread) forward or back: keys, taps and auto turn.
+  void _turn(bool forward) {
+    if (_book == null) return;
+    final cur = _page ~/ _step;
+    final target = cur + (forward ? 1 : -1);
+    if (target < 0 || target >= _spreads.length) return;
+    if (_store.vertical) {
+      if (_vScroll.isAttached) _vScroll.jumpTo(index: target);
+      _onPageChanged(target);
+    } else if (_store.curl || _store.turnStyle == 'none' || _store.eink) {
+      final curl = _curlKey.currentState;
+      curl != null ? curl.turn(forward) : _onPageChanged(target);
+    } else {
+      final c = _controller;
+      if (c == null || !c.hasClients) return _onPageChanged(target);
+      _store.eink
+          ? c.jumpToPage(target)
+          : c.animateToPage(
+              target,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+            );
+    }
   }
 
   void _jumpTo(int page) {
     final spread = page ~/ _step;
     if (_store.vertical) {
       if (_vScroll.isAttached) _vScroll.jumpTo(index: page);
-    } else if (!_store.curl && (_controller?.hasClients ?? false)) {
+    } else if (!_usesCurlView && (_controller?.hasClients ?? false)) {
       _controller!.jumpToPage(spread);
     }
     _onPageChanged(spread);
   }
+
+  /// Curl, instant and e-ink turning share the controlled page view.
+  bool get _usesCurlView => _store.curl || _store.turnStyle == 'none' || _store.eink;
 
   /// Vertical mode: the current page is the one covering the screen's middle.
   void _onVerticalScroll() {
@@ -157,20 +257,31 @@ class _ViewerPageState extends State<ViewerPage> {
     _controller = PageController(initialPage: _page ~/ _step);
   }
 
-  void _toggleCurl() => _store.setCurl(!_store.curl);
-
   void _toggleDual() {
     _store.setDual(!_store.dual);
     _page -= _page % _step;
     setState(_resetController);
-    _warm();
+    _focus();
   }
 
-  void _toggleColorize() {
-    _store.setColorize(!_store.colorize);
-    if (!_store.colorize) _service?.focus(const []);
-    _warm();
+  void _toggleColorize() => _store.setColorize(!_store.colorize);
+
+  void _toggleUi() {
+    setState(() => _showUi = !_showUi);
+    // Hidden UI: hide the status and navigation bars too.
+    SystemChrome.setEnabledSystemUIMode(
+      _showUi ? SystemUiMode.edgeToEdge : SystemUiMode.immersiveSticky,
+    );
   }
+
+  void _onTapAction(TapAction a) => switch (a) {
+    TapAction.next => _turn(true),
+    TapAction.prev => _turn(false),
+    TapAction.menu => _toggleUi(),
+  };
+
+  TapAction _tapAt(Offset pos, Size size) =>
+      tapAction(pos, size, zones: _store.tapZones, rtl: _store.rtl && !_store.vertical);
 
   void _toggleBookmark() {
     final added = _store.toggleBookmark(widget.path, _title, _page);
@@ -214,35 +325,12 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
-  // Colorization: the visible spread first, then the next one in the background.
-
   String _key(int i) => ColorizeService.keyFor(
     widget.path,
     i,
     hints: _store.hintsOf(widget.path, i),
     denoise: _store.denoise,
   );
-
-  Future<ColorizeResult> _colorFor(int i) {
-    final key = _key(i);
-    final known = _colored[i];
-    if (known != null && known.$1 == key) return known.$2;
-    final book = _book!;
-    final f = _service!.colorize(
-      key,
-      () => book.page(i),
-      hints: _store.hintsOf(widget.path, i),
-      denoise: _store.denoise,
-    );
-    _colored[i] = (key, f);
-    f.then(
-      (_) {},
-      onError: (Object e) {
-        if (isCancelled(e) && _colored[i]?.$2 == f) _colored.remove(i);
-      },
-    );
-    return f;
-  }
 
   /// Opens the color-hint editor for the visible page (the first of a spread).
   Future<void> _editHints() async {
@@ -268,44 +356,32 @@ class _ViewerPageState extends State<ViewerPage> {
     if (hints == null || !mounted) return;
     _store.setHints(widget.path, page, hints);
     if (!_store.colorize) _store.setColorize(true);
-    _warm();
-  }
-
-  void _warm() {
-    final service = _service;
-    if (!_store.colorize || service == null || _book == null) return;
-    final sp = _spreads;
-    final cur = _page ~/ _step;
-    final wanted = [
-      ...sp[cur],
-      if (cur + 1 < sp.length) ...sp[cur + 1],
-      if (cur > 0) ...sp[cur - 1],
-    ];
-    for (final i in wanted) {
-      _colorFor(i);
-    }
-    service.focus([for (final i in wanted) _key(i)]);
-    final lo = wanted.reduce(math.min) - 2, hi = wanted.reduce(math.max) + 2;
-    _colored.removeWhere((i, _) => i < lo || i > hi);
+    _focus();
   }
 
   @override
   void dispose() {
     _vPositions.itemPositions.removeListener(_onVerticalScroll);
     AppPlatform.keepScreenOn(false);
+    applyOrientation('auto');
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _service?.focus(const []);
     _store.removeListener(_onStore);
+    _pages?.removeListener(_onPages);
+    _pages?.dispose();
+    _auto.dispose();
     _controller?.dispose();
     super.dispose();
   }
+
+  Color get _paper => _store.eink ? Colors.white : Colors.black;
 
   @override
   Widget build(BuildContext context) {
     final total = _book?.length ?? 0;
     final shown = _spreads.isEmpty ? '' : _spreads[_page ~/ _step].map((i) => i + 1).join('-');
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: _paper,
       appBar: _showUi
           ? AppBar(
               title: Column(
@@ -341,13 +417,12 @@ class _ViewerPageState extends State<ViewerPage> {
                   onSelected: (v) => switch (v) {
                     'rtl' => _store.setRtl(!_store.rtl),
                     'dual' => _toggleDual(),
-                    'display' => _showDisplaySettings(),
+                    'display' => showReaderSettings(context, _store, comic: true),
                     'vertical' => _store.setVertical(!_store.vertical),
                     'savePage' => _savePage(),
                     'hints' => _editHints(),
-                    'denoise' => _store.setDenoise(!_store.denoise),
                     'export' => _exportComic(),
-                    _ => _toggleCurl(),
+                    _ => null,
                   },
                   itemBuilder: (context) => [
                     CheckedPopupMenuItem(
@@ -361,26 +436,16 @@ class _ViewerPageState extends State<ViewerPage> {
                       child: const Text('양면 보기'),
                     ),
                     CheckedPopupMenuItem(
-                      value: 'curl',
-                      checked: _store.curl,
-                      child: const Text('책 넘김 효과'),
-                    ),
-                    CheckedPopupMenuItem(
                       value: 'vertical',
                       checked: _store.vertical,
                       child: const Text('세로 스크롤 (웹툰)'),
                     ),
-                    const PopupMenuItem(value: 'display', child: Text('채색 강도 · 화면 설정')),
+                    const PopupMenuItem(value: 'display', child: Text('읽기 설정')),
                     const PopupMenuDivider(),
                     PopupMenuItem(
                       value: 'hints',
                       enabled: _service?.modelLoaded ?? false,
                       child: const Text('이 페이지 색 지정 (힌트)'),
-                    ),
-                    CheckedPopupMenuItem(
-                      value: 'denoise',
-                      checked: _store.denoise,
-                      child: const Text('스크린톤 정리 후 채색'),
                     ),
                     const PopupMenuDivider(),
                     const PopupMenuItem(value: 'savePage', child: Text('현재 페이지를 갤러리에 저장')),
@@ -390,7 +455,14 @@ class _ViewerPageState extends State<ViewerPage> {
               ],
             )
           : null,
-      body: _body(),
+      body: ReaderKeys(
+        onNext: () => _turn(true),
+        onPrev: () => _turn(false),
+        onMenu: _toggleUi,
+        volumeKeys: _store.volumeKeys,
+        rtl: _store.rtl && !_store.vertical,
+        child: _body(),
+      ),
       bottomNavigationBar: _showUi && total > 1 ? _slider(total) : null,
     );
   }
@@ -403,7 +475,7 @@ class _ViewerPageState extends State<ViewerPage> {
           child: Text(
             '파일을 열 수 없습니다.\n$_error',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white70),
+            style: TextStyle(color: _store.eink ? Colors.black : Colors.white70),
           ),
         ),
       );
@@ -415,50 +487,52 @@ class _ViewerPageState extends State<ViewerPage> {
       // In right-to-left dual mode the first page sits on the right.
       if (_store.rtl) idx = idx.reversed.toList();
       return ColoredBox(
-        color: Colors.black,
+        color: _paper,
         child: Row(children: [for (final p in idx) Expanded(child: _pageImage(p))]),
       );
     }
 
-    void toggleUi() {
-      setState(() => _showUi = !_showUi);
-      // Hidden UI: hide the status and navigation bars too.
-      SystemChrome.setEnabledSystemUIMode(
-        _showUi ? SystemUiMode.edgeToEdge : SystemUiMode.immersiveSticky,
+    final Widget pager;
+    if (_store.vertical) {
+      pager = LayoutBuilder(
+        builder: (context, c) => GestureDetector(
+          onTapUp: (d) => _onTapAction(_tapAt(d.localPosition, c.biggest)),
+          child: ScrollablePositionedList.builder(
+            itemCount: _book!.length,
+            initialScrollIndex: _page,
+            itemScrollController: _vScroll,
+            itemPositionsListener: _vPositions,
+            minCacheExtent: 800,
+            itemBuilder: (context, i) => _pageImage(i, vertical: true),
+          ),
+        ),
+      );
+    } else if (_usesCurlView) {
+      pager = CurlPageView(
+        key: _curlKey,
+        index: _page ~/ _step,
+        itemCount: spreads.length,
+        rtl: _store.rtl,
+        animate: _store.curl && !_store.eink,
+        onPageChanged: _onPageChanged,
+        onTapCenter: _toggleUi,
+        tapAction: _tapAt,
+        itemBuilder: (context, i) => spread(i),
+      );
+    } else {
+      pager = LayoutBuilder(
+        builder: (context, c) => GestureDetector(
+          onTapUp: (d) => _onTapAction(_tapAt(d.localPosition, c.biggest)),
+          child: PageView.builder(
+            controller: _controller,
+            reverse: _store.rtl,
+            itemCount: spreads.length,
+            onPageChanged: _onPageChanged,
+            itemBuilder: (context, i) => InteractiveViewer(child: spread(i)),
+          ),
+        ),
       );
     }
-
-    final pager = _store.vertical
-        ? GestureDetector(
-            onTap: toggleUi,
-            child: ScrollablePositionedList.builder(
-              itemCount: _book!.length,
-              initialScrollIndex: _page,
-              itemScrollController: _vScroll,
-              itemPositionsListener: _vPositions,
-              minCacheExtent: 800,
-              itemBuilder: (context, i) => _pageImage(i, vertical: true),
-            ),
-          )
-        : _store.curl
-        ? CurlPageView(
-            index: _page ~/ _step,
-            itemCount: spreads.length,
-            rtl: _store.rtl,
-            onPageChanged: _onPageChanged,
-            onTapCenter: toggleUi,
-            itemBuilder: (context, i) => spread(i),
-          )
-        : GestureDetector(
-            onTap: toggleUi,
-            child: PageView.builder(
-              controller: _controller,
-              reverse: _store.rtl,
-              itemCount: spreads.length,
-              onPageChanged: _onPageChanged,
-              itemBuilder: (context, i) => InteractiveViewer(child: spread(i)),
-            ),
-          );
     return Stack(
       children: [
         Positioned.fill(
@@ -478,72 +552,138 @@ class _ViewerPageState extends State<ViewerPage> {
           ),
         Positioned(
           right: 12,
-          bottom: 12,
-          child: _showOriginal ? const _Chip(text: '원본') : _status(),
+          bottom: _store.showStatus && !_showUi ? 24 : 12,
+          child: _showOriginal ? _Chip(text: '원본', eink: _store.eink) : _status(),
         ),
+        if (_store.showStatus && !_showUi)
+          Positioned(
+            left: 10,
+            right: 10,
+            bottom: 2,
+            child: IgnorePointer(
+              child: ReaderStatus(
+                position: _statusText(),
+                color: _store.eink ? Colors.black54 : Colors.white60,
+              ),
+            ),
+          ),
+        Positioned.fill(child: RefreshFlash(trigger: _flash)),
       ],
     );
   }
 
-  /// A page, colorized when enabled. [vertical]: laid out by width with
-  /// unbounded height (webtoon list), with a page-sized placeholder until the
-  /// image is decoded so the list does not jump.
+  String _statusText() {
+    final total = _book?.length ?? 0;
+    final sp = _spreads;
+    if (sp.isEmpty) return '';
+    final shown = sp[_page ~/ _step].map((i) => i + 1).join('-');
+    final pages = _pages;
+    if (!_store.colorize || pages == null || _service == null) return '$shown / $total';
+    return '$shown / $total · 채색 +${pages.readyAhead}';
+  }
+
+  /// A page, colorized when enabled, drawn from what [ReaderPages] already
+  /// has: nothing here waits, so turning never shows an empty frame.
+  /// [vertical]: laid out by width with unbounded height (webtoon list).
   Widget _pageImage(int p, {bool vertical = false}) {
+    final pages = _pages!;
     final width = MediaQuery.sizeOf(context).width;
     Widget placeholder() =>
         vertical ? SizedBox(width: width, height: width * 1.42) : const SizedBox.expand();
-    Widget image(Uint8List b) => Image.memory(
-      b,
-      fit: vertical ? BoxFit.fitWidth : BoxFit.contain,
-      width: vertical ? width : null,
-      gaplessPlayback: true,
-      frameBuilder: vertical
-          ? (context, child, frame, sync) => frame == null && !sync ? placeholder() : child
-          : null,
-    );
-    // Pages are read from the archive on demand (see ComicBook).
-    return FutureBuilder<Uint8List>(
-      future: _book!.page(p),
-      builder: (context, page) {
-        final original = page.data;
-        if (original == null) {
-          return page.hasError
-              ? SizedBox(
-                  width: vertical ? width : null,
-                  height: vertical ? width : null,
-                  child: const Center(
-                    child: Icon(Icons.broken_image_outlined, color: Colors.white38),
-                  ),
-                )
-              : placeholder();
-        }
-        if (!_store.colorize || _service == null) return image(original);
-        // The original stays on screen until the colorized page is ready.
-        return FutureBuilder<ColorizeResult>(
-          future: _colorFor(p),
-          builder: (context, snap) {
-            final colored = snap.data;
-            if (colored == null || colored.mode == ColorizeMode.alreadyColor) {
-              return image(original);
-            }
-            final strength = _showOriginal ? 0.0 : _store.colorStrength;
-            if (strength >= 0.999) return image(colored.bytes);
-            // Colorized page faded over the original by the chosen strength.
-            // The original sizes the stack, so this works in both layouts.
-            return Stack(
-              alignment: Alignment.center,
-              children: [
-                image(original),
-                if (strength > 0.001)
-                  Positioned.fill(
-                    child: Opacity(opacity: strength, child: image(colored.bytes)),
-                  ),
-              ],
-            );
-          },
+    final original = pages.original(p);
+    if (original == null) {
+      if (pages.error(p) != null) {
+        return SizedBox(
+          width: vertical ? width : null,
+          height: vertical ? width : null,
+          child: const Center(child: Icon(Icons.broken_image_outlined, color: Colors.grey)),
         );
-      },
+      }
+      return placeholder();
+    }
+    final crop = pages.crop(p);
+    final colored = _store.colorize ? pages.colored(p) : null;
+
+    // Images keep their natural size when cropped (the crop wrapper fits them).
+    Widget image(Uint8List b, {Widget? fallback}) => Image.memory(
+      b,
+      fit: crop != null ? null : (vertical ? BoxFit.fitWidth : BoxFit.contain),
+      width: crop == null && vertical ? width : null,
+      gaplessPlayback: true,
+      // Until decoded (rare: upcoming pages are decoded ahead), show what
+      // was there instead of an empty frame.
+      frameBuilder: (context, child, frame, sync) =>
+          frame == null && !sync ? (fallback ?? const SizedBox.shrink()) : child,
     );
+
+    Widget content;
+    if (colored == null) {
+      content = image(original);
+    } else {
+      final strength = _showOriginal ? 0.0 : _store.colorStrength;
+      if (strength >= 0.999) {
+        content = image(colored.bytes, fallback: image(original));
+      } else {
+        // Colorized page faded over the original by the chosen strength.
+        content = Stack(
+          alignment: Alignment.center,
+          children: [
+            image(original),
+            if (strength > 0.001)
+              Positioned.fill(
+                child: Opacity(opacity: strength, child: image(colored.bytes)),
+              ),
+          ],
+        );
+      }
+    }
+    if (crop != null) content = _cropped(content, crop, vertical: vertical, width: width);
+    if ((_store.contrast - 1).abs() > 0.01) {
+      final c = _store.contrast, t = 128 * (1 - c);
+      content = ColorFiltered(
+        colorFilter: ColorFilter.matrix([
+          c,
+          0,
+          0,
+          0,
+          t,
+          0,
+          c,
+          0,
+          0,
+          t,
+          0,
+          0,
+          c,
+          0,
+          t,
+          0,
+          0,
+          0,
+          1,
+          0,
+        ]),
+        child: content,
+      );
+    }
+    return content;
+  }
+
+  /// Shows only [crop] (fractions) of [child], scaled to fit.
+  Widget _cropped(Widget child, Rect crop, {required bool vertical, required double width}) {
+    double align(double start, double size) => size >= 0.999 ? 0 : 2 * start / (1 - size) - 1;
+    final fitted = FittedBox(
+      fit: vertical ? BoxFit.fitWidth : BoxFit.contain,
+      child: ClipRect(
+        child: Align(
+          alignment: Alignment(align(crop.left, crop.width), align(crop.top, crop.height)),
+          widthFactor: crop.width,
+          heightFactor: crop.height,
+          child: child,
+        ),
+      ),
+    );
+    return vertical ? SizedBox(width: width, child: fitted) : fitted;
   }
 
   /// Bytes of page [i] as shown: colorized when colorizing is on (waits for
@@ -650,70 +790,19 @@ class _ViewerPageState extends State<ViewerPage> {
     }
     navigator.pop();
     if (mounted) _say(message);
-  }
-
-  void _showDisplaySettings() {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (context) => ListenableBuilder(
-        listenable: _store,
-        builder: (context, _) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('채색 강도 ${(_store.colorStrength * 100).round()}%'),
-                Slider(
-                  key: const ValueKey('strength'),
-                  value: _store.colorStrength,
-                  divisions: 20,
-                  onChanged: _store.setColorStrength,
-                ),
-                Text('화면 밝기 ${(_store.brightness * 100).round()}%'),
-                Slider(
-                  key: const ValueKey('brightness'),
-                  value: _store.brightness,
-                  min: 0.2,
-                  divisions: 16,
-                  onChanged: _store.setBrightness,
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('읽는 동안 화면 켜짐 유지'),
-                  value: _store.keepScreenOn,
-                  onChanged: _store.setKeepScreenOn,
-                ),
-                const Text('페이지를 길게 누르고 있으면 원본(흑백)을 볼 수 있습니다.'),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    _focus(); // the export asked for every page: back to the reader's pages
   }
 
   /// Small chip showing what the colorizer is doing for the visible page.
   Widget _status() {
-    if (!_store.colorize || _book == null) return const SizedBox.shrink();
+    final pages = _pages;
+    if (!_store.colorize || pages == null) return const SizedBox.shrink();
     final service = _service;
-    if (service == null) return const _Chip(busy: true, text: 'AI 모델 준비 중…');
-    return FutureBuilder<ColorizeResult>(
-      future: _colorFor(_page),
-      builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
-          return const _Chip(busy: true, text: 'AI 채색 중…');
-        }
-        if (snap.hasError && !isCancelled(snap.error)) {
-          return const _Chip(text: '채색 실패 · 원본 표시');
-        }
-        if (snap.data?.mode == ColorizeMode.filter) {
-          return const _Chip(text: 'AI 모델 없음 · 색조 필터');
-        }
-        return const SizedBox.shrink();
-      },
-    );
+    final eink = _store.eink;
+    if (service == null) return _Chip(busy: true, text: 'AI 모델 준비 중…', eink: eink);
+    if (!service.modelLoaded) return _Chip(text: 'AI 모델 없음 · 색조 필터', eink: eink);
+    if (pages.coloring(_page)) return _Chip(busy: true, text: 'AI 채색 중…', eink: eink);
+    return const SizedBox.shrink();
   }
 
   Widget _slider(int total) {
@@ -739,15 +828,19 @@ class _ViewerPageState extends State<ViewerPage> {
 }
 
 class _Chip extends StatelessWidget {
-  const _Chip({required this.text, this.busy = false});
+  const _Chip({required this.text, this.busy = false, this.eink = false});
   final String text;
   final bool busy;
+
+  /// E-ink: no spinner (it would keep the panel refreshing).
+  final bool eink;
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.65),
+        color: eink ? Colors.white : Colors.black.withValues(alpha: 0.65),
+        border: eink ? Border.all(color: Colors.black) : null,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Padding(
@@ -755,7 +848,7 @@ class _Chip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (busy) ...[
+            if (busy && !eink) ...[
               const SizedBox(
                 width: 12,
                 height: 12,
@@ -763,7 +856,7 @@ class _Chip extends StatelessWidget {
               ),
               const SizedBox(width: 8),
             ],
-            Text(text, style: const TextStyle(color: Colors.white, fontSize: 12)),
+            Text(text, style: TextStyle(color: eink ? Colors.black : Colors.white, fontSize: 12)),
           ],
         ),
       ),

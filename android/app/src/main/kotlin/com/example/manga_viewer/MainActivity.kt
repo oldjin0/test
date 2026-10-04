@@ -4,10 +4,12 @@ import android.content.ContentValues
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.core.content.FileProvider
 import androidx.core.content.pm.PackageInfoCompat
@@ -18,11 +20,33 @@ import java.io.File
 import java.io.IOException
 
 class MainActivity : FlutterActivity() {
+    private var appChannel: MethodChannel? = null
+
+    /// While a reader is open with the option on, the volume buttons turn
+    /// pages instead of changing the volume.
+    private var volumeKeys = false
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (volumeKeys && (code == KeyEvent.KEYCODE_VOLUME_DOWN || code == KeyEvent.KEYCODE_VOLUME_UP)) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                appChannel?.invokeMethod(
+                    "key",
+                    if (code == KeyEvent.KEYCODE_VOLUME_DOWN) "next" else "prev",
+                )
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "manga_viewer/comics")
             .setMethodCallHandler(NativeComics())
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "manga_viewer/app")
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "manga_viewer/app")
+        appChannel = channel
+        channel
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
@@ -88,6 +112,21 @@ class MainActivity : FlutterActivity() {
                             } else {
                                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                             }
+                            result.success(null)
+                        }
+                        "volumeKeys" -> {
+                            volumeKeys = call.argument<Boolean>("on") == true
+                            result.success(null)
+                        }
+                        "battery" -> {
+                            val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
+                            result.success(bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
+                        }
+                        // Device tests: a hardware key press through the real dispatch path.
+                        "pressKey" -> {
+                            val code = call.argument<Int>("code")!!
+                            dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+                            dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
                             result.success(null)
                         }
                         else -> result.notImplemented()

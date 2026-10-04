@@ -4,6 +4,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import 'reader_controls.dart';
+
 /// Pages that turn like paper: the free edge follows the finger, the folded
 /// part shows the back of the sheet, and the page underneath is revealed
 /// with a shadow along the fold.
@@ -19,6 +21,8 @@ class CurlPageView extends StatefulWidget {
     required this.onPageChanged,
     this.rtl = false,
     this.onTapCenter,
+    this.tapAction,
+    this.animate = true,
   });
 
   final int index;
@@ -30,8 +34,15 @@ class CurlPageView extends StatefulWidget {
   final bool rtl;
   final VoidCallback? onTapCenter;
 
+  /// What a tap does where it lands (null: outer quarters turn, the middle
+  /// is [onTapCenter]).
+  final TapAction Function(Offset pos, Size size)? tapAction;
+
+  /// False (e-ink): pages change at once, without the curl.
+  final bool animate;
+
   @override
-  State<CurlPageView> createState() => _CurlPageViewState();
+  State<CurlPageView> createState() => CurlPageViewState();
 }
 
 enum _Mode { none, turn, zoom }
@@ -42,7 +53,7 @@ const _maxZoom = 4.0;
 /// Zoom factor of a double tap.
 const _tapZoom = 2.5;
 
-class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMixin {
+class CurlPageViewState extends State<CurlPageView> with TickerProviderStateMixin {
   late final AnimationController _anim = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 380),
@@ -79,6 +90,7 @@ class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMix
   // fingers are down. The scale recognizer only starts after ~36 px of
   // movement; the turn is measured from where the finger really started.
   Offset _downPos = Offset.zero;
+  Offset _lastFocal = Offset.zero; // instant mode: where the drag got to
   int _pointers = 0;
   bool _restarted = false; // the recognizer restarted because the finger count changed
 
@@ -87,9 +99,9 @@ class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMix
   Offset _lastTapPos = Offset.zero;
 
   @override
-  void didUpdateWidget(CurlPageView old) {
-    super.didUpdateWidget(old);
-    if (old.index != widget.index) _resetZoom();
+  void didUpdateWidget(CurlPageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) _resetZoom();
   }
 
   @override
@@ -162,7 +174,8 @@ class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMix
         _pan = _clampPan(d.localFocalPoint - _contentFocal * z, z);
       });
     } else if (_mode == _Mode.turn && d.pointerCount == _startPointers) {
-      _turnUpdate(Offset(_lx(d.localFocalPoint.dx), d.localFocalPoint.dy));
+      _lastFocal = Offset(_lx(d.localFocalPoint.dx), d.localFocalPoint.dy);
+      if (widget.animate) _turnUpdate(_lastFocal);
     }
   }
 
@@ -189,6 +202,10 @@ class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMix
     _restarted = true; // a follow-up start in the same touch begins where the fingers are
     if (_mode == _Mode.zoom) {
       if (_zoom < 1.02) setState(_resetZoom);
+    } else if (_mode == _Mode.turn && !widget.animate) {
+      // Instant: a swipe towards the spine reads forward.
+      final dx = _lastFocal.dx - _dragStart.dx;
+      if (dx.abs() > 40) turn(dx < 0);
     } else if (_mode == _Mode.turn && _turning) {
       final v = (widget.rtl ? -1 : 1) * d.velocity.pixelsPerSecond.dx;
       final turned = (_size.width - _p.dx) / (2 * _size.width); // 0 flat .. 1 turned
@@ -200,8 +217,13 @@ class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMix
     _mode = _Mode.none;
   }
 
-  void _turnByTap(bool forward) {
+  /// Turns one page forward or back (keys, taps, auto turn).
+  void turn(bool forward) {
     if (_anim.isAnimating || (forward ? !_canForward : !_canBack)) return;
+    if (!widget.animate || _size.isEmpty) {
+      widget.onPageChanged(widget.index + (forward ? 1 : -1));
+      return;
+    }
     _begin(forward, Offset(_size.width, _size.height * 0.85));
     _animateTo(true);
   }
@@ -262,8 +284,11 @@ class _CurlPageViewState extends State<CurlPageView> with TickerProviderStateMix
       widget.onTapCenter?.call();
     }
     final x = _lx(pos.dx) / _size.width;
-    if (!_zoomed && (x > 0.75 || x < 0.25)) {
-      _turnByTap(x > 0.75);
+    final action =
+        widget.tapAction?.call(pos, _size) ??
+        (x > 0.75 ? TapAction.next : (x < 0.25 ? TapAction.prev : TapAction.menu));
+    if (!_zoomed && action != TapAction.menu) {
+      turn(action == TapAction.next);
       return;
     }
     _lastTapPos = pos;

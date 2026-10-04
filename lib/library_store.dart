@@ -70,8 +70,12 @@ class LibraryStore extends ChangeNotifier {
   bool dual = false;
   bool colorize = true;
 
-  /// Page-curl ("book") turning instead of sliding.
-  bool curl = true;
+  /// How pages turn: 'curl' (like paper), 'slide', or 'none' (instant,
+  /// for e-ink screens).
+  String turnStyle = 'curl';
+
+  /// Page-curl ("book") turning.
+  bool get curl => turnStyle == 'curl';
 
   /// Continuous vertical scrolling (webtoon style) instead of single pages.
   bool vertical = false;
@@ -88,6 +92,51 @@ class LibraryStore extends ChangeNotifier {
   /// Clean screentone dots before colorizing, as the model's own pipeline
   /// does: printed pages get fuller color, for ~20% more time per page.
   bool denoise = true;
+
+  /// Pages colorized ahead of the reader.
+  int prefetchPages = 10;
+
+  /// E-ink screens: instant turns, white paper, no animations.
+  bool eink = false;
+
+  /// Volume (and e-reader page) buttons turn pages.
+  bool volumeKeys = true;
+
+  /// Tap areas: 'lr' (left/right, by reading direction), 'lrInvert',
+  /// 'tb' (top half back, bottom half forward), 'next' (anywhere forward,
+  /// left edge back).
+  String tapZones = 'lr';
+
+  /// Cut white/black borders off comic pages.
+  bool autoCrop = false;
+
+  /// Page contrast (1 = unchanged).
+  double contrast = 1.0;
+
+  /// Turn the page by itself every this many seconds (0 = off).
+  int autoTurnSeconds = 0;
+
+  /// Screen orientation while reading: 'auto', 'portrait', 'landscape'.
+  String orientation = 'auto';
+
+  /// Page number, clock and battery at the bottom while reading.
+  bool showStatus = true;
+
+  /// E-ink: flash the screen black every this many turns to clear ghosting
+  /// (0 = never).
+  int refreshEvery = 0;
+
+  /// Folder lists: 'name' or 'date' (newest first).
+  String sortBy = 'name';
+
+  // Text reader
+  double textSize = 20;
+  double textLineHeight = 1.7;
+  double textMargin = 20;
+
+  /// 'light', 'sepia', 'dark' or 'eink' (pure black on white).
+  String textTheme = 'light';
+  bool textSerif = false;
 
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());
@@ -106,12 +155,28 @@ class LibraryStore extends ChangeNotifier {
     rtl = p.getBool('rtl') ?? rtl;
     dual = p.getBool('dual') ?? dual;
     colorize = p.getBool('colorize') ?? colorize;
-    curl = p.getBool('curl') ?? curl;
+    turnStyle = p.getString('turnStyle') ?? ((p.getBool('curl') ?? true) ? 'curl' : 'slide');
     colorStrength = p.getDouble('colorStrength') ?? colorStrength;
     vertical = p.getBool('vertical') ?? vertical;
     keepScreenOn = p.getBool('keepScreenOn') ?? keepScreenOn;
     brightness = p.getDouble('brightness') ?? brightness;
     denoise = p.getBool('denoise') ?? denoise;
+    prefetchPages = p.getInt('prefetchPages') ?? prefetchPages;
+    eink = p.getBool('eink') ?? eink;
+    volumeKeys = p.getBool('volumeKeys') ?? volumeKeys;
+    tapZones = p.getString('tapZones') ?? tapZones;
+    autoCrop = p.getBool('autoCrop') ?? autoCrop;
+    contrast = p.getDouble('contrast') ?? contrast;
+    autoTurnSeconds = p.getInt('autoTurnSeconds') ?? autoTurnSeconds;
+    orientation = p.getString('orientation') ?? orientation;
+    showStatus = p.getBool('showStatus') ?? showStatus;
+    refreshEvery = p.getInt('refreshEvery') ?? refreshEvery;
+    sortBy = p.getString('sortBy') ?? sortBy;
+    textSize = p.getDouble('textSize') ?? textSize;
+    textLineHeight = p.getDouble('textLineHeight') ?? textLineHeight;
+    textMargin = p.getDouble('textMargin') ?? textMargin;
+    textTheme = p.getString('textTheme') ?? textTheme;
+    textSerif = p.getBool('textSerif') ?? textSerif;
     _readHints(p.getString('hints'));
   }
 
@@ -167,12 +232,28 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('rtl', rtl);
     _prefs.setBool('dual', dual);
     _prefs.setBool('colorize', colorize);
-    _prefs.setBool('curl', curl);
+    _prefs.setString('turnStyle', turnStyle);
     _prefs.setDouble('colorStrength', colorStrength);
     _prefs.setBool('vertical', vertical);
     _prefs.setBool('keepScreenOn', keepScreenOn);
     _prefs.setDouble('brightness', brightness);
     _prefs.setBool('denoise', denoise);
+    _prefs.setInt('prefetchPages', prefetchPages);
+    _prefs.setBool('eink', eink);
+    _prefs.setBool('volumeKeys', volumeKeys);
+    _prefs.setString('tapZones', tapZones);
+    _prefs.setBool('autoCrop', autoCrop);
+    _prefs.setDouble('contrast', contrast);
+    _prefs.setInt('autoTurnSeconds', autoTurnSeconds);
+    _prefs.setString('orientation', orientation);
+    _prefs.setBool('showStatus', showStatus);
+    _prefs.setInt('refreshEvery', refreshEvery);
+    _prefs.setString('sortBy', sortBy);
+    _prefs.setDouble('textSize', textSize);
+    _prefs.setDouble('textLineHeight', textLineHeight);
+    _prefs.setDouble('textMargin', textMargin);
+    _prefs.setString('textTheme', textTheme);
+    _prefs.setBool('textSerif', textSerif);
     _prefs.setString('hints', jsonEncode(_hintsJson()));
   }
 
@@ -262,8 +343,21 @@ class LibraryStore extends ChangeNotifier {
     _changed();
   }
 
-  void setCurl(bool v) {
-    curl = v;
+  void setCurl(bool v) => setTurnStyle(v ? 'curl' : 'slide');
+
+  void setTurnStyle(String v) {
+    turnStyle = v;
+    _changed();
+  }
+
+  /// Changes several settings at once (one save, one notification).
+  void update(void Function(LibraryStore s) change) {
+    change(this);
+    contrast = contrast.clamp(0.5, 2.5);
+    prefetchPages = prefetchPages.clamp(1, 1000);
+    textSize = textSize.clamp(10.0, 48.0);
+    textLineHeight = textLineHeight.clamp(1.0, 3.0);
+    textMargin = textMargin.clamp(0.0, 80.0);
     _changed();
   }
 

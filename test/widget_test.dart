@@ -773,15 +773,20 @@ void main() {
     // Settings sheet from the menu.
     await tester.tap(find.byTooltip('보기 설정'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('채색 강도 · 화면 설정'));
+    await tester.tap(find.text('읽기 설정'));
     await tester.pumpAndSettle();
     expect(find.text('채색 강도 50%'), findsOneWidget);
-    await tester.tap(find.byType(Switch));
-    await tester.pumpAndSettle();
-    expect(store.keepScreenOn, isFalse);
     await tester.drag(find.byKey(const ValueKey('strength')), const Offset(500, 0));
     await tester.pumpAndSettle();
     expect(store.colorStrength, 1.0);
+    await tester.tap(find.byKey(const ValueKey('choice-미리 채색할 페이지-20')));
+    await tester.pumpAndSettle();
+    expect(store.prefetchPages, 20);
+    final keepOn = find.widgetWithText(SwitchListTile, '읽는 동안 화면 켜짐 유지');
+    await tester.scrollUntilVisible(keepOn, 200, scrollable: find.byType(Scrollable).last);
+    await tester.tap(keepOn);
+    await tester.pumpAndSettle();
+    expect(store.keepScreenOn, isFalse);
   });
 
   testWidgets('vertical (webtoon) mode scrolls through pages and saves the position', (
