@@ -151,12 +151,12 @@ void main() {
       if (log.existsSync()) log.deleteSync();
 
       // The "old program": a process that exits after ~3 s; the helper must
-      // wait for it. Detached, as the real program is no child of the test.
+      // wait for it.
       final old = await Process.start('powershell.exe', [
         '-NoProfile',
         '-Command',
         'Start-Sleep -Seconds 3',
-      ], mode: ProcessStartMode.detached);
+      ]);
       final t = Stopwatch()..start();
       await pcInstallUpdate(
         zipFile.path,

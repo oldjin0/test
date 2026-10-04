@@ -121,13 +121,104 @@ Future<void> pcInstallUpdate(
       .replaceAll('@RESTART@', restart ? '1' : '0');
   await script.writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(text)]);
   if (File(log).existsSync()) File(log).deleteSync();
-  await Process.start('powershell.exe', [
-    '-NoProfile',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    script.path,
-  ], mode: ProcessStartMode.detached);
+  final ps = p.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  pcStartHidden(
+    '"$ps" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${script.path}"',
+  );
+}
+
+final class _StartupInfo extends ffi.Struct {
+  @ffi.Uint32()
+  external int cb;
+  external ffi.Pointer<ffi.Void> reserved, desktop, title;
+  @ffi.Uint32()
+  external int x, y, xSize, ySize, xCountChars, yCountChars, fillAttribute, flags;
+  @ffi.Uint16()
+  external int showWindow;
+  @ffi.Uint16()
+  external int cbReserved2;
+  external ffi.Pointer<ffi.Void> reserved2, stdInput, stdOutput, stdError;
+}
+
+final class _ProcessInfo extends ffi.Struct {
+  external ffi.Pointer<ffi.Void> process, thread;
+  @ffi.Uint32()
+  external int processId, threadId;
+}
+
+/// Starts [commandLine] as an independent process with a hidden console of
+/// its own, outside this program's job when allowed, so it outlives the
+/// program. (Dart's detached mode starts it without any console, and
+/// PowerShell then ends before running a line.) Returns its process id.
+int pcStartHidden(String commandLine) {
+  final k = _kernel ??= ffi.DynamicLibrary.open('kernel32.dll');
+  final create = k
+      .lookupFunction<
+        ffi.Int32 Function(
+          ffi.Pointer<Utf16>,
+          ffi.Pointer<Utf16>,
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.Void>,
+          ffi.Int32,
+          ffi.Uint32,
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<Utf16>,
+          ffi.Pointer<_StartupInfo>,
+          ffi.Pointer<_ProcessInfo>,
+        ),
+        int Function(
+          ffi.Pointer<Utf16>,
+          ffi.Pointer<Utf16>,
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<ffi.Void>,
+          int,
+          int,
+          ffi.Pointer<ffi.Void>,
+          ffi.Pointer<Utf16>,
+          ffi.Pointer<_StartupInfo>,
+          ffi.Pointer<_ProcessInfo>,
+        )
+      >('CreateProcessW');
+  final close = k
+      .lookupFunction<
+        ffi.Int32 Function(ffi.Pointer<ffi.Void>),
+        int Function(ffi.Pointer<ffi.Void>)
+      >('CloseHandle');
+  final lastError = k.lookupFunction<ffi.Uint32 Function(), int Function()>('GetLastError');
+  const noWindow = 0x08000000, newGroup = 0x00000200, breakaway = 0x01000000;
+  final si = calloc<_StartupInfo>()..ref.cb = ffi.sizeOf<_StartupInfo>();
+  final pi = calloc<_ProcessInfo>();
+  try {
+    for (final flags in [noWindow | newGroup | breakaway, noWindow | newGroup]) {
+      // CreateProcessW may write into the command line: a fresh copy each time.
+      final cmd = commandLine.toNativeUtf16();
+      try {
+        final ok = create(
+          ffi.nullptr,
+          cmd,
+          ffi.nullptr,
+          ffi.nullptr,
+          0,
+          flags,
+          ffi.nullptr,
+          ffi.nullptr,
+          si,
+          pi,
+        );
+        if (ok != 0) {
+          close(pi.ref.thread);
+          close(pi.ref.process);
+          return pi.ref.processId;
+        }
+      } finally {
+        calloc.free(cmd);
+      }
+    }
+    throw Exception('업데이트 도우미를 시작할 수 없습니다 (오류 ${lastError()}).');
+  } finally {
+    calloc.free(si);
+    calloc.free(pi);
+  }
 }
 
 /// Frees [ptr] allocated with the ffi allocator (shared by the FFI helpers).
