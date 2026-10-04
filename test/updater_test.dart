@@ -98,7 +98,7 @@ void main() {
   setUp(() async {
     gh = FakeGitHub();
     await gh.start();
-    updater = Updater(repo: 'o/r', apiBase: gh.base);
+    updater = Updater(repo: 'o/r', apiBase: gh.base, pc: false);
     dir = Directory.systemTemp.createTempSync('updates');
   });
   tearDown(() async {
@@ -142,14 +142,14 @@ void main() {
   });
 
   test('missing release and offline are reported as UpdateException', () async {
-    final missing = Updater(repo: 'o/none', apiBase: gh.base);
+    final missing = Updater(repo: 'o/none', apiBase: gh.base, pc: false);
     await expectLater(
       missing.check(currentBuild: 1, abis: []),
       throwsA(isA<UpdateException>().having((e) => e.message, 'message', contains('없습니다'))),
     );
     final port = gh.server.port;
     await gh.server.close(force: true);
-    final offline = Updater(repo: 'o/r', apiBase: Uri.parse('http://127.0.0.1:$port'));
+    final offline = Updater(repo: 'o/r', apiBase: Uri.parse('http://127.0.0.1:$port'), pc: false);
     await expectLater(offline.check(currentBuild: 1, abis: []), throwsA(isA<UpdateException>()));
   });
 
