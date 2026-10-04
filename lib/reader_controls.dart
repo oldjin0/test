@@ -41,9 +41,9 @@ TapAction tapAction(Offset pos, Size size, {required String zones, required bool
   }
 }
 
-/// Turns pages with keys: e-reader page buttons and keyboards (Page Up/Down,
-/// arrows, space) in the widget tree, and the volume buttons through the
-/// activity while [volumeKeys] is on.
+/// Turns pages with keys: keyboards (arrows, space, Page Up/Down) in the
+/// widget tree; e-reader page buttons, and the volume buttons while
+/// [volumeKeys] is on, through the activity (they arrive whatever has focus).
 class ReaderKeys extends StatefulWidget {
   const ReaderKeys({
     super.key,
@@ -74,19 +74,21 @@ class _ReaderKeysState extends State<ReaderKeys> {
   void initState() {
     super.initState();
     _sub = AppPlatform.keys.listen((k) => k == 'next' ? widget.onNext() : widget.onPrev());
-    AppPlatform.volumeKeys(widget.volumeKeys);
+    AppPlatform.readerKeys(true, volume: widget.volumeKeys);
   }
 
   @override
   void didUpdateWidget(ReaderKeys old) {
     super.didUpdateWidget(old);
-    if (old.volumeKeys != widget.volumeKeys) AppPlatform.volumeKeys(widget.volumeKeys);
+    if (old.volumeKeys != widget.volumeKeys) {
+      AppPlatform.readerKeys(true, volume: widget.volumeKeys);
+    }
   }
 
   @override
   void dispose() {
     _sub?.cancel();
-    AppPlatform.volumeKeys(false);
+    AppPlatform.readerKeys(false);
     super.dispose();
   }
 

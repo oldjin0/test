@@ -22,20 +22,25 @@ import java.io.IOException
 class MainActivity : FlutterActivity() {
     private var appChannel: MethodChannel? = null
 
-    /// While a reader is open with the option on, the volume buttons turn
-    /// pages instead of changing the volume.
+    /// While a reader is open, page buttons (e-readers' hardware buttons,
+    /// keyboards, remotes) turn pages wherever the focus is; with the option
+    /// on, the volume buttons do too instead of changing the volume.
+    private var readerKeys = false
     private var volumeKeys = false
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val code = event.keyCode
-        if (volumeKeys && (code == KeyEvent.KEYCODE_VOLUME_DOWN || code == KeyEvent.KEYCODE_VOLUME_UP)) {
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                appChannel?.invokeMethod(
-                    "key",
-                    if (code == KeyEvent.KEYCODE_VOLUME_DOWN) "next" else "prev",
-                )
+        if (readerKeys) {
+            val turn = when (event.keyCode) {
+                KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT -> "next"
+                KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "prev"
+                KeyEvent.KEYCODE_VOLUME_DOWN -> if (volumeKeys) "next" else null
+                KeyEvent.KEYCODE_VOLUME_UP -> if (volumeKeys) "prev" else null
+                else -> null
             }
-            return true
+            if (turn != null) {
+                if (event.action == KeyEvent.ACTION_DOWN) appChannel?.invokeMethod("key", turn)
+                return true
+            }
         }
         return super.dispatchKeyEvent(event)
     }
@@ -114,8 +119,9 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(null)
                         }
-                        "volumeKeys" -> {
-                            volumeKeys = call.argument<Boolean>("on") == true
+                        "readerKeys" -> {
+                            readerKeys = call.argument<Boolean>("on") == true
+                            volumeKeys = readerKeys && call.argument<Boolean>("volume") == true
                             result.success(null)
                         }
                         "battery" -> {

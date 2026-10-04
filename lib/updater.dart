@@ -73,8 +73,8 @@ class AppPlatform {
 
   static StreamController<String>? _keys;
 
-  /// Page-turn presses of the volume buttons ('next' / 'prev') while
-  /// [volumeKeys] is on.
+  /// Page-turn presses of hardware buttons ('next' / 'prev') while
+  /// [readerKeys] is on.
   static Stream<String> get keys {
     final c = _keys ??= StreamController<String>.broadcast();
     _channel.setMethodCallHandler((call) async {
@@ -83,10 +83,11 @@ class AppPlatform {
     return c.stream;
   }
 
-  /// Lets the volume buttons turn pages (true) or change the volume again.
-  static Future<void> volumeKeys(bool on) async {
+  /// While [on] (a reader is open), page buttons turn pages, and the volume
+  /// buttons too when [volume].
+  static Future<void> readerKeys(bool on, {bool volume = false}) async {
     try {
-      await _channel.invokeMethod('volumeKeys', {'on': on});
+      await _channel.invokeMethod('readerKeys', {'on': on, 'volume': volume});
     } on MissingPluginException {
       // tests / non-Android
     }
