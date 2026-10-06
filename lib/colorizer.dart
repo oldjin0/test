@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
+import 'ink_color.dart';
 import 'xnnpack.dart';
 
 const modelAsset = 'assets/models/colorizer.tflite';
@@ -26,10 +27,14 @@ enum ColorizeMode {
 }
 
 class ColorizeResult {
-  const ColorizeResult(this.bytes, this.mode, this.millis);
+  const ColorizeResult(this.bytes, this.mode, this.millis, {this.plain});
   final Uint8List bytes;
   final ColorizeMode mode;
   final int millis;
+
+  /// With color e-ink processing: the page before it (cached, so a change of
+  /// that setting only redoes the cheap processing, not the model).
+  final Uint8List? plain;
 }
 
 /// What a [ColorModel] predicts.
@@ -342,7 +347,7 @@ ColorizeResult colorizePage(
   double? saturation,
   List<ColorHint> hints = const [],
   PageDenoiser? denoiser,
-  double vivid = 0,
+  double ink = 0,
 }) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
@@ -367,13 +372,43 @@ ColorizeResult colorizePage(
   if (model != null) {
     // The manga model is already vivid; the photo-trained Lab model is not.
     final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
-    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser), vivid);
+    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser));
     mode = ColorizeMode.ai;
   } else {
     out = _toneFilter(src);
     mode = ColorizeMode.filter;
   }
-  return ColorizeResult(img.encodeJpg(out, quality: 88), mode, sw.elapsedMilliseconds);
+  final jpg = img.encodeJpg(out, quality: 88);
+  if (ink > 0 && mode == ColorizeMode.ai) {
+    final rgb = out.getBytes(order: img.ChannelOrder.rgb);
+    InkColor(ink).apply(rgb);
+    final inked = img.Image.fromBytes(
+      width: out.width,
+      height: out.height,
+      bytes: rgb.buffer,
+      numChannels: 3,
+    );
+    return ColorizeResult(
+      img.encodeJpg(inked, quality: 88),
+      mode,
+      sw.elapsedMilliseconds,
+      plain: jpg,
+    );
+  }
+  return ColorizeResult(jpg, mode, sw.elapsedMilliseconds);
+}
+
+/// Color e-ink processing ([InkColor]) of an already colorized page.
+Uint8List inkAdapt(Uint8List jpeg, double ink) {
+  final decoded = img.decodeImage(jpeg);
+  if (decoded == null) return jpeg;
+  final src = decoded.convert(format: img.Format.uint8, numChannels: 3);
+  final rgb = Uint8List.fromList(src.getBytes(order: img.ChannelOrder.rgb));
+  InkColor(ink).apply(rgb);
+  return img.encodeJpg(
+    img.Image.fromBytes(width: src.width, height: src.height, bytes: rgb.buffer, numChannels: 3),
+    quality: 88,
+  );
 }
 
 /// Letterboxes the page into the model input, runs the model, and returns
@@ -556,13 +591,7 @@ Float32List hintInput(Float32List gray, int iw, int ih, int pw, int ph, List<Col
 }
 
 /// Merges low-resolution chroma with the page's own luminance.
-///
-/// [vivid] (0..1) is for screens that wash colors out (color e-ink): the
-/// chroma is raised by up to 40% and colored areas are darkened by up to
-/// 30% in proportion to their chroma, since on white paper a stronger color
-/// has nowhere to go (RGB clips at 255). Uncolored paper and line art stay
-/// as they are.
-img.Image _composeChroma(img.Image src, img.Image chroma, [double vivid = 0]) {
+img.Image _composeChroma(img.Image src, img.Image chroma) {
   final up = img.copyResize(
     chroma,
     width: src.width,
@@ -572,16 +601,9 @@ img.Image _composeChroma(img.Image src, img.Image chroma, [double vivid = 0]) {
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);
   final o = Uint8List(s.length);
-  final gain = 1 + 0.4 * vivid;
   for (var i = 0; i < s.length; i += 3) {
-    var y = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
-    var cb = (c[i] - 128).toDouble(), cr = (c[i + 1] - 128).toDouble();
-    if (vivid > 0) {
-      cb *= gain;
-      cr *= gain;
-      final mag = math.sqrt(cb * cb + cr * cr);
-      y *= 1 - 0.3 * vivid * math.min(1.0, mag / 40);
-    }
+    final y = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
+    final cb = c[i] - 128, cr = c[i + 1] - 128;
     o[i] = (y + 1.402 * cr).round().clamp(0, 255);
     o[i + 1] = (y - 0.344136 * cb - 0.714136 * cr).round().clamp(0, 255);
     o[i + 2] = (y + 1.772 * cb).round().clamp(0, 255);

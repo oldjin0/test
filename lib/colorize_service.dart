@@ -51,13 +51,16 @@ Future<Uint8List?> loadModelBytes([String asset = modelAsset]) async {
 }
 
 class _Job {
-  _Job(this.key, this.load, this.hints, this.denoise) {
+  _Job(this.key, this.load, this.hints, this.denoise) : ink = ColorizeService.ink {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
   }
   final String key;
   final List<ColorHint> hints;
   final bool denoise;
+
+  /// Color e-ink processing strength the job was asked with (0 = none).
+  final double ink;
 
   /// Queued by [ColorizeService.colorizeInBackground] (whole-book colorizing).
   bool background = false;
@@ -91,11 +94,14 @@ class ColorizeService {
   /// sets it to include the input size, since that changes the colors.
   static String cacheTag = modelVersion;
 
-  /// 0 = off. On color e-ink screens (the reader's E-ink mode) 1: colors are
-  /// made darker and stronger at the source, because a white page cannot show
-  /// a stronger color and such a panel washes colors out. Part of the cache
-  /// keys; the library settings set it.
-  static double vivid = 0;
+  /// Color e-ink processing strength ([InkColor]; 0 = off). Part of the
+  /// cache keys; the library settings set it from the E-ink mode.
+  static double ink = 0;
+
+  static final _inkSuffix = RegExp(r'_ink[0-9.]+$');
+
+  /// The cache key of the same page without color e-ink processing.
+  static String plainKey(String key) => key.replaceFirst(_inkSuffix, '');
 
   /// The engine the worker runs on ('xnnpack-fp16', 'directml', 'cpu', ...).
   String backend = '';
@@ -137,11 +143,11 @@ class ColorizeService {
   }) {
     var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag';
     if (denoise) key += '_dn';
-    if (vivid > 0) key += '_vv${vivid.toStringAsFixed(1)}';
     if (hints.isNotEmpty) {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
       key += '_h${md5.convert(h.join(';').codeUnits).toString().substring(0, 12)}';
     }
+    if (ink > 0) key += '_ink${ink.toStringAsFixed(1)}';
     return key;
   }
 
@@ -238,7 +244,10 @@ class ColorizeService {
         unawaited(_pump());
         return;
       }
-      final bytes = await job.load();
+      // With color e-ink processing, a page colorized before only needs that
+      // processing (cheap) rather than the model again.
+      final plain = job.ink > 0 ? await _readJpg(plainKey(job.key)) : null;
+      final bytes = plain ?? await job.load();
       final id = _nextId++;
       _replies[id] = job;
       _worker!.send([
@@ -248,7 +257,8 @@ class ColorizeService {
           for (final h in job.hints) ...[h.x, h.y, h.color.toDouble()],
         ],
         job.denoise,
-        vivid,
+        job.ink,
+        plain != null,
       ]);
     } catch (e) {
       _running = null;
@@ -280,6 +290,11 @@ class ColorizeService {
       final bytes = (m[1] as TransferableTypedData).materialize().asUint8List();
       final result = ColorizeResult(bytes, ColorizeMode.values[m[2] as int], m[3] as int);
       unawaited(_writeCache(job.key, result));
+      if (m.length > 5 && m[5] != null) {
+        // The page before color e-ink processing, for a later change of it.
+        final plain = (m[5] as TransferableTypedData).materialize().asUint8List();
+        unawaited(_writeCache(plainKey(job.key), ColorizeResult(plain, ColorizeMode.ai, 0)));
+      }
       job.completer.complete(result);
     }
     unawaited(_pump());
@@ -287,6 +302,14 @@ class ColorizeService {
 
   File? _file(String key, String ext) =>
       _cacheDir == null ? null : File(p.join(_cacheDir.path, '$key.$ext'));
+
+  Future<Uint8List?> _readJpg(String key) async {
+    try {
+      final jpg = _file(key, 'jpg');
+      if (jpg != null && await jpg.exists()) return await jpg.readAsBytes();
+    } catch (_) {}
+    return null;
+  }
 
   Future<ColorizeResult?> _readCache(String key, Future<Uint8List> Function() load) async {
     try {
@@ -573,14 +596,26 @@ void _workerMain(List args) {
         ColorHint(flat[i], flat[i + 1], flat[i + 2].toInt()),
     ];
     final wantDenoise = m[3] as bool;
-    final vivid = (m[4] as num).toDouble();
+    final ink = (m[4] as num).toDouble();
+    final inkOnly = m[5] as bool; // bytes are a colorized page: process only
     try {
+      if (inkOnly) {
+        final sw = Stopwatch()..start();
+        final out = inkAdapt(bytes, ink);
+        reply.send([
+          id,
+          TransferableTypedData.fromList([out]),
+          ColorizeMode.ai.index,
+          sw.elapsedMilliseconds,
+        ]);
+        return;
+      }
       ColorizeResult run() => colorizePage(
         bytes,
         engine?.model,
         hints: hints,
         denoiser: engine?.denoiserFor(wantDenoise),
-        vivid: vivid,
+        ink: ink,
       );
       ColorizeResult r;
       arm();
@@ -591,11 +626,14 @@ void _workerMain(List args) {
         disarm();
       }
       if (r.mode == ColorizeMode.ai) proven = true;
+      final plain = r.plain;
       reply.send([
         id,
         TransferableTypedData.fromList([r.bytes]),
         r.mode.index,
         r.millis,
+        null,
+        plain == null ? null : TransferableTypedData.fromList([plain]),
       ]);
     } catch (e) {
       reply.send([id, null, 0, 0, '$e']);

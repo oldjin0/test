@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
+import 'ink_color.dart';
 
 class ReadProgress {
   ReadProgress(this.path, this.title, this.page, this.total, this.updatedAt);
@@ -118,6 +119,9 @@ class LibraryStore extends ChangeNotifier {
   /// show washed-out colors: more than 1 makes them stand out.
   double saturation = 1.0;
 
+  /// Color e-ink processing in E-ink mode: 0 off, 1 light, 2 medium, 3 strong.
+  int inkColor = 2;
+
   /// Turn the page by itself every this many seconds (0 = off).
   int autoTurnSeconds = 0;
 
@@ -156,8 +160,8 @@ class LibraryStore extends ChangeNotifier {
     return s;
   }
 
-  /// The e-ink mode asks for colors that survive a washed-out color e-ink panel.
-  void _syncVivid() => ColorizeService.vivid = eink ? 1.0 : 0.0;
+  /// The E-ink mode processes colorized pages for color e-ink panels.
+  void _syncInk() => ColorizeService.ink = eink ? InkColor.strengthOf(inkColor) : 0.0;
 
   void _read() {
     final p = _prefs;
@@ -183,6 +187,13 @@ class LibraryStore extends ChangeNotifier {
     autoCrop = p.getBool('autoCrop') ?? autoCrop;
     contrast = p.getDouble('contrast') ?? contrast;
     saturation = p.getDouble('saturation') ?? saturation;
+    inkColor = p.getInt('inkColor') ?? inkColor;
+    // Build 45 raised the display saturation to 140% with the E-ink mode;
+    // the color e-ink processing replaces that.
+    if (p.getBool('inkMigrated') != true) {
+      if ((saturation - 1.4).abs() < 0.01) saturation = 1.0;
+      p.setBool('inkMigrated', true);
+    }
     autoTurnSeconds = p.getInt('autoTurnSeconds') ?? autoTurnSeconds;
     orientation = p.getString('orientation') ?? orientation;
     showStatus = p.getBool('showStatus') ?? showStatus;
@@ -193,7 +204,7 @@ class LibraryStore extends ChangeNotifier {
     textSize = p.getDouble('textSize') ?? textSize;
     textLineHeight = p.getDouble('textLineHeight') ?? textLineHeight;
     textMargin = p.getDouble('textMargin') ?? textMargin;
-    _syncVivid();
+    _syncInk();
     textTheme = p.getString('textTheme') ?? textTheme;
     textSerif = p.getBool('textSerif') ?? textSerif;
     _readHints(p.getString('hints'));
@@ -244,7 +255,7 @@ class LibraryStore extends ChangeNotifier {
   }
 
   void _changed() {
-    _syncVivid();
+    _syncInk();
     notifyListeners();
     _prefs.setStringList('folders', folders);
     _prefs.setString('progress', jsonEncode([for (final r in _progress.values) r.toJson()]));
@@ -265,6 +276,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('autoCrop', autoCrop);
     _prefs.setDouble('contrast', contrast);
     _prefs.setDouble('saturation', saturation);
+    _prefs.setInt('inkColor', inkColor);
     _prefs.setInt('autoTurnSeconds', autoTurnSeconds);
     _prefs.setString('orientation', orientation);
     _prefs.setBool('showStatus', showStatus);
@@ -378,6 +390,7 @@ class LibraryStore extends ChangeNotifier {
     change(this);
     contrast = contrast.clamp(0.5, 2.5);
     saturation = saturation.clamp(0.0, 3.0);
+    inkColor = inkColor.clamp(0, 3);
     prefetchPages = prefetchPages.clamp(1, 1000);
     textSize = textSize.clamp(10.0, 48.0);
     textLineHeight = textLineHeight.clamp(1.0, 3.0);

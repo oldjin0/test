@@ -15,6 +15,7 @@ import 'package:manga_viewer/main.dart';
 import 'package:manga_viewer/pc_platform.dart';
 import 'package:manga_viewer/updater.dart';
 import 'package:manga_viewer/viewer_page.dart';
+import 'package:path/path.dart' as p;
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:archive/archive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -325,22 +326,45 @@ void main() {
       expect(model.lastInput![0], closeTo(50 / 255, 0.01));
     });
 
-    test('vivid: colors are stronger and darker, in a key of their own', () {
+    test('color e-ink: processed page plus the plain one, in keys of their own', () {
       final im = img.Image(width: 200, height: 100, numChannels: 3);
-      img.fill(im, color: img.ColorRgb8(235, 235, 235)); // light page, so color is clipped
+      img.fill(im, color: img.ColorRgb8(150, 150, 150));
       final page = img.encodePng(im);
-      final plain = img.decodeImage(colorizePage(page, FakeRgbModel()).bytes)!.getPixel(100, 50);
-      final vivid = img
-          .decodeImage(colorizePage(page, FakeRgbModel(), vivid: 1).bytes)!
-          .getPixel(100, 50);
-      int luma(img.Pixel p) => (0.299 * p.r + 0.587 * p.g + 0.114 * p.b).round();
-      expect(vivid.r - vivid.b, greaterThan(plain.r - plain.b), reason: 'stronger color');
-      expect(luma(vivid), lessThan(luma(plain)), reason: 'darker where it is colored');
+      final plain = colorizePage(page, FakeRgbModel());
+      final inked = colorizePage(page, FakeRgbModel(), ink: 1.0);
+      expect(plain.plain, isNull);
+      expect(inked.plain, isNotNull, reason: 'kept for a later change of the setting');
+      final a = img.decodeImage(inked.plain!)!.getPixel(100, 50);
+      final b = img.decodeImage(inked.bytes)!.getPixel(100, 50);
+      expect(a.r, closeTo(img.decodeImage(plain.bytes)!.getPixel(100, 50).r, 2));
+      expect([b.r, b.g, b.b], isNot([a.r, a.g, a.b]), reason: 'processed');
+      final again = img.decodeImage(inkAdapt(inked.plain!, 1.0))!.getPixel(100, 50);
+      expect(again.r, closeTo(b.r, 3), reason: 'processing the plain page gives the same');
 
-      ColorizeService.vivid = 1;
-      final key = ColorizeService.keyFor('/a.cbz', 1);
-      ColorizeService.vivid = 0;
-      expect(key, isNot(ColorizeService.keyFor('/a.cbz', 1)));
+      ColorizeService.ink = 1.0;
+      final key = ColorizeService.keyFor('/a.cbz', 1, denoise: true);
+      ColorizeService.ink = 0;
+      expect(key, endsWith('_ink1.0'));
+      expect(ColorizeService.plainKey(key), ColorizeService.keyFor('/a.cbz', 1, denoise: true));
+    });
+
+    test('color e-ink: a page colorized before is only processed, not run again', () async {
+      final cache = Directory.systemTemp.createTempSync('inkcache');
+      addTearDown(() => cache.deleteSync(recursive: true));
+      final s = await ColorizeService.start(cacheDir: cache); // no model
+      final im = img.Image(width: 60, height: 40, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(120, 170, 110)); // a pale green page
+      final plainKey = ColorizeService.keyFor('/b.cbz', 0);
+      File(p.join(cache.path, '$plainKey.jpg')).writeAsBytesSync(img.encodeJpg(im));
+      ColorizeService.ink = 1.0;
+      final key = ColorizeService.keyFor('/b.cbz', 0);
+      final r = await s.colorize(key, () async => throw StateError('the page is not read'));
+      ColorizeService.ink = 0;
+      expect(r.mode, ColorizeMode.ai);
+      final px = img.decodeImage(r.bytes)!.getPixel(30, 20);
+      expect(px.g - px.r, greaterThan(170 - 120), reason: 'green made stronger');
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(File(p.join(cache.path, '$key.jpg')).existsSync(), isTrue);
     });
 
     test('cache key follows hints and denoise', () {

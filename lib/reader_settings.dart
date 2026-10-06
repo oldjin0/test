@@ -220,10 +220,7 @@ List<Widget> _screenSection(LibraryStore s, {required bool comic}) => [
       key: const ValueKey('saturation'),
       onChanged: (v) => s.update((s) => s.saturation = v),
     ),
-    const Text(
-      '컬러 전자잉크(E-ink)는 색이 옅게 나옵니다. 150~250%로 올리면 채색이 뚜렷해집니다.',
-      style: TextStyle(fontSize: 12),
-    ),
+    const Text('화면 전체의 채도입니다. 컬러 전자잉크는 아래 E-ink 항목의 색 보정을 먼저 쓰세요.', style: TextStyle(fontSize: 12)),
     _switch(
       '여백 자동 자르기',
       s.autoCrop,
@@ -266,24 +263,23 @@ List<Widget> _turnSection(LibraryStore s, {required bool comic}) => [
   ),
 ];
 
-/// Display saturation the E-ink mode starts with.
-const einkSaturation = 1.4;
-
 List<Widget> _einkSection(LibraryStore s) => [
   _header('이북리더기 (E-ink)'),
   _switch(
     'E-ink 모드',
     s.eink,
-    (v) => s.update((s) {
-      s.eink = v;
-      // Color e-ink washes colors out: a livelier default, and the pages are
-      // colored stronger (see ColorizeService.vivid). Back off again when it is
-      // switched off, unless the reader picked their own value.
-      if (v && (s.saturation - 1).abs() < 0.01) s.saturation = einkSaturation;
-      if (!v && (s.saturation - einkSaturation).abs() < 0.01) s.saturation = 1.0;
-    }),
-    subtitle:
-        '애니메이션 없이 즉시 넘기고, 흰 배경 · 움직이는 표시를 없앱니다. 컬러 전자잉크용으로 채색도 더 진하게 만들고 색 선명도를 올립니다 (채색을 새로 합니다)',
+    (v) => s.update((s) => s.eink = v),
+    subtitle: '애니메이션 없이 즉시 넘기고, 흰 배경 · 움직이는 표시를 없앱니다. 컬러 전자잉크 색 보정이 함께 켜집니다',
+  ),
+  _choices(
+    '컬러 전자잉크 색 보정',
+    const {0: '끔', 1: '약', 2: '중', 3: '강'},
+    s.inkColor,
+    (v) => s.update((s) => s.inkColor = v),
+  ),
+  const Text(
+    'E-ink 모드에서 채색한 페이지를 컬러 전자잉크에 맞게 다듬습니다. 얼굴과 빨강은 자연스럽게 두고, 전자잉크에서 약한 초록·파랑·보라를 살리고, 종이는 하얗게 둡니다. 원래 컬러인 책은 바꾸지 않습니다.',
+    style: TextStyle(fontSize: 12),
   ),
   _choices(
     '화면 새로고침 (잔상 제거)',
