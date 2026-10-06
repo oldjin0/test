@@ -246,6 +246,30 @@ ok(fx.smite, '천벌: 화면의 적에게 번개');
 ok(fx.burn, '불씨: 맞은 적이 불탄다');
 ok(fx.crown, '만능의 왕관: 능력치 상승');
 
+// 배경음악 9곡: 오프라인으로 렌더링해 소리가 나고(무음 아님), 깨지지 않고(클리핑 없음), 중간에 끊기지 않는지 본다
+const mus = await ev(async () => {
+  const { createMusic, SONGS } = await import('./js/music.js');
+  const res = {};
+  for (const name of Object.keys(SONGS)) {
+    const SR = 16000, SEC = 24, off = new OfflineAudioContext(2, SR * SEC, SR), bus = off.createGain(); bus.gain.value = 0.32; bus.connect(off.destination);
+    const m = createMusic(off, bus); m.play(name, 0); m.scheduleUntil(SEC);
+    const L = (await off.startRendering()).getChannelData(0);
+    let peak = 0, quiet = 0;
+    for (let s = 0; s < SEC; s++) { let e = 0; for (let i = s * SR; i < (s + 1) * SR; i++) { e += L[i] * L[i]; peak = Math.max(peak, Math.abs(L[i])); } if (Math.sqrt(e / SR) < 0.002) quiet++; }
+    res[name] = { peak, quiet };
+  }
+  return res;
+});
+const swap = await ev(async () => { // 곡이 바뀔 때(챕터 → 보스 → 챕터) 오류 없이 이어지는지
+  const { createMusic } = await import('./js/music.js');
+  const off = new OfflineAudioContext(2, 16000 * 20, 16000), bus = off.createGain(); bus.connect(off.destination);
+  const m = createMusic(off, bus);
+  try { m.play('ch0', 0); m.scheduleUntil(4); m.play('boss', 4); m.scheduleUntil(10); m.play('mid', 10); m.scheduleUntil(14); m.play('ch0', 14); m.scheduleUntil(18); m.stop(); await off.startRendering(); return true; } catch (e) { return String(e); }
+});
+ok(swap === true, `곡 전환 (${swap})`);
+ok(Object.keys(mus).length === 9, `배경음악 ${Object.keys(mus).length}곡`);
+ok(Object.values(mus).every((m) => m.peak > 0.05 && m.peak < 0.9 && m.quiet === 0), `배경음악이 모두 소리가 나고 깨지지 않음 (${Object.entries(mus).map(([n, m]) => n + ':' + m.peak.toFixed(2)).join(' ')})`);
+
 // 부활: 쓰러지면 한 번 기회. 브라우저에서는 광고 없이 바로 보상된다
 await ev(() => { const S = __ed.S; S.save.unlocked = 99; S.save.tutorial = 1; __ed.startRun(0); __ed.show(null); S.G.t = 10; S.G.nextPick = 999; });
 await ev(() => { const G = __ed.S.G; G.hero.inv = 0; G.hero.st.shield = 0; G.hero.hp = 1; G.enemies.push({ type: 'slime', x: G.hero.x, y: G.hero.y, r: 11, hp: 99, maxhp: 99, sp: 0, dmg: 50, seed: 1, flash: 0, bt: 0, dead: false, face: 1, t: 1, z: 0, slowT: 0, slow: 0 }); __ed.step(); });

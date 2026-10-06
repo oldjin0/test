@@ -1,5 +1,6 @@
 // 효과음과 배경음악을 모두 WebAudio로 합성한다 (음원 파일 없음 → 저작권 걱정 없음, 용량 0)
 import { S } from './state.js';
+import { createMusic } from './music.js';
 
 let ac = null, master = null, sfxBus = null, musBus = null;
 const last = {};
@@ -12,7 +13,7 @@ export function unlockAudio() {
       sfxBus = ac.createGain(); sfxBus.connect(master);
       musBus = ac.createGain(); musBus.gain.value = 0.32; musBus.connect(master);
       applyAudioSettings();
-      if (cur && !timer) { nextT = ac.currentTime + 0.05; timer = setInterval(schedule, 25); }
+      ensureMusic();
     }
     if (ac.state === 'suspended') ac.resume();
   } catch (e) { ac = null; }
@@ -80,42 +81,17 @@ export const sfx = {
   buy: () => play('buy', 0.05, (t) => { tone(sfxBus, mtof(76), t, 0.08, 'square', 0.04); tone(sfxBus, mtof(83), t + 0.07, 0.15, 'square', 0.04); }),
 };
 
-/* ---------- 배경음악: 간단한 칩튠 시퀀서 ---------- */
-// 코드 진행(근음 MIDI)과 아르페지오 패턴으로 곡을 만든다
-const TRACKS = {
-  title: { bpm: 92, chords: [57, 53, 48, 55], arp: [0, 7, 12, 16, 12, 7, 0, 7], minor: true, lead: 'triangle', drums: false },
-  battle: { bpm: 138, chords: [57, 53, 55, 52], arp: [0, 12, 7, 12, 3, 12, 7, 12], minor: true, lead: 'square', drums: true },
-  boss: { bpm: 156, chords: [52, 53, 52, 50], arp: [0, 12, 0, 13, 0, 12, 7, 6], minor: true, lead: 'sawtooth', drums: true },
-};
-let cur = null, step = 0, nextT = 0, timer = null;
-
+/* ---------- 배경음악: music.js의 작곡 엔진 ---------- */
+// 곡 이름: title, ch0~ch5(챕터별), mid(중간 보스), boss(최종 보스)
+let music = null, want = null, tickT = null;
+function ensureMusic() {
+  if (music || !ac) return;
+  music = createMusic(ac, musBus);
+  tickT = setInterval(() => music.tick(), 40);
+  if (want) music.play(want);
+}
 export function playMusic(name) {
-  if (cur === name) return;
-  cur = name; step = 0;
-  if (!ac) return;
-  nextT = ac.currentTime + 0.05;
-  if (!timer) timer = setInterval(schedule, 25);
+  want = name;
+  if (music) music.play(name);
 }
-export function stopMusic() { cur = null; }
-
-function schedule() {
-  if (!ac || !cur || ac.state !== 'running') return;
-  const tr = TRACKS[cur], s16 = 60 / tr.bpm / 4;
-  while (nextT < ac.currentTime + 0.12) {
-    const bar = Math.floor(step / 16) % tr.chords.length, i = step % 16;
-    const root = tr.chords[bar];
-    const third = tr.minor && bar % 2 === 0 ? 3 : 4;
-    if (i % 4 === 0) tone(musBus, mtof(root - 12), nextT, s16 * 3.5, 'triangle', 0.22);
-    if (i % 2 === 0) {
-      let n = tr.arp[(i / 2) % tr.arp.length];
-      if (n === 4 || n === 16) n += third - 4;
-      tone(musBus, mtof(root + 12 + n), nextT, s16 * 1.6, tr.lead, tr.lead === 'triangle' ? 0.1 : 0.045);
-    }
-    if (tr.drums) {
-      if (i % 8 === 0) tone(musBus, 140, nextT, 0.12, 'sine', 0.35, 45);
-      if (i % 8 === 4) noise(musBus, nextT, 0.08, 0.12, 1500);
-      if (i % 2 === 1) noise(musBus, nextT, 0.025, 0.05, 7000);
-    }
-    nextT += s16; step++;
-  }
-}
+export function stopMusic() { want = null; if (music) music.stop(); }

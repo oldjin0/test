@@ -50,7 +50,7 @@ export function startRun(k) {
   };
   updateCam(S.G, true);
   S.scene = 'play';
-  playMusic('battle');
+  playMusic('ch' + ch);
 }
 
 // 카메라: 영웅을 따라가되 월드 밖은 보이지 않게 한다
@@ -363,7 +363,7 @@ function killEnemy(e, src) {
     floatText(e.x, e.y - 40, '복수 성공!', '#ff7a8a', 2, 20);
   }
   if (e.mid) {
-    G.mid = null; G.pendingPicks++; G.shake = 9; G.flash = 0.35; haptic('heavy'); sfx.chest();
+    G.mid = null; playMusic('ch' + G.ch); G.pendingPicks++; G.shake = 9; G.flash = 0.35; haptic('heavy'); sfx.chest();
     floatText(e.x, e.y - 40, '중간 보스 처치! 보물 카드', '#ffe27a', 2, 16);
   }
   if (e.final) { G.shake = 12; G.flash = 0.6; haptic('heavy'); endRun(true); }
@@ -647,7 +647,7 @@ export function step() {
   if (nm && !bossTime && !G.mid && G.t >= nm.t) { // 중간 보스
     G.midIdx++;
     const e = spawnBoss(nm.id, false, nm.scale);
-    G.mid = e;
+    G.mid = e; playMusic('mid');
     floatText(G.cam.x + W / 2, G.cam.y + 160, `중간 보스 ${e.name}!`, '#ffb15c', 2, 18);
   }
 
