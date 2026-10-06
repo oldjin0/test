@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
 
 class ReadProgress {
@@ -155,6 +156,9 @@ class LibraryStore extends ChangeNotifier {
     return s;
   }
 
+  /// The e-ink mode asks for colors that survive a washed-out color e-ink panel.
+  void _syncVivid() => ColorizeService.vivid = eink ? 1.0 : 0.0;
+
   void _read() {
     final p = _prefs;
     folders.addAll(p.getStringList('folders') ?? const []);
@@ -189,6 +193,7 @@ class LibraryStore extends ChangeNotifier {
     textSize = p.getDouble('textSize') ?? textSize;
     textLineHeight = p.getDouble('textLineHeight') ?? textLineHeight;
     textMargin = p.getDouble('textMargin') ?? textMargin;
+    _syncVivid();
     textTheme = p.getString('textTheme') ?? textTheme;
     textSerif = p.getBool('textSerif') ?? textSerif;
     _readHints(p.getString('hints'));
@@ -239,6 +244,7 @@ class LibraryStore extends ChangeNotifier {
   }
 
   void _changed() {
+    _syncVivid();
     notifyListeners();
     _prefs.setStringList('folders', folders);
     _prefs.setString('progress', jsonEncode([for (final r in _progress.values) r.toJson()]));

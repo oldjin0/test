@@ -184,6 +184,7 @@ class _ViewerPageState extends State<ViewerPage> {
   late bool _vertical = _store.vertical;
   late bool _colorize = _store.colorize;
   late bool _denoise = _store.denoise;
+  late bool _eink = _store.eink;
   late bool _autoCrop = _store.autoCrop;
   late int _prefetch = _store.prefetchPages;
   late String _orientation = _store.orientation;
@@ -211,8 +212,9 @@ class _ViewerPageState extends State<ViewerPage> {
         pages.margins = _autoCrop ? findMargins : null;
         pages.refresh();
       }
-      if (_denoise != _store.denoise || _prefetch != _store.prefetchPages) {
+      if (_denoise != _store.denoise || _prefetch != _store.prefetchPages || _eink != _store.eink) {
         _denoise = _store.denoise;
+        _eink = _store.eink; // the colors are made differently: new cache keys
         _prefetch = _store.prefetchPages;
         _focus();
       }

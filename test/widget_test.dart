@@ -325,6 +325,24 @@ void main() {
       expect(model.lastInput![0], closeTo(50 / 255, 0.01));
     });
 
+    test('vivid: colors are stronger and darker, in a key of their own', () {
+      final im = img.Image(width: 200, height: 100, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(235, 235, 235)); // light page, so color is clipped
+      final page = img.encodePng(im);
+      final plain = img.decodeImage(colorizePage(page, FakeRgbModel()).bytes)!.getPixel(100, 50);
+      final vivid = img
+          .decodeImage(colorizePage(page, FakeRgbModel(), vivid: 1).bytes)!
+          .getPixel(100, 50);
+      int luma(img.Pixel p) => (0.299 * p.r + 0.587 * p.g + 0.114 * p.b).round();
+      expect(vivid.r - vivid.b, greaterThan(plain.r - plain.b), reason: 'stronger color');
+      expect(luma(vivid), lessThan(luma(plain)), reason: 'darker where it is colored');
+
+      ColorizeService.vivid = 1;
+      final key = ColorizeService.keyFor('/a.cbz', 1);
+      ColorizeService.vivid = 0;
+      expect(key, isNot(ColorizeService.keyFor('/a.cbz', 1)));
+    });
+
     test('cache key follows hints and denoise', () {
       final plain = ColorizeService.keyFor('/a.cbz', 1);
       final dn = ColorizeService.keyFor('/a.cbz', 1, denoise: true);

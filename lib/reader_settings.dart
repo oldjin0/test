@@ -266,13 +266,24 @@ List<Widget> _turnSection(LibraryStore s, {required bool comic}) => [
   ),
 ];
 
+/// Display saturation the E-ink mode starts with.
+const einkSaturation = 1.4;
+
 List<Widget> _einkSection(LibraryStore s) => [
   _header('이북리더기 (E-ink)'),
   _switch(
     'E-ink 모드',
     s.eink,
-    (v) => s.update((s) => s.eink = v),
-    subtitle: '애니메이션 없이 즉시 넘기고, 흰 배경 · 움직이는 표시를 없앱니다',
+    (v) => s.update((s) {
+      s.eink = v;
+      // Color e-ink washes colors out: a livelier default, and the pages are
+      // colored stronger (see ColorizeService.vivid). Back off again when it is
+      // switched off, unless the reader picked their own value.
+      if (v && (s.saturation - 1).abs() < 0.01) s.saturation = einkSaturation;
+      if (!v && (s.saturation - einkSaturation).abs() < 0.01) s.saturation = 1.0;
+    }),
+    subtitle:
+        '애니메이션 없이 즉시 넘기고, 흰 배경 · 움직이는 표시를 없앱니다. 컬러 전자잉크용으로 채색도 더 진하게 만들고 색 선명도를 올립니다 (채색을 새로 합니다)',
   ),
   _choices(
     '화면 새로고침 (잔상 제거)',

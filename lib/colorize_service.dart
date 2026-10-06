@@ -91,6 +91,12 @@ class ColorizeService {
   /// sets it to include the input size, since that changes the colors.
   static String cacheTag = modelVersion;
 
+  /// 0 = off. On color e-ink screens (the reader's E-ink mode) 1: colors are
+  /// made darker and stronger at the source, because a white page cannot show
+  /// a stronger color and such a panel washes colors out. Part of the cache
+  /// keys; the library settings set it.
+  static double vivid = 0;
+
   /// The engine the worker runs on ('xnnpack-fp16', 'directml', 'cpu', ...).
   String backend = '';
 
@@ -131,6 +137,7 @@ class ColorizeService {
   }) {
     var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag';
     if (denoise) key += '_dn';
+    if (vivid > 0) key += '_vv${vivid.toStringAsFixed(1)}';
     if (hints.isNotEmpty) {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
       key += '_h${md5.convert(h.join(';').codeUnits).toString().substring(0, 12)}';
@@ -241,6 +248,7 @@ class ColorizeService {
           for (final h in job.hints) ...[h.x, h.y, h.color.toDouble()],
         ],
         job.denoise,
+        vivid,
       ]);
     } catch (e) {
       _running = null;
@@ -565,12 +573,14 @@ void _workerMain(List args) {
         ColorHint(flat[i], flat[i + 1], flat[i + 2].toInt()),
     ];
     final wantDenoise = m[3] as bool;
+    final vivid = (m[4] as num).toDouble();
     try {
       ColorizeResult run() => colorizePage(
         bytes,
         engine?.model,
         hints: hints,
         denoiser: engine?.denoiserFor(wantDenoise),
+        vivid: vivid,
       );
       ColorizeResult r;
       arm();
