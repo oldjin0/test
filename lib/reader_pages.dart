@@ -41,6 +41,11 @@ class ColorOptions {
 ///
 /// Widgets read [original], [colored] and [crop] synchronously and listen
 /// for changes.
+/// How many pages ahead keep coloring in the background after the reader
+/// closes (and at start-up): "whole book" in the settings would otherwise
+/// keep a phone or reader busy for hours.
+const backgroundPages = 50;
+
 class ReaderPages extends ChangeNotifier {
   ReaderPages({
     required this.book,
@@ -136,7 +141,7 @@ class ReaderPages extends ChangeNotifier {
   void handOff() {
     final service = _service;
     if (!_colorize || service == null) return;
-    for (final i in _focus.ahead) {
+    for (final i in _focus.ahead.take(backgroundPages)) {
       if (colorReady(i)) continue;
       final opts = colorOptions(i);
       service

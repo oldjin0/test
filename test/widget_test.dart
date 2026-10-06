@@ -331,20 +331,20 @@ void main() {
       img.fill(im, color: img.ColorRgb8(150, 150, 150));
       final page = img.encodePng(im);
       final plain = colorizePage(page, FakeRgbModel());
-      final inked = colorizePage(page, FakeRgbModel(), ink: 1.0);
+      final inked = colorizePage(page, FakeRgbModel(), ink: 2);
       expect(plain.plain, isNull);
       expect(inked.plain, isNotNull, reason: 'kept for a later change of the setting');
       final a = img.decodeImage(inked.plain!)!.getPixel(100, 50);
       final b = img.decodeImage(inked.bytes)!.getPixel(100, 50);
       expect(a.r, closeTo(img.decodeImage(plain.bytes)!.getPixel(100, 50).r, 2));
       expect([b.r, b.g, b.b], isNot([a.r, a.g, a.b]), reason: 'processed');
-      final again = img.decodeImage(inkAdapt(inked.plain!, 1.0))!.getPixel(100, 50);
+      final again = img.decodeImage(inkAdapt(inked.plain!, 2))!.getPixel(100, 50);
       expect(again.r, closeTo(b.r, 3), reason: 'processing the plain page gives the same');
 
-      ColorizeService.ink = 1.0;
+      ColorizeService.ink = 2;
       final key = ColorizeService.keyFor('/a.cbz', 1, denoise: true);
       ColorizeService.ink = 0;
-      expect(key, endsWith('_ink1.0'));
+      expect(key, endsWith('_ink2'));
       expect(ColorizeService.plainKey(key), ColorizeService.keyFor('/a.cbz', 1, denoise: true));
     });
 
@@ -362,7 +362,7 @@ void main() {
       img.fill(im, color: img.ColorRgb8(120, 170, 110)); // a pale green page
       final plainKey = ColorizeService.keyFor('/b.cbz', 0);
       File(p.join(cache.path, '$plainKey.jpg')).writeAsBytesSync(img.encodeJpg(im));
-      ColorizeService.ink = 1.0;
+      ColorizeService.ink = 2;
       final key = ColorizeService.keyFor('/b.cbz', 0);
       final r = await s.colorize(key, () async => throw StateError('the page is not read'));
       ColorizeService.ink = 0;

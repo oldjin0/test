@@ -347,7 +347,7 @@ ColorizeResult colorizePage(
   double? saturation,
   List<ColorHint> hints = const [],
   PageDenoiser? denoiser,
-  double ink = 0,
+  int ink = 0,
 }) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
@@ -381,7 +381,7 @@ ColorizeResult colorizePage(
   final jpg = img.encodeJpg(out, quality: 88);
   if (ink > 0 && mode == ColorizeMode.ai) {
     final rgb = out.getBytes(order: img.ChannelOrder.rgb);
-    InkColor(ink).apply(rgb);
+    InkColor.adapt(rgb, ink);
     final inked = img.Image.fromBytes(
       width: out.width,
       height: out.height,
@@ -399,12 +399,12 @@ ColorizeResult colorizePage(
 }
 
 /// Color e-ink processing ([InkColor]) of an already colorized page.
-Uint8List inkAdapt(Uint8List jpeg, double ink) {
+Uint8List inkAdapt(Uint8List jpeg, int ink) {
   final decoded = img.decodeImage(jpeg);
   if (decoded == null) return jpeg;
   final src = decoded.convert(format: img.Format.uint8, numChannels: 3);
   final rgb = Uint8List.fromList(src.getBytes(order: img.ChannelOrder.rgb));
-  InkColor(ink).apply(rgb);
+  InkColor.adapt(rgb, ink);
   return img.encodeJpg(
     img.Image.fromBytes(width: src.width, height: src.height, bytes: rgb.buffer, numChannels: 3),
     quality: 88,

@@ -32,7 +32,10 @@ Future<void> prepareNextPages(LibraryStore store, ColorizeService service) async
   if (!await FileSystemEntity.isDirectory(last.path) && !await File(last.path).exists()) return;
   try {
     final book = await ComicBook.open(last.path, window: 4);
-    final end = math.min(book.length, last.page + 1 + store.prefetchPages);
+    final end = math.min(
+      book.length,
+      last.page + 1 + math.min(store.prefetchPages, backgroundPages),
+    );
     for (var i = last.page; i < end; i++) {
       service
           .colorizeInBackground(
@@ -184,7 +187,7 @@ class _ViewerPageState extends State<ViewerPage> {
   late bool _vertical = _store.vertical;
   late bool _colorize = _store.colorize;
   late bool _denoise = _store.denoise;
-  late double _ink = ColorizeService.ink;
+  late int _ink = ColorizeService.ink;
   late bool _autoCrop = _store.autoCrop;
   late int _prefetch = _store.prefetchPages;
   late String _orientation = _store.orientation;

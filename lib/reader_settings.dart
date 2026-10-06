@@ -273,7 +273,7 @@ List<Widget> _einkSection(LibraryStore s) => [
   ),
   _choices(
     '컬러 전자잉크 색 보정',
-    const {0: '끔', 1: '약', 2: '중', 3: '강'},
+    const {0: '끔', 1: '약', 2: '중', 3: '강', 4: '최강'},
     s.inkColor,
     (v) => s.update((s) => s.inkColor = v),
   ),

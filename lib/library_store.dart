@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
-import 'ink_color.dart';
 
 class ReadProgress {
   ReadProgress(this.path, this.title, this.page, this.total, this.updatedAt);
@@ -119,8 +118,9 @@ class LibraryStore extends ChangeNotifier {
   /// show washed-out colors: more than 1 makes them stand out.
   double saturation = 1.0;
 
-  /// Color e-ink processing in E-ink mode: 0 off, 1 light, 2 medium, 3 strong.
-  int inkColor = 2;
+  /// Color e-ink processing in E-ink mode: 0 off, 1 light, 2 medium, 3 strong,
+  /// 4 maximum.
+  int inkColor = 3;
 
   /// Turn the page by itself every this many seconds (0 = off).
   int autoTurnSeconds = 0;
@@ -161,7 +161,7 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// The E-ink mode processes colorized pages for color e-ink panels.
-  void _syncInk() => ColorizeService.ink = eink ? InkColor.strengthOf(inkColor) : 0.0;
+  void _syncInk() => ColorizeService.ink = eink ? inkColor : 0;
 
   void _read() {
     final p = _prefs;
@@ -193,6 +193,11 @@ class LibraryStore extends ChangeNotifier {
     if (p.getBool('inkMigrated') != true) {
       if ((saturation - 1.4).abs() < 0.01) saturation = 1.0;
       p.setBool('inkMigrated', true);
+    }
+    // Build 46 started at "medium", which was too faint on a real panel.
+    if (p.getBool('inkMigrated2') != true) {
+      if (inkColor == 2) inkColor = 3;
+      p.setBool('inkMigrated2', true);
     }
     autoTurnSeconds = p.getInt('autoTurnSeconds') ?? autoTurnSeconds;
     orientation = p.getString('orientation') ?? orientation;
@@ -390,7 +395,7 @@ class LibraryStore extends ChangeNotifier {
     change(this);
     contrast = contrast.clamp(0.5, 2.5);
     saturation = saturation.clamp(0.0, 3.0);
-    inkColor = inkColor.clamp(0, 3);
+    inkColor = inkColor.clamp(0, 4);
     prefetchPages = prefetchPages.clamp(1, 1000);
     textSize = textSize.clamp(10.0, 48.0);
     textLineHeight = textLineHeight.clamp(1.0, 3.0);

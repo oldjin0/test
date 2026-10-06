@@ -18,20 +18,66 @@ import 'dart:typed_data';
 ///
 /// The transform is baked into a 33x33x33 RGB lookup table and applied with
 /// trilinear interpolation, so a page costs one table lookup per pixel.
+///
+/// Pages differ a lot in how much color the model gave them, so [adapt]
+/// raises the gain page by page until the page's strong colors reach the
+/// chroma the chosen level aims for: a pale page gets more, a vivid one
+/// little, and every page ends up about as colorful on the panel.
 class InkColor {
-  InkColor._(this.strength, this._table);
+  InkColor._(this.strength, this.boost, this._table);
 
   static const _n = 33;
-  static final _cache = <double, InkColor>{};
+  static final _cache = <String, InkColor>{};
 
-  /// The table for [strength] (0.6 light, 1 medium, 1.6 strong), built once.
-  factory InkColor(double strength) => _cache[strength] ??= InkColor._(strength, _build(strength));
+  /// The table for [strength] (0.6 light ... 2.2 maximum) with the extra
+  /// gain [boost] (1 = none), built once.
+  factory InkColor(double strength, [double boost = 1.0]) =>
+      _cache['$strength/$boost'] ??= InkColor._(strength, boost, _build(strength, boost));
 
   final double strength;
+  final double boost;
   final Uint8List _table; // _n^3 RGB triples, red slowest
 
-  /// Strength for the reader's level (0 off, 1 light, 2 medium, 3 strong).
-  static double strengthOf(int level) => const [0.0, 0.6, 1.0, 1.6][level.clamp(0, 3)];
+  /// Strength for the reader's level (0 off, 1 light, 2 medium, 3 strong,
+  /// 4 maximum).
+  static double strengthOf(int level) => const [0.0, 0.6, 1.0, 1.6, 2.2][level.clamp(0, 4)];
+
+  /// CIE chroma the strong colors of a page are brought to at [level]; the
+  /// reference is a color image shown on the panel, whose colors look
+  /// muted but clearly present at about 55.
+  static double targetChroma(int level) => const [0.0, 32.0, 44.0, 56.0, 68.0][level.clamp(0, 4)];
+
+  /// Processes tightly packed RGB bytes in place for [level] (1..4), with the
+  /// gain chosen for this page.
+  static void adapt(Uint8List rgb, int level) {
+    if (level <= 0) return;
+    final s = strengthOf(level), target = targetChroma(level);
+    // A sample of the page's colored (not paper, not line art) pixels.
+    final samples = <List<double>>[];
+    final step = math.max(3, (rgb.length ~/ 3 ~/ 6000)) * 3;
+    for (var i = 0; i + 2 < rgb.length; i += step) {
+      final lab = _rgbToLab(rgb[i].toDouble(), rgb[i + 1].toDouble(), rgb[i + 2].toDouble());
+      final c = math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+      if (c >= 4 && lab[0] > 8 && lab[0] < 96) {
+        samples.add([rgb[i].toDouble(), rgb[i + 1].toDouble(), rgb[i + 2].toDouble()]);
+      }
+    }
+    var boost = 1.0;
+    if (samples.length >= 40) {
+      for (final b in const [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]) {
+        boost = b;
+        final chromas = <double>[];
+        for (final px in samples) {
+          final o = _transform(px[0], px[1], px[2], s, b);
+          final lab = _rgbToLab(o.$1.toDouble(), o.$2.toDouble(), o.$3.toDouble());
+          chromas.add(math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]));
+        }
+        chromas.sort();
+        if (chromas[(chromas.length * 0.9).floor().clamp(0, chromas.length - 1)] >= target) break;
+      }
+    }
+    InkColor(s, boost).apply(rgb);
+  }
 
   /// Transforms one color (for tests and previews).
   (int, int, int) map(int r, int g, int b) {
@@ -78,14 +124,20 @@ class InkColor {
     }
   }
 
-  static Uint8List _build(double s) {
+  static Uint8List _build(double s, double boost) {
     const n = _n;
     final t = Uint8List(n * n * n * 3);
     var k = 0;
     for (var ri = 0; ri < n; ri++) {
       for (var gi = 0; gi < n; gi++) {
         for (var bi = 0; bi < n; bi++) {
-          final out = _transform(ri * 255 / (n - 1), gi * 255 / (n - 1), bi * 255 / (n - 1), s);
+          final out = _transform(
+            ri * 255 / (n - 1),
+            gi * 255 / (n - 1),
+            bi * 255 / (n - 1),
+            s,
+            boost,
+          );
           t[k++] = out.$1;
           t[k++] = out.$2;
           t[k++] = out.$3;
@@ -100,7 +152,7 @@ class InkColor {
     return t * t * (3 - 2 * t);
   }
 
-  static (int, int, int) _transform(double r, double g, double b, double s) {
+  static (int, int, int) _transform(double r, double g, double b, double s, double boost) {
     final lab = _rgbToLab(r, g, b);
     final l = lab[0], a = lab[1], bb = lab[2];
     final c = math.sqrt(a * a + bb * bb);
@@ -112,7 +164,7 @@ class InkColor {
     if (d > 180) d = 360 - d;
     final warm = math.pow(math.max(0.0, math.cos(math.min(d, 90.0) * math.pi / 180)), 1.5);
     // Already vivid colors need little; pale ones most.
-    var gain = 1 + s * (0.5 * warm + 1.6 * (1 - warm)) * w * (1 - 0.7 * _smooth(35, 75, c));
+    var gain = 1 + s * boost * (0.5 * warm + 1.6 * (1 - warm)) * w * (1 - 0.7 * _smooth(35, 75, c));
     // Light and faint: the tint the model spreads over the paper.
     final paper = _smooth(80, 90, l) * (1 - _smooth(14, 26, c));
     gain = gain * (1 - paper) + (1 - 0.5 * s) * paper;

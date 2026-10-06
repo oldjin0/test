@@ -59,8 +59,8 @@ class _Job {
   final List<ColorHint> hints;
   final bool denoise;
 
-  /// Color e-ink processing strength the job was asked with (0 = none).
-  final double ink;
+  /// Color e-ink processing level the job was asked with (0 = none).
+  final int ink;
 
   /// Queued by [ColorizeService.colorizeInBackground] (whole-book colorizing).
   bool background = false;
@@ -94,11 +94,11 @@ class ColorizeService {
   /// sets it to include the input size, since that changes the colors.
   static String cacheTag = modelVersion;
 
-  /// Color e-ink processing strength ([InkColor]; 0 = off). Part of the
+  /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.
-  static double ink = 0;
+  static int ink = 0;
 
-  static final _inkSuffix = RegExp(r'_ink[0-9.]+$');
+  static final _inkSuffix = RegExp(r'_ink[0-9]+$');
 
   /// The cache key of the same page without color e-ink processing.
   static String plainKey(String key) => key.replaceFirst(_inkSuffix, '');
@@ -147,7 +147,7 @@ class ColorizeService {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
       key += '_h${md5.convert(h.join(';').codeUnits).toString().substring(0, 12)}';
     }
-    if (ink > 0) key += '_ink${ink.toStringAsFixed(1)}';
+    if (ink > 0) key += '_ink$ink';
     return key;
   }
 
@@ -596,7 +596,7 @@ void _workerMain(List args) {
         ColorHint(flat[i], flat[i + 1], flat[i + 2].toInt()),
     ];
     final wantDenoise = m[3] as bool;
-    final ink = (m[4] as num).toDouble();
+    final ink = m[4] as int;
     final inkOnly = m[5] as bool; // bytes are a colorized page: process only
     try {
       if (inkOnly) {
