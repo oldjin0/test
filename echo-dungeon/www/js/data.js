@@ -1,9 +1,11 @@
 import { S } from './state.js';
 import { mulberry32, dateKey } from './util.js';
 
-export const VERSION = '0.5.0';
+export const VERSION = '0.6.0';
 export const W = 360, H = 640;
-export const ARENA = { x: 14, y: 78, w: 332, h: 528 };
+// 월드는 화면(W×H)보다 훨씬 넓고, 카메라가 영웅을 따라간다
+export const ARENA = { x: 0, y: 0, w: 720, h: 1100 };
+export const OLD_TO_NEW = { x: 180, y: 277 }; // 예전(좁은 방) 좌표로 저장된 메아리를 새 월드로 옮기는 값
 export const RUN_TIME = 60;
 export const PICK_EVERY = 10;
 
@@ -77,6 +79,7 @@ export const RARITY = [
   { name: '희귀', col: '#59b0ff', w: 30 },
   { name: '영웅', col: '#c56bff', w: 12 },
   { name: '진화', col: '#ffcf3e', w: 45 },
+  { name: '전설', col: '#ff6b5d', w: 55 },
 ];
 export const CARDS = [
   { id: 'rapid', ic: '⚡', name: '연사', rar: 0, max: 5, desc: '공격 속도 +20%', apply: (s) => { s.cd *= 0.83; } },
@@ -103,6 +106,72 @@ export const CARDS = [
     apply: (s) => { s.legion = 1; s.echoAmp += 1.5; } },
   { id: 'thunder', ic: '⛈️', name: '천둥 폭풍', rar: 3, max: 1, desc: '번개가 3번 더 튀고 항상 치명타', req: (s) => (s.lv.bolt || 0) >= 2 && (s.lv.crit || 0) >= 1,
     apply: (s) => { s.boltChain += 3; s.boltCrit = 1; } },
+  /* ---------- 새 카드 50장 ---------- */
+  // 공격
+  { id: 'sharp', ic: '🗡️', name: '날카로운 날', rar: 0, max: 4, desc: '치명타 피해 +30%', apply: (s) => { s.critMul += 0.3; } },
+  { id: 'longshot', ic: '🔭', name: '장거리 사격', rar: 0, max: 3, desc: '사거리 +18%', apply: (s) => { s.range *= 1.18; s.shotLife *= 1.18; } },
+  { id: 'swiftshot', ic: '💨', name: '쾌속탄', rar: 0, max: 3, desc: '투사체 속도 +25%', apply: (s) => { s.shotSpeed *= 1.25; } },
+  { id: 'bigshot', ic: '⭕', name: '대형탄', rar: 0, max: 3, desc: '투사체가 커져 맞추기 쉽다', apply: (s) => { s.hitR *= 1.35; } },
+  { id: 'splash', ic: '💫', name: '파편탄', rar: 1, max: 3, desc: '맞은 적 주변에도 60% 피해', apply: (s) => { s.splash = (s.splash || 0) + 24; } },
+  { id: 'heavy', ic: '🔨', name: '묵직한 일격', rar: 0, max: 3, desc: '피해 +40%, 공격 속도 -10%', apply: (s) => { s.dmg *= 1.4; s.cd *= 1.1; } },
+  { id: 'flurry', ic: '🌪️', name: '난사', rar: 1, max: 3, desc: '공격 속도 +33%, 피해 -10%', apply: (s) => { s.cd *= 0.75; s.dmg *= 0.9; } },
+  { id: 'twin', ic: '👯', name: '쌍둥이 탄', rar: 2, max: 2, desc: '투사체 +1, 피해 -15%', apply: (s) => { s.shots += 1; s.dmg *= 0.85; } },
+  { id: 'pierce2', ic: '🪡', name: '천공', rar: 1, max: 3, desc: '관통 +2, 피해 +10%', apply: (s) => { s.pierce += 2; s.dmg *= 1.1; } },
+  { id: 'homing', ic: '🎯', name: '유도탄', rar: 1, max: 3, desc: '투사체가 적을 따라 휘어진다', apply: (s) => { s.homing += 1; } },
+  { id: 'ricochet', ic: '↪️', name: '도탄', rar: 2, max: 3, desc: '맞은 투사체가 다른 적에게 튕긴다', apply: (s) => { s.ricochet += 1; } },
+  // 상태 이상 · 조건부 피해
+  { id: 'ember', ic: '🔥', name: '불씨', rar: 1, max: 3, desc: '맞은 적이 3초 동안 불탄다', apply: (s) => { s.burn += 1; } },
+  { id: 'inferno', ic: '🌋', name: '지옥불', rar: 2, max: 2, desc: '불타는 피해 2배', req: (s) => (s.lv.ember || 0) >= 1, apply: (s) => { s.burn += 2; } },
+  { id: 'execute', ic: '☠️', name: '처형', rar: 1, max: 3, desc: '체력 25% 이하 적에게 피해 +60%', apply: (s) => { s.execute += 0.6; } },
+  { id: 'bossbane', ic: '👑', name: '왕 사냥꾼', rar: 1, max: 3, desc: '보스에게 피해 +35%', apply: (s) => { s.bossDmg += 0.35; } },
+  { id: 'elitebane', ic: '🏅', name: '정예 사냥꾼', rar: 0, max: 3, desc: '정예 몬스터에게 피해 +40%', apply: (s) => { s.eliteDmg += 0.4; } },
+  { id: 'berserk', ic: '😡', name: '광전사', rar: 1, max: 3, desc: '체력 50% 이하일 때 피해 +60%', apply: (s) => { s.berserk += 1; } },
+  { id: 'momentum', ic: '🏃', name: '질주 타격', rar: 0, max: 3, desc: '움직이는 동안 피해 +25%', apply: (s) => { s.moveDmg += 1; } },
+  { id: 'still', ic: '🧘', name: '침착', rar: 0, max: 3, desc: '멈춰 있는 동안 피해 +30%', apply: (s) => { s.stillDmg += 1; } },
+  { id: 'sniper', ic: '🔬', name: '저격 자세', rar: 1, max: 3, desc: '멀리 있는 적(150 이상)에게 피해 +50%', apply: (s) => { s.sniper += 1; } },
+  { id: 'brawler', ic: '🥊', name: '난투', rar: 1, max: 3, desc: '가까운 적(60 이내)에게 피해 +40%', apply: (s) => { s.brawler += 1; } },
+  { id: 'revenge', ic: '💢', name: '반격', rar: 1, max: 3, desc: '맞은 뒤 3초 동안 피해 +60%', apply: (s) => { s.revenge += 1; } },
+  { id: 'killhaste', ic: '🩸', name: '학살의 흥분', rar: 1, max: 3, desc: '처치하면 2초 동안 공격 속도 +40%', apply: (s) => { s.killHaste += 1; } },
+  { id: 'overdrive', ic: '🔋', name: '과충전', rar: 2, max: 2, desc: '주기적으로 몇 초간 공격 속도 +60%', apply: (s) => { s.overdrive += 1; } },
+  { id: 'knock', ic: '🥾', name: '강력 넉백', rar: 0, max: 3, desc: '적을 더 멀리 밀어낸다', apply: (s) => { s.kbMul += 0.5; } },
+  { id: 'blast', ic: '🧨', name: '폭죽', rar: 2, max: 3, desc: '치명타가 작은 폭발을 일으킨다', apply: (s) => { s.critBoom += 1; } },
+  // 주변 공격
+  { id: 'aura', ic: '☀️', name: '불꽃 오라', rar: 1, max: 4, desc: '몸 주변의 적에게 계속 피해', apply: (s) => { s.aura += 1; } },
+  { id: 'glacier', ic: '🧊', name: '서리 오라', rar: 1, max: 3, desc: '몸 주변의 적이 느려진다', apply: (s) => { s.auraSlow += 1; } },
+  { id: 'nova', ic: '💥', name: '충격파', rar: 1, max: 3, desc: '주기적으로 주변을 밀쳐내는 충격파', apply: (s) => { s.nova += 1; } },
+  { id: 'bigblade', ic: '🗂️', name: '거대한 회전검', rar: 1, max: 3, desc: '회전검이 커지고 멀리 돈다', req: (s) => (s.lv.blade || 0) >= 1, apply: (s) => { s.bladeSize *= 1.25; s.bladeR += 6; } },
+  // 방어 · 회복
+  { id: 'regen', ic: '🌿', name: '재생', rar: 0, max: 4, desc: '초당 체력 +1', apply: (s) => { s.regen += 1; } },
+  { id: 'armor', ic: '🪖', name: '갑옷', rar: 0, max: 4, desc: '받는 피해 -10%', apply: (s) => { s.armor += 0.1; } },
+  { id: 'ironskin', ic: '🦾', name: '강철 피부', rar: 1, max: 3, desc: '최대 체력 +40, 받는 피해 -5%', apply: (s, o) => { s.maxhp += 40; s.armor += 0.05; if (o && o.hp != null) o.hp += 40; } },
+  { id: 'phase', ic: '👤', name: '위상 이동', rar: 1, max: 3, desc: '맞은 뒤 무적 시간 +0.35초', apply: (s) => { s.invT += 0.35; } },
+  { id: 'thorns', ic: '🌵', name: '가시 갑옷', rar: 1, max: 3, desc: '몸에 닿은 적에게 피해', apply: (s) => { s.thorns += 1; } },
+  { id: 'drain', ic: '💉', name: '생명력 흡수', rar: 1, max: 3, desc: '공격이 맞을 때마다 체력 회복', apply: (s) => { s.hitHeal += 1; } },
+  { id: 'feast', ic: '🍗', name: '만찬', rar: 0, max: 3, desc: '처치할 때마다 체력 +1', apply: (s) => { s.killHeal += 1; } },
+  { id: 'dodge', ic: '💨', name: '회피', rar: 1, max: 3, desc: '12% 확률로 피해를 피한다', apply: (s) => { s.dodge += 0.12; } },
+  { id: 'barrier', ic: '🔰', name: '방어막 강화', rar: 1, max: 2, desc: '방패가 더 빨리 다시 생긴다', req: (s) => (s.lv.shield || 0) >= 1, apply: (s) => { s.shieldFast += 1; } },
+  { id: 'secondwind', ic: '🕊️', name: '질긴 생명력', rar: 2, max: 1, desc: '쓰러질 때 체력 35%로 한 번 일어선다 (판마다 1번)', apply: (s) => { s.lastStand = Math.max(s.lastStand, 1); } },
+  // 돈 · 운
+  { id: 'coinmul', ic: '🪙', name: '금화 욕심', rar: 0, max: 3, desc: '코인이 50% 더 나온다', apply: (s) => { s.coinMul += 0.5; } },
+  { id: 'treasure', ic: '💎', name: '보물 사냥꾼', rar: 1, max: 2, desc: '정예가 코인을 10개 더 떨군다', apply: (s) => { s.eliteCoins += 10; } },
+  { id: 'greedy', ic: '🧿', name: '탐욕의 대가', rar: 0, max: 3, desc: '코인을 주울 때 체력 +1', apply: (s) => { s.coinHeal += 1; } },
+  { id: 'lucky', ic: '🍀', name: '행운', rar: 1, max: 3, desc: '희귀 이상의 카드가 더 자주 나온다', apply: (s) => { s.luck += 1; } },
+  // 메아리
+  { id: 'echohaste', ic: '⏩', name: '메아리 가속', rar: 1, max: 3, desc: '메아리의 공격 속도 +30%', apply: (s) => { s.echoHaste += 1; } },
+  { id: 'echoguard', ic: '🛡️', name: '메아리 수호', rar: 1, max: 3, desc: '살아 있는 메아리 1명당 받는 피해 -8%', apply: (s) => { s.echoGuard += 1; } },
+  { id: 'echoheal', ic: '💞', name: '메아리의 속삭임', rar: 1, max: 3, desc: '메아리가 처치하면 체력 +2', apply: (s) => { s.echoHeal += 1; } },
+  { id: 'echocrit', ic: '✨', name: '메아리 급소', rar: 1, max: 3, desc: '메아리의 치명타 확률 +20%', apply: (s) => { s.echoCrit += 1; } },
+  // 능력치
+  { id: 'haste', ic: '🌬️', name: '바람의 축복', rar: 0, max: 4, desc: '이동 속도 +8%, 공격 속도 +8%', apply: (s) => { s.speed *= 1.08; s.cd *= 0.92; } },
+  { id: 'giant', ic: '🦣', name: '거인화', rar: 1, max: 3, desc: '최대 체력 +30%, 피해 +10%, 이동 -5%', apply: (s, o) => { const a = Math.round(s.maxhp * 0.3); s.maxhp += a; s.dmg *= 1.1; s.speed *= 0.95; if (o && o.hp != null) o.hp += a; } },
+  // 전설: 가끔만 나오고, 효과가 확실히 크다
+  { id: 'phoenix', ic: '🐦‍🔥', name: '불사조의 깃', rar: 4, max: 1, desc: '쓰러지면 체력을 전부 회복하고 주변을 불태운다 (판마다 1번). 재생 +2',
+    req: (s) => Object.keys(s.lv).length >= 4, apply: (s) => { s.lastStand = 2; s.regen += 2; } },
+  { id: 'judgment', ic: '⚡', name: '천벌', rar: 4, max: 1, desc: '5초마다 번개가 화면의 모든 적을 내리친다',
+    req: (s) => Object.keys(s.lv).length >= 4, apply: (s) => { s.smite = 1; } },
+  { id: 'crown', ic: '👑', name: '만능의 왕관', rar: 4, max: 1, desc: '피해 +50%, 공격 속도 +33%, 최대 체력 +40%, 이동 +15%, 치명타 +15%',
+    req: (s) => Object.keys(s.lv).length >= 4,
+    apply: (s, o) => { s.dmg *= 1.5; s.cd *= 0.75; const a = Math.round(s.maxhp * 0.4); s.maxhp += a; s.speed *= 1.15; s.crit += 0.15; if (o && o.hp != null) o.hp += a; } },
   // 고를 카드가 모자랄 때
   { id: 'meat', ic: '🍖', name: '고기', rar: 0, max: 99, fallback: true, desc: '체력 40 회복', apply: (s, o) => { if (o && o.hp != null) o.hp = Math.min(s.maxhp, o.hp + 40); } },
   { id: 'purse', ic: '💰', name: '금화 주머니', rar: 0, max: 99, fallback: true, desc: '코인 +15', apply: () => {} },
@@ -131,6 +200,11 @@ export function baseStats(cls) {
     blades: 0, bladeDmg: 7, bladeSize: 1, bladeR: 34,
     crit: 0.05, critMul: 2, bolt: 0, boltChain: 0, boltCrit: 0,
     poison: 0, echoAmp: 0, legion: 0, leech: 0, magnet: 0, shield: 0, boom: 0, frost: 0,
+    // 새 카드가 쓰는 값들
+    regen: 0, armor: 0, invT: 0.7, thorns: 0, hitHeal: 0, killHeal: 0, dodge: 0, shieldFast: 0, lastStand: 0,
+    burn: 0, execute: 0, bossDmg: 0, eliteDmg: 0, berserk: 0, moveDmg: 0, stillDmg: 0, sniper: 0, brawler: 0, revenge: 0,
+    killHaste: 0, overdrive: 0, kbMul: 1, critBoom: 0, homing: 0, ricochet: 0, aura: 0, auraSlow: 0, nova: 0, smite: 0,
+    coinMul: 1, eliteCoins: 0, coinHeal: 0, luck: 0, echoHaste: 0, echoGuard: 0, echoHeal: 0, echoCrit: 0,
     lv: {},
     ...(CLASSES[cls] && CLASSES[cls].st),
   };
@@ -146,9 +220,10 @@ export function rollCards(st, rng, n = 3) {
   const out = [];
   while (out.length < n && pool.length) {
     let tot = 0;
-    for (const c of pool) tot += RARITY[c.rar].w;
+    const wt = (c) => RARITY[c.rar].w * (c.rar === 1 || c.rar === 2 || c.rar === 4 ? 1 + 0.6 * (st.luck || 0) : 1);
+    for (const c of pool) tot += wt(c);
     let r = rng() * tot, i = 0;
-    for (; i < pool.length - 1; i++) { r -= RARITY[pool[i].rar].w; if (r <= 0) break; }
+    for (; i < pool.length - 1; i++) { r -= wt(pool[i]); if (r <= 0) break; }
     out.push(pool.splice(i, 1)[0]);
   }
   const fb = CARDS.filter((c) => c.fallback);

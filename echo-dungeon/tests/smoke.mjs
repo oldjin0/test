@@ -137,6 +137,7 @@ for (const ch of [0, 1, 2, 3, 4, -1, 7]) {
     __ed.startRun(c);
     const G = s.G;
     G.hero.st.maxhp = G.hero.hp = 1e9; // 끝까지 살아남게
+    G.hero.st.dmg *= 4; // 넓은 월드에서 봇이 중간 보스를 늦게 잡아도 다음 중간 보스 순서를 확인할 수 있게
     const t0 = performance.now();
     __ed.autoPlay(60 * (cp.endless ? 135 : cp.time + 30), ['blade', 'bolt', 'poison', 'boom', 'power', 'multi']);
     const ms = performance.now() - t0;
@@ -189,8 +190,10 @@ await page.reload();
 await page.waitForFunction(() => window.__ed && document.getElementById('title').classList.contains('on'));
 const stats = {};
 for (const id of ['sword', 'archer', 'mage']) {
-  await page.click(`#tcls button[data-cls="${id}"]`);
-  ok(await ev((i) => __ed.S.save.cls === i && document.querySelector('#tcls button.on').dataset.cls === i, id), `직업 선택: ${id}`);
+  await page.click('#tcharBtn');
+  await page.click(`#ctabs button[data-cls="${id}"]`);
+  await page.click('#cpick');
+  ok(await ev((i) => __ed.S.save.cls === i && document.getElementById('title').classList.contains('on') && document.getElementById('tcharBtn').innerHTML.includes(i === 'sword' ? 'hero' : i === 'archer' ? 'archer' : 'wizard'), id), `캐릭터 선택 화면에서 고르기: ${id}`);
   stats[id] = await ev(() => {
     __ed.startRun(0);
     const G = __ed.S.G, st = G.hero.st, base = { range: st.range, hp: st.maxhp }; // 카드를 받기 전 기본 능력치
@@ -203,6 +206,46 @@ for (const id of ['sword', 'archer', 'mage']) {
 ok(stats.sword.range < stats.mage.range && stats.mage.range < stats.archer.range, '사거리: 검사 < 법사 < 궁사');
 ok(stats.sword.hp > stats.mage.hp && stats.mage.hp > stats.archer.hp, '체력: 검사 > 법사 > 궁사');
 ok(stats.archer.sprite === 'archer' && stats.mage.sprite === 'wizard', '직업별 이미지');
+// 카드 70여 장: 전부 한 번씩 받고 전투를 돌려도 오류가 없고, 새 효과가 실제로 작동한다
+const cardsT = await ev(() => {
+  const S = __ed.S; S.save.unlocked = 99; S.save.tutorial = 1;
+  const ids = __ed.CARDS.filter((c) => !c.fallback).map((c) => c.id);
+  const out = { total: ids.length, legend: __ed.CARDS.filter((c) => c.rar === 4).length, bad: [] };
+  for (const id of ids) { // 카드마다: 받자마자 능력치가 NaN이 되지 않는지
+    __ed.startRun(0); const h = S.G.hero; __ed.applyCard(h.st, id, h);
+    for (const k of Object.keys(h.st)) if (typeof h.st[k] === 'number' && !Number.isFinite(h.st[k])) out.bad.push(id + '.' + k);
+  }
+  for (const cls of ['sword', 'archer', 'mage']) { // 전부 가진 채로 90초 전투 (모든 효과가 한꺼번에 돌아간다)
+    S.save.cls = cls; __ed.startRun(2); const G = S.G, h = G.hero;
+    for (const id of ids) __ed.applyCard(h.st, id, h);
+    h.hp = h.st.maxhp = 1e9; h.st.cd = 0.15;
+    __ed.autoPlay(60 * 90, []);
+    out[cls] = { kills: G.kills, t: +G.t.toFixed(0), scene: S.scene };
+  }
+  return out;
+});
+ok(cardsT.total >= 70 && cardsT.legend === 3, `카드 ${cardsT.total}장 (전설 ${cardsT.legend}장)`);
+ok(cardsT.bad.length === 0, `모든 카드의 능력치가 정상 ${cardsT.bad.slice(0, 5)}`);
+ok(['sword', 'archer', 'mage'].every((c) => cardsT[c].kills > 50 && cardsT[c].t >= 80), `카드 전부 가진 채 90초 전투: ${JSON.stringify(['sword', 'archer', 'mage'].map((c) => cardsT[c].kills))}`);
+const fx = await ev(() => { // 새 효과가 실제로 작동하는지
+  const S = __ed.S; S.save.cls = 'archer'; S.save.unlocked = 99; const r = {};
+  const fresh = (ids) => { __ed.startRun(0); S.G.enemies.length = 0; S.G.spawnT = 1e9; S.G.nextPick = 1e9; const h = S.G.hero; for (const id of ids) __ed.applyCard(h.st, id, h); return S.G; };
+  let G = fresh(['regen', 'regen']); G.hero.hp = 10; for (let i = 0; i < 120; i++) __ed.step(); r.regen = G.hero.hp > 12.5;
+  G = fresh(['secondwind']); G.t = 20; G.hero.hp = 1; G.hero.inv = 0; G.enemies.push({ type: 'slime', x: G.hero.x, y: G.hero.y, r: 11, hp: 99, maxhp: 99, sp: 0, dmg: 50, seed: 1, flash: 0, bt: 0, dead: false, face: 1, t: 1, z: 0, slowT: 0, slow: 0 }); __ed.step();
+  r.second = S.scene === 'play' && G.hero.hp > 20 && G.lsUsed;
+  G = fresh(['judgment']); G.enemies.push({ type: 'slime', x: 100, y: 200, r: 11, hp: 500, maxhp: 500, sp: 0, dmg: 1, seed: 1, flash: 0, bt: 0, dead: false, face: 1, t: 1, z: 0, slowT: 0, slow: 0 });
+  for (let i = 0; i < 60 * 4; i++) __ed.step(); r.smite = G.enemies[0].hp < 500 - 20;
+  G = fresh(['ember']); const e = { type: 'slime', x: G.hero.x + 60, y: G.hero.y, r: 11, hp: 5000, maxhp: 5000, sp: 0, dmg: 1, seed: 1, flash: 0, bt: 0, dead: false, face: 1, t: 1, z: 0, slowT: 0, slow: 0 }; G.enemies.push(e);
+  for (let i = 0; i < 60 * 3; i++) { e.x = G.hero.x + 60; e.y = G.hero.y; __ed.step(); } r.burn = e.hp < 5000 - 60;
+  G = fresh(['crown']); r.crown = G.hero.st.dmg > 13 && G.hero.st.maxhp > 100;
+  return r;
+});
+ok(fx.regen, '재생: 체력이 차오른다');
+ok(fx.second, '질긴 생명력: 쓰러져도 한 번 일어선다');
+ok(fx.smite, '천벌: 화면의 적에게 번개');
+ok(fx.burn, '불씨: 맞은 적이 불탄다');
+ok(fx.crown, '만능의 왕관: 능력치 상승');
+
 // 부활: 쓰러지면 한 번 기회. 브라우저에서는 광고 없이 바로 보상된다
 await ev(() => { const S = __ed.S; S.save.unlocked = 99; S.save.tutorial = 1; __ed.startRun(0); __ed.show(null); S.G.t = 10; S.G.nextPick = 999; });
 await ev(() => { const G = __ed.S.G; G.hero.inv = 0; G.hero.st.shield = 0; G.hero.hp = 1; G.enemies.push({ type: 'slime', x: G.hero.x, y: G.hero.y, r: 11, hp: 99, maxhp: 99, sp: 0, dmg: 50, seed: 1, flash: 0, bt: 0, dead: false, face: 1, t: 1, z: 0, slowT: 0, slow: 0 }); __ed.step(); });
@@ -237,7 +280,7 @@ const share = await ev(async () => {
 });
 ok(share.same, `메아리 코드 왕복 (1800점 → ${share.len}자)`);
 ok(share.bad === 3 && !/[<>]/.test(share.name) && !/[<>]/.test(share.evil.name), '잘못된 코드 거절, 이름의 태그 제거');
-ok(share.evil.cls === 'sword' && share.evil.ch === 0 && share.evil.picks.length === 1 && share.evil.path[0] <= 346 && share.evil.path[1] >= 78, '범위 밖 값은 안전한 값으로');
+ok(share.evil.cls === 'sword' && share.evil.ch === 0 && share.evil.picks.length === 1 && share.evil.path[0] <= 720 && share.evil.path[1] >= 0, '범위 밖 값은 안전한 값으로');
 // 친구 메아리는 다음 판에 이름표를 달고 함께 싸운다
 ok(await ev(async () => {
   const { encodeEcho, decodeEcho } = await import('./js/share.js');

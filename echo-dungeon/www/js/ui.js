@@ -8,8 +8,8 @@ import { sfx, applyAudioSettings, playMusic, unlockAudio } from './audio.js';
 import { haptic, exitApp, showRewardAd } from './native.js';
 
 const $ = (id) => document.getElementById(id);
-const OVERLAYS = ['title', 'pick', 'pause', 'result', 'shop', 'missions', 'settings', 'revive', 'privacy'];
-const MENUS = ['shop', 'missions', 'settings', 'privacy'];
+const OVERLAYS = ['title', 'pick', 'pause', 'result', 'shop', 'missions', 'settings', 'revive', 'privacy', 'chars'];
+const MENUS = ['shop', 'missions', 'settings', 'privacy', 'chars'];
 let current = 'title', menuFrom = 'title', modalYes = null;
 
 export function show(id) {
@@ -61,8 +61,8 @@ export function refreshTitle() {
   const nem = sv.nemesis[ch], box = $('tnem');
   box.style.display = nem && !locked ? 'block' : 'none';
   if (nem) box.textContent = `☠ ${sv.name}의 원수 · ${ENEMIES[nem.type].name} Lv.${nem.lvl}가 기다린다`;
-  $('tcls').innerHTML = CLASS_IDS.map((id) => `<button data-cls="${id}" class="${id === sv.cls ? 'on' : ''}"><span class="i">${ico('cls_' + id, CLASSES[id].ic)}</span>${CLASSES[id].name}<small>${CLASSES[id].tag}</small></button>`).join('');
-  $('tclsinfo').textContent = CLASSES[sv.cls].desc;
+  const cc = CLASSES[sv.cls];
+  $('tcharBtn').innerHTML = `<img src="assets/${cc.sprite}.png" alt=""><span><b>${cc.name} <small style="display:inline">· ${cc.tag}</small></b><small>${cc.desc.split('.')[0]}.</small></span><span class="chg">바꾸기 ▸</span>`;
   $('start').disabled = locked;
   $('start').textContent = locked ? '🔒 잠김' : '출발!';
   const daily = ensureDaily(sv);
@@ -82,7 +82,26 @@ function openMenu(id) {
   if (id === 'shop') renderShop();
   if (id === 'missions') renderMissions();
   if (id === 'settings') renderSettings();
+  if (id === 'chars') { cview = S.save.cls; renderChars(); }
   show(id);
+}
+/* ---------- 캐릭터 선택 화면 ---------- */
+let cview = 'sword';
+function renderChars() {
+  const c = CLASSES[cview], all = Object.values(CLASSES).map((x) => x.st);
+  const rows = [ // [이름, 값, 최대(세 직업 중 가장 큰 값)]
+    ['체력', c.st.maxhp, Math.max(...all.map((s) => s.maxhp))],
+    ['공격력', c.st.dmg, Math.max(...all.map((s) => s.dmg))],
+    ['공격 속도', 1 / c.st.cd, Math.max(...all.map((s) => 1 / s.cd))],
+    ['이동 속도', c.st.speed, Math.max(...all.map((s) => s.speed))],
+    ['사거리', c.st.range, Math.max(...all.map((s) => s.range))],
+  ];
+  $('cimg').src = `assets/${c.sprite}.png`;
+  $('cname2').textContent = c.name; $('ctag2').textContent = c.tag;
+  $('cdesc').textContent = c.desc;
+  $('cstats').innerHTML = rows.map(([n, v, m]) => `<span>${n}</span><div class="sbar"><i style="width:${Math.round(v / m * 100)}%"></i></div>`).join('');
+  $('ctabs').innerHTML = CLASS_IDS.map((id) => `<button data-cls="${id}" class="${id === cview ? 'on' : ''}">${ico('cls_' + id, CLASSES[id].ic)}${CLASSES[id].name}</button>`).join('');
+  $('cpick').textContent = cview === S.save.cls ? '이 캐릭터로 계속' : `${c.name}(으)로 선택`;
 }
 function backFromMenu() {
   if (current === 'privacy') { openMenu('settings'); return; }
@@ -158,6 +177,7 @@ function renderCards(choices) {
     const b = document.createElement('button');
     b.className = 'card';
     b.style.borderColor = rar.col;
+    if (c.rar === 4) b.classList.add('legend');
     const tag = c.fallback ? '' : c.rar === 3 ? '진화!' : lv ? `Lv.${lv + 1}` : 'NEW';
     b.innerHTML = `<div class="ic">${ico(c.id, c.ic)}</div><div><b>${c.name} <em style="color:${rar.col}">${tag}</em></b><span>${c.desc}</span><em style="color:${rar.col}">${c.fallback ? '' : rar.name}</em></div>`;
     b.onclick = () => { if (S.scene === 'pick') takeCard(c.id); };
@@ -235,7 +255,7 @@ function importFriend() {
     const raw = ($('codeIn') && $('codeIn').value) || '';
     try {
       const f = await decodeEcho(raw.slice(raw.indexOf('ED')));
-      S.save.friend[f.ch] = { path: f.path, picks: f.picks, cls: f.cls, name: f.name };
+      S.save.friend[f.ch] = { path: f.path, picks: f.picks, cls: f.cls, name: f.name, wv: 2 };
       persist(S.save);
       toast(`👥 ${f.name}의 메아리가 ${CHAPTERS[f.ch].name}에 합류했습니다`);
     } catch (e) { toast(e.message && e.message.length < 40 ? e.message : '코드를 읽지 못했습니다'); }
@@ -256,11 +276,13 @@ export function onBack() {
 /* ---------- 연결 ---------- */
 export function bindUi() {
   $('start').onclick = beginRun;
-  $('tcls').onclick = (ev) => {
+  $('tcharBtn').onclick = () => openMenu('chars');
+  $('ctabs').onclick = (ev) => {
     const b = ev.target.closest('button');
-    if (!b || b.dataset.cls === S.save.cls) return;
-    S.save.cls = b.dataset.cls; persist(S.save); sfx.click(); refreshTitle();
+    if (!b || b.dataset.cls === cview) return;
+    cview = b.dataset.cls; sfx.click(); renderChars();
   };
+  $('cpick').onclick = () => { S.save.cls = cview; persist(S.save); sfx.pick(); refreshTitle(); show('title'); };
   $('cprev').onclick = () => { if (S.chapter > 0) { S.chapter--; sfx.click(); refreshTitle(); } };
   $('cnext').onclick = () => { if (S.chapter >= 0 && S.chapter < S.save.unlocked) { S.chapter++; sfx.click(); refreshTitle(); } };
   // 생존 모드 단추: 누를 때마다 생존 모드 ↔ 마지막으로 연 스테이지

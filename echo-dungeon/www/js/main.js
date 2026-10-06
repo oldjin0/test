@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { W, H, CHAPTERS, stageChap } from './data.js';
+import { W, H, ARENA, CHAPTERS, CARDS, applyCard, stageChap } from './data.js';
 import { loadSave } from './save.js';
 import { DT, step, updateFx, startRun, takeCard, endRun } from './game.js';
 import { renderGame, renderTitle } from './render.js';
@@ -135,9 +135,9 @@ function botMove() {
   }
   // 벽에서 멀어지고, 중앙으로 살짝 끌린다
   const wl = (d) => 1 / Math.max(6, d) ** 2;
-  fx += wl(h.x - 14) * 0.6 - wl(346 - h.x) * 0.6;
-  fy += wl(h.y - 108) * 0.6 - wl(606 - h.y) * 0.6;
-  fx += (180 - h.x) * 0.000002; fy += (350 - h.y) * 0.000002;
+  fx += wl(h.x - ARENA.x - 14) * 0.6 - wl(ARENA.x + ARENA.w - 14 - h.x) * 0.6;
+  fy += wl(h.y - ARENA.y - 30) * 0.6 - wl(ARENA.y + ARENA.h - 14 - h.y) * 0.6;
+  fx += (ARENA.x + ARENA.w / 2 - h.x) * 0.000002; fy += (ARENA.y + ARENA.h / 2 - h.y) * 0.000002;
   for (const c of G.coins) { const dx = c.x - h.x, dy = c.y - h.y, d = Math.max(8, Math.hypot(dx, dy)); if (d < 90) { fx += dx / d * 0.00003; fy += dy / d * 0.00003; } }
   const l = Math.hypot(fx, fy);
   const j = S.joy;
@@ -145,7 +145,7 @@ function botMove() {
   if (j.active) { j.x = fx / l * 40; j.y = fy / l * 40; }
 }
 window.__ed = {
-  S, CHAPTERS, stageChap, startRun, step, takeCard, endRun, show, goTitle,
+  S, CHAPTERS, CARDS, applyCard, stageChap, startRun, step, takeCard, endRun, show, goTitle,
   autoPlay(maxTicks, pref) {
     let i = 0;
     for (; i < maxTicks && S.G && !S.G.ended; i++) {

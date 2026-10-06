@@ -21,24 +21,31 @@ const VIEWS = {
   _b: 'back view, seen from behind, facing away from the viewer, no face visible',
   _s: 'side profile view, facing right',
 };
-const SIZE = 256; // 생성 원본은 1024px. 게임에서는 작게 그려서 줄여 저장한다.
+const SIZE = 320; // 생성 원본은 1024px. 게임에서는 작게 그려서 줄여 저장한다.
 
+// 세 방향(앞·뒤·옆)을 한 장에 그리게 해서 같은 캐릭터로 통일한다 (따로 그리면 매번 다른 캐릭터가 나온다).
+const DETAIL = 'highly detailed, intricate costume details, rich shading and highlights, clean thick outline';
 const ASSETS = {
-  hero: { prompt: 'a brave little hero kid with purple spiky hair, blue tunic, holding a small sword', key: true },
-  slime: { prompt: 'a happy green jelly slime monster with big shiny eyes', key: true },
-  bat: { prompt: 'a small purple bat monster with tiny fangs, wings spread', key: true },
-  brute: { prompt: 'a chubby orange ogre monster with little horns holding a wooden club', key: true },
-  mage: { prompt: 'a small skeleton mage in a purple hood holding a glowing staff', key: true },
-  boar: { prompt: 'an angry brown wild boar with white tusks', key: true },
-  blob: { prompt: 'a big round blue slime monster, wobbly and cute', key: true },
-  slimeking: { prompt: 'a giant green slime king boss wearing a golden crown', key: true },
-  lich: { prompt: 'a floating lich boss in a purple robe with a skull face and glowing staff', key: true },
-  dragon: { prompt: 'a chubby red dragon boss with a golden crown and small wings', key: true },
-  frost: { prompt: 'a giant icy blue slime boss with an ice crown', key: true },
-  archer: { prompt: 'a young elf archer kid with a green hood, brown leather vest, holding a small wooden bow with a quiver of arrows', key: true },
-  wizard: { prompt: 'a little wizard kid with a big blue pointed hat, blue robe, holding a glowing magic staff with a crystal', key: true, sheet: true },
-  shadow: { prompt: 'a dark purple shadow dragon king boss with a red crown', key: true },
+  hero: { prompt: `a brave young swordsman hero with spiky purple hair, blue tunic with gold trim, brown belt and boots, a short cape, holding a steel sword, ${DETAIL}` },
+  archer: { prompt: `an elf archer girl with a green hooded cloak, orange hair, brown leather vest, holding a wooden longbow, a quiver of arrows on her back, ${DETAIL}` },
+  wizard: { prompt: `a young wizard with a big blue pointed hat, blue robe with star patterns, holding a wooden staff topped with a glowing crystal, ${DETAIL}` },
+  slime: { prompt: `a cute green jelly slime monster with big shiny eyes, glossy translucent body, little highlights, ${DETAIL}` },
+  bat: { prompt: `a small purple vampire bat monster with big ears, tiny fangs and spread leathery wings, ${DETAIL}` },
+  brute: { prompt: `a burly orange ogre monster with two small horns, tusks, a loincloth, holding a spiked wooden club, ${DETAIL}` },
+  mage: { prompt: `a skeleton mage in a tattered purple hooded robe holding a glowing staff with a purple flame, ${DETAIL}` },
+  boar: { prompt: `an angry brown wild boar with white tusks, bristly fur and a scar, ${DETAIL}` },
+  blob: { prompt: `a big round blue jelly slime monster, glossy and wobbly with a goofy face, ${DETAIL}` },
+  slimeking: { prompt: `a giant green slime king boss wearing a golden jeweled crown and a red cape, ${DETAIL}` },
+  lich: { prompt: `a floating lich boss with a skull face in a dark purple robe with gold ornaments, holding a skull staff with green flame, ${DETAIL}` },
+  dragon: { prompt: `a fierce red dragon boss with a golden crown, orange belly scales, horns and small wings, ${DETAIL}` },
+  frost: { prompt: `a giant icy blue frost lord boss with a crystal ice crown, frost armor and ice spikes, ${DETAIL}` },
+  shadow: { prompt: `a dark purple shadow dragon king boss with a glowing red crown, black armor plates, red glowing eyes, ${DETAIL}` },
 };
+const SHEETED = ['hero', 'archer', 'wizard']; // 플레이어 캐릭터만 앞·뒤·옆을 한 장에 그려 통일한다. 몬스터·보스는 정면 한 장을 모든 방향에 쓴다(좌우 반전).
+for (const [k, v] of Object.entries(ASSETS)) { v.key = true; v.sheet = SHEETED.includes(k); }
+ASSETS.slime.prompt = `a single dome-shaped green jelly slime blob with absolutely no arms and no legs, big shiny eyes and a happy smile, glossy translucent body with highlights, ${DETAIL}`;
+ASSETS.blob.prompt = `a single big round blue jelly slime blob with absolutely no arms and no legs, a goofy face, glossy wobbly translucent body, ${DETAIL}`;
+ASSETS.bat.prompt = `a cute purple bat creature flying, big pointed ears, red eyes, tiny fangs, wide spread leathery wings, front view, ${DETAIL}`;
 
 // 상자 평균으로 1/f 축소 (알파 가중)
 function shrink(buf, size) {
@@ -108,32 +115,61 @@ export function keyOutWhite(jpgBuf, tol = 40) {
   return PNG.sync.write(png);
 }
 
-// 한 장에 앞·뒤·옆모습을 나란히 그린 시트를 세 칸으로 잘라 각각 SIZE 정사각형(바닥 정렬)에 맞춘다.
-function splitSheet(png) {
-  const { width: w, height: h, data } = png, third = Math.floor(w / 3), out = [];
-  for (let k = 0; k < 3; k++) {
-    let x0 = w, x1 = -1, y0 = h, y1 = -1;
-    for (let y = 0; y < h; y++) for (let x = k * third; x < (k + 1) * third; x++) {
-      if (data[(y * w + x) * 4 + 3] > 40) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
-    }
-    if (x1 < 0) throw new Error('빈 칸');
-    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, sc = Math.min(SIZE * 0.9 / bw, SIZE * 0.9 / bh);
+// 한 장에 앞·뒤·옆모습을 나란히 그린 시트에서, 빈 세로줄로 갈라지는 덩어리 세 개를 찾아 각각 SIZE 정사각형(바닥 정렬)에 맞춘다.
+function runsOf(png) {
+  const { width: w, height: h, data } = png, col = new Uint8Array(w);
+  for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) if (data[(y * w + x) * 4 + 3] > 40) { col[x] = 1; break; }
+  let runs = [], x = 0;
+  while (x < w) { if (!col[x]) { x++; continue; } let e = x; while (e < w && col[e]) e++; runs.push([x, e - 1]); x = e; }
+  // 사이가 12px 미만인 덩어리는 한 몸으로 본다 (지팡이·날개 끝 등)
+  for (let i = 1; i < runs.length;) { if (runs[i][0] - runs[i - 1][1] < 6) { runs[i - 1][1] = runs[i][1]; runs.splice(i, 1); } else i++; }
+  // 너무 좁은 조각(60px 미만)은 더 가까운 이웃에 붙인다
+  for (let i = 0; i < runs.length && runs.length > 3;) {
+    if (runs[i][1] - runs[i][0] >= 60) { i++; continue; }
+    const l = i > 0 ? runs[i][0] - runs[i - 1][1] : 1e9, r = i < runs.length - 1 ? runs[i + 1][0] - runs[i][1] : 1e9;
+    if (l <= r) { runs[i - 1][1] = runs[i][1]; } else { runs[i + 1][0] = runs[i][0]; }
+    runs.splice(i, 1);
+  }
+  return runs;
+}
+// 가로 구간 [rx0, rx1]에 그려진 그림만 잘라 SIZE 정사각형(바닥 정렬)에 맞춘다
+function fitRun(png, rx0, rx1) {
+  const { width: w, height: h, data } = png;
+  {
+    let y0 = h, y1 = -1;
+    for (let y = 0; y < h; y++) for (let x = rx0; x <= rx1; x++) if (data[(y * w + x) * 4 + 3] > 40) { y0 = Math.min(y0, y); y1 = Math.max(y1, y); break; }
+    let xa = rx1, xb = rx0; // 실제로 그려진 가로 범위로 좁힌다
+    for (let x = rx0; x <= rx1; x++) for (let y = y0; y <= y1; y++) if (data[(y * w + x) * 4 + 3] > 40) { xa = Math.min(xa, x); xb = Math.max(xb, x); break; }
+    const x0 = xa, bw = xb - xa + 1, bh = y1 - y0 + 1, sc = Math.min(SIZE * 0.94 / bw, SIZE * 0.94 / bh);
     const dst = new PNG({ width: SIZE, height: SIZE }), ow = Math.round(bw * sc), oh = Math.round(bh * sc);
-    const ox = Math.round((SIZE - ow) / 2), oy = SIZE - oh - Math.round(SIZE * 0.05);
+    const ox = Math.round((SIZE - ow) / 2), oy = SIZE - oh - Math.round(SIZE * 0.03);
     for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
       let r = 0, g = 0, b = 0, a = 0, n = 0;
       const sx0 = x0 + Math.floor(x / sc), sx1 = Math.max(sx0 + 1, x0 + Math.floor((x + 1) / sc));
       const sy0 = y0 + Math.floor(y / sc), sy1 = Math.max(sy0 + 1, y0 + Math.floor((y + 1) / sc));
-      for (let sy = sy0; sy < sy1 && sy < h; sy++) for (let sx = sx0; sx < sx1 && sx < w; sx++) {
+      for (let sy = sy0; sy < sy1 && sy < h; sy++) for (let sx = sx0; sx < sx1 && sx <= rx1; sx++) {
         const i = (sy * w + sx) * 4, al = data[i + 3]; r += data[i] * al; g += data[i + 1] * al; b += data[i + 2] * al; a += al; n++;
       }
       const o = ((oy + y) * SIZE + ox + x) * 4;
       if (a) { dst.data[o] = r / a; dst.data[o + 1] = g / a; dst.data[o + 2] = b / a; }
       dst.data[o + 3] = n ? a / n : 0;
     }
-    out.push(PNG.sync.write(dst));
+    return PNG.sync.write(dst);
   }
-  return out; // [정면, 뒷모습, 옆모습]
+}
+function valleySplit(png) { // 몸이 맞닿아 덩어리가 3개로 안 갈릴 때: 가운데 두 지점의 가장 빈 세로줄에서 자른다
+  const { width: w, height: h, data } = png, col = new Uint32Array(w);
+  let first = -1, last = -1;
+  for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) if (data[(y * w + x) * 4 + 3] > 40) col[x]++; if (col[x]) { if (first < 0) first = x; last = x; } }
+  if (first < 0 || last - first < 300) return null;
+  const span = last - first, best = (a, b) => { let bx = a, bv = 1e9; for (let x = Math.floor(a); x <= b; x++) if (col[x] < bv) { bv = col[x]; bx = x; } return bx; };
+  const s1 = best(first + span * 0.27, first + span * 0.40), s2 = best(first + span * 0.60, first + span * 0.73);
+  return [[first, s1 - 1], [s1, s2 - 1], [s2, last]];
+}
+function splitSheet(png) {
+  let runs = runsOf(png);
+  if (runs.length !== 3) { runs = valleySplit(png); if (!runs) throw new Error('세 덩어리가 아님'); }
+  return runs.map(([rx0, rx1]) => fitRun(png, rx0, rx1)); // 그려진 순서(왼쪽→오른쪽)
 }
 
 /* ---------- 아이콘 · 배경 ---------- */
@@ -155,6 +191,24 @@ const ICONS = {
   shop_spd: 'a running shoe with speed lines', shop_echo: 'a glowing magic mirror showing a ghost reflection',
   shop_greed: 'a golden treasure chest full of gold coins', shop_reroll: 'a pair of white dice', shop_slot: 'an ornate standing magic mirror',
   cls_sword: 'two crossed swords emblem', cls_archer: 'a bow with an arrow emblem', cls_mage: 'a magic crystal ball on a gold stand with sparkles',
+  sharp: 'a sharp curved dagger with a glowing red edge', longshot: 'a brass telescope with a crosshair', swiftshot: 'a speeding arrow with blue wind swoosh lines',
+  bigshot: 'a big glowing energy orb with a thick ring', splash: 'a magic orb exploding into many small sparks', heavy: 'a heavy iron war hammer',
+  flurry: 'a whirlwind of many small slashes', twin: 'two identical glowing arrows side by side', pierce2: 'a long needle spear piercing through three stacked shields',
+  homing: 'a curved arrow chasing a target with a spiral trail', ricochet: 'a glowing ball bouncing between two walls with a zigzag path',
+  ember: 'a single small flame ember with sparks', inferno: 'a huge roaring fire tornado', execute: 'a cute skull with crossed bones and a red axe',
+  bossbane: 'a golden crown pierced by a sword', elitebane: 'a gold star medal pierced by a sword', berserk: 'an angry red face with flames',
+  momentum: 'a running figure with speed lines and a red flame trail', still: 'a calm meditating figure in a blue circle', sniper: 'a sniper scope reticle with a red dot',
+  brawler: 'a red boxing glove with impact lines', revenge: 'a red broken heart with a lightning bolt', killhaste: 'a dripping red blood drop with yellow lightning',
+  overdrive: 'a glowing green battery with lightning bolts', knock: 'a leather boot kicking with impact stars', blast: 'a lit round bomb with a fuse and sparks',
+  aura: 'a glowing sun with orange rays', glacier: 'a blue ice crystal circle with frost', nova: 'a bright white shockwave ring explosion',
+  bigblade: 'a giant spinning sword', regen: 'a green leaf with a glowing plus sign', armor: 'a steel knight helmet', ironskin: 'a strong metal arm with rivets',
+  phase: 'a translucent ghostly silhouette of a person', thorns: 'a green cactus with sharp spikes', drain: 'a syringe with red liquid and a heart',
+  feast: 'a roasted whole chicken on a plate', dodge: 'a figure leaping away leaving afterimages', barrier: 'a glowing blue energy shield bubble',
+  secondwind: 'a white dove with spread wings and a glowing halo', coinmul: 'a big stack of shiny gold coins', treasure: 'a sparkling blue diamond gem',
+  greedy: 'a gold coin with a red heart', lucky: 'a four leaf clover', echohaste: 'a cyan ghost with fast forward arrows', echoguard: 'a cyan ghost holding a shield',
+  echoheal: 'a cyan ghost with a pink heart', echocrit: 'a cyan ghost with a sparkling star', haste: 'a swirling green wind gust', giant: 'a big muscular chest silhouette with a heart',
+  phoenix: 'a majestic fire phoenix bird with spread flaming wings', judgment: 'a huge golden lightning bolt striking down from a storm cloud',
+  crown: 'a glorious golden crown with rainbow gems and light rays',
   ui_coin: 'a shiny round gold coin with a simple star symbol, no text, no letters, no numbers', ui_heart: 'a glossy red heart', ui_kills: 'a cute white skull',
 };
 const THEMES = [
@@ -192,33 +246,56 @@ async function runGroup(group, want, force) {
   }
 }
 
+if (process.argv[2] === '--swap') { // node tools/gen-art.mjs --swap hero 0 2 1  → 새 정면=기존0, 새 뒷모습=기존2, 새 옆모습=기존1
+  const [, , , name, ...ord] = process.argv, sf = ['', '_b', '_s'], files = sf.map((x) => path.join(OUT, `${name}${x}.png`));
+  const bufs = files.map((f) => fs.readFileSync(f));
+  ord.map(Number).forEach((from, to) => fs.writeFileSync(files[to], bufs[from]));
+  process.exit(0);
+}
+if (process.argv[2] === '--flip') { // node tools/gen-art.mjs --flip hero_s  → 좌우 반전
+  const f = path.join(OUT, `${process.argv[3]}.png`), src = PNG.sync.read(fs.readFileSync(f)), o = new PNG({ width: src.width, height: src.height });
+  for (let y = 0; y < src.height; y++) for (let x = 0; x < src.width; x++) src.data.copy(o.data, (y * src.width + x) * 4, (y * src.width + src.width - 1 - x) * 4, (y * src.width + src.width - x) * 4);
+  fs.writeFileSync(f, PNG.sync.write(o));
+  process.exit(0);
+}
 if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   fs.mkdirSync(OUT, { recursive: true });
   const force = process.argv.includes('--force');
   const want = process.argv.slice(2).filter((a) => a !== '--force');
   if (want[0] === 'icons' || want[0] === 'bg') { await runGroup(want[0], want.slice(1), force); process.exit(0); }
+  const SHEET = 'character turnaround sheet, the same exact character drawn three times side by side in one row, evenly spaced with clear empty white space between each figure, identical outfit and colors and proportions, left: front view, middle: back view seen from behind, right: side profile facing right, full body, standing, plain pure white background, no text, no labels, cute chibi cartoon game art, big head small body';
+  fs.mkdirSync(path.join(OUT, '..', '..', 'tools', 'out', 'sheets'), { recursive: true });
   for (const [name, spec] of Object.entries(ASSETS)) {
     if (want.length && !want.includes(name)) continue;
-    if (spec.sheet) { // 시트 한 장 = 호출 1번
-      if (!force && fs.existsSync(path.join(OUT, `${name}.png`))) continue;
-      process.stdout.write(`${name} (sheet) ... `);
-      try {
-        const img = await generate(name, spec, 'character turnaround sheet, three views of the same character standing in a row, evenly spaced, left to right: front view, back view, side profile view facing right');
-        const parts = splitSheet(PNG.sync.read(keyOutWhite(img)));
-        ['', '_b', '_s'].forEach((sfx, i) => fs.writeFileSync(path.join(OUT, `${name}${sfx}.png`), parts[i]));
-        console.log('ok');
-      } catch (e) { console.log('FAIL', e.message); }
+    if (!force && fs.existsSync(path.join(OUT, `${name}.png`))) continue;
+    if (!spec.sheet) { // 정면 한 장
+      let ok1 = false;
+      for (let attempt = 1; attempt <= 2 && !ok1; attempt++) {
+        process.stdout.write(`${name} (정면 ${attempt}) ... `);
+        try {
+          const img = await generate(name, spec, VIEWS['']);
+          const png = PNG.sync.read(keyOutWhite(img));
+          fs.writeFileSync(path.join(OUT, `${name}.png`), fitRun(png, 0, png.width - 1));
+          for (const sfx of ['_b', '_s']) fs.rmSync(path.join(OUT, `${name}${sfx}.png`), { force: true }); // 예전 방향별 그림이 남아 섞이지 않게
+          console.log('ok'); ok1 = true;
+        } catch (e) { console.log('FAIL', e.message); if (/429|4006|allocation/.test(e.message)) process.exit(3); }
+      }
       continue;
     }
-    for (const [suffix, view] of Object.entries(VIEWS)) {
-      const file = path.join(OUT, `${name}${suffix}.png`);
-      if (!force && fs.existsSync(file)) continue;
-      process.stdout.write(`${name}${suffix} ... `);
+    let done = false;
+    for (let attempt = 1; attempt <= 3 && !done; attempt++) {
+      process.stdout.write(`${name} (시트 ${attempt}) ... `);
       try {
-        const img = await generate(name, spec, view);
-        fs.writeFileSync(file, shrink(spec.key ? keyOutWhite(img) : jpgToPng(img), SIZE));
-        console.log('ok');
-      } catch (e) { console.log('FAIL', e.message); }
+        const img = await generate(name, { ...spec, plain: true, prompt: `${spec.prompt}. ${SHEET}` }, '');
+        fs.writeFileSync(path.join(OUT, '..', '..', 'tools', 'out', 'sheets', `${name}-${attempt}.jpg`), img);
+        const parts = splitSheet(PNG.sync.read(keyOutWhite(img)));
+        // 파일 순서는 그려진 순서(앞·뒤·옆으로 시켰지만 모델이 어길 수 있다). 눈으로 확인해 바꾼다: node tools/gen-art.mjs --swap 이름 0 2 1
+        ['', '_b', '_s'].forEach((sfx, i) => fs.writeFileSync(path.join(OUT, `${name}${sfx}.png`), parts[i]));
+        console.log('ok'); done = true;
+      } catch (e) {
+        console.log('FAIL', e.message);
+        if (/429|4006|allocation/.test(e.message)) process.exit(3); // 하루 한도: 다른 계정으로
+      }
     }
   }
 }

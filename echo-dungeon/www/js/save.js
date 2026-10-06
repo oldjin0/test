@@ -1,4 +1,4 @@
-import { CHAPTERS, CLASSES, ensureDaily } from './data.js';
+import { CHAPTERS, CLASSES, OLD_TO_NEW, ensureDaily } from './data.js';
 
 const KEY = 'echoDungeon.v2';
 const OLD_KEY = 'echoDungeon.v1';
@@ -15,6 +15,13 @@ export function defaultSave() {
   };
 }
 
+// 좁은 방 시절(wv 없음)에 녹화된 메아리는 넓어진 월드 한가운데로 옮겨 준다
+function toWorld(rec) {
+  if (!rec || rec.wv) return rec;
+  const p = rec.path.slice();
+  for (let i = 0; i < p.length; i += 2) { p[i] += OLD_TO_NEW.x; p[i + 1] += OLD_TO_NEW.y; }
+  return { ...rec, path: p, wv: 2 };
+}
 // 저장 데이터가 일부 깨져 있어도 기본값으로 메운다
 function normalize(s) {
   const d = defaultSave();
@@ -24,7 +31,8 @@ function normalize(s) {
   out.echoes = arr(0).map((z, i) => (Array.isArray(s.echoes) && Array.isArray(s.echoes[i]) ? s.echoes[i].filter((e) => e && Array.isArray(e.path) && e.path.length >= 4 && Array.isArray(e.picks)) : []));
   out.nemesis = arr(0).map((z, i) => (Array.isArray(s.nemesis) && s.nemesis[i] && s.nemesis[i].type ? s.nemesis[i] : null));
   out.cls = CLASSES[s.cls] ? s.cls : 'sword';
-  out.friend = arr(0).map((z, i) => { const f = Array.isArray(s.friend) && s.friend[i]; return f && Array.isArray(f.path) && f.path.length >= 4 && Array.isArray(f.picks) ? f : null; });
+  out.friend = arr(0).map((z, i) => { const f = Array.isArray(s.friend) && s.friend[i]; return f && Array.isArray(f.path) && f.path.length >= 4 && Array.isArray(f.picks) ? toWorld(f) : null; });
+  out.echoes = out.echoes.map((list) => list.map(toWorld));
   out.shop = typeof s.shop === 'object' && s.shop ? s.shop : {};
   out.unlocked = Math.max(1, out.unlocked | 0); // 열린 스테이지 수 (끝이 없다)
   out.lastChapter = Math.min(out.unlocked - 1, Math.max(-1, out.lastChapter | 0)); // -1 = 무한 던전

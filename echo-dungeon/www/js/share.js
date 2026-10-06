@@ -1,6 +1,6 @@
 // 메아리 코드: 한 판의 움직임과 고른 카드를 글자로 바꿔 친구와 주고받는다.
 // 받은 코드는 남이 만든 입력이므로 모든 값을 검사하고, 범위를 벗어나면 거절한다.
-import { ARENA, CARD_BY_ID, CLASSES, CHAPTERS } from './data.js';
+import { ARENA, OLD_TO_NEW, CARD_BY_ID, CLASSES, CHAPTERS } from './data.js';
 
 const PRE = 'ED1.'; // deflate 압축
 const PRE_RAW = 'ED0.'; // 압축을 못 쓰는 환경
@@ -13,7 +13,7 @@ const pipe = async (bytes, stream) => new Uint8Array(await new Response(new Blob
 export async function encodeEcho(rec, name, ch) {
   const p = rec.path, d = [p[0], p[1]];
   for (let i = 2; i < p.length; i++) d.push(p[i] - p[i - 2]); // 앞 점과의 차이만 적는다 (작은 수라 잘 줄어든다)
-  const json = JSON.stringify({ n: name, c: rec.cls, h: ch, k: rec.picks.map((x) => [x.t, x.id]), d });
+  const json = JSON.stringify({ w: 2, n: name, c: rec.cls, h: ch, k: rec.picks.map((x) => [x.t, x.id]), d });
   const raw = new TextEncoder().encode(json);
   if (typeof CompressionStream === 'undefined') return PRE_RAW + b64(raw);
   return PRE + b64(await pipe(raw, new CompressionStream('deflate-raw')));
@@ -33,7 +33,8 @@ export async function decodeEcho(code) {
   if (!Array.isArray(d) || d.length < 4 || d.length > MAX_POINTS || d.length % 2 || !d.every(Number.isFinite)) throw new Error('움직임 기록이 잘못되었습니다');
   const path = [d[0], d[1]];
   for (let i = 2; i < d.length; i++) path.push(path[i - 2] + d[i]);
-  for (let i = 0; i < path.length; i += 2) { // 투기장 밖으로 나간 점은 안쪽으로 붙인다
+  if (!o.w) for (let i = 0; i < path.length; i += 2) { path[i] += OLD_TO_NEW.x; path[i + 1] += OLD_TO_NEW.y; } // 예전 코드는 좁은 방 좌표
+  for (let i = 0; i < path.length; i += 2) { // 월드 밖으로 나간 점은 안쪽으로 붙인다
     path[i] = Math.min(ARENA.x + ARENA.w, Math.max(ARENA.x, Math.round(path[i])));
     path[i + 1] = Math.min(ARENA.y + ARENA.h, Math.max(ARENA.y, Math.round(path[i + 1])));
   }

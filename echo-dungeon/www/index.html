@@ -47,6 +47,26 @@ h2{margin:0 0 calc(var(--u)*12px);font-size:calc(var(--u)*24px);color:#ffe9a8;te
 #codeIn{width:100%;height:calc(var(--u)*90px);margin-top:calc(var(--u)*8px);font:calc(var(--u)*11px) monospace;border-radius:calc(var(--u)*8px);border:0;padding:calc(var(--u)*6px)}
 .endless{border-color:#c9a23a;color:#ffe9a8}
 .endless.on{background:#ffd34a;color:#3a1c4a}
+.charbtn{position:absolute;left:calc(var(--u)*18px);right:calc(var(--u)*18px);top:calc(var(--u)*288px);height:calc(var(--u)*78px);display:flex;align-items:center;gap:calc(var(--u)*12px);padding:0 calc(var(--u)*14px);border-radius:calc(var(--u)*16px);background:linear-gradient(rgba(60,40,100,.92),rgba(30,18,60,.92));border:calc(var(--u)*2.5px) solid #ffd34a;text-align:left;box-shadow:0 calc(var(--u)*4px) 0 rgba(0,0,0,.4)}
+.charbtn img{height:calc(var(--u)*64px);width:calc(var(--u)*64px);object-fit:contain;filter:drop-shadow(0 calc(var(--u)*3px) 0 rgba(0,0,0,.4))}
+.charbtn b{display:block;font-size:calc(var(--u)*18px)}
+.charbtn small{display:block;color:#cdbbff;font-size:calc(var(--u)*12px);font-weight:600;line-height:1.25}
+.charbtn .chg{margin-left:auto;font-size:calc(var(--u)*12px);color:#ffe9a8;font-weight:800;white-space:nowrap}
+.cstage{position:relative;flex:none;height:calc(var(--u)*186px);display:flex;align-items:flex-end;justify-content:center}
+.cglow{position:absolute;left:50%;bottom:calc(var(--u)*10px);width:calc(var(--u)*190px);height:calc(var(--u)*60px);transform:translateX(-50%);border-radius:50%;background:radial-gradient(rgba(255,211,74,.55),rgba(255,211,74,0) 70%)}
+#cimg{position:relative;height:calc(var(--u)*178px);animation:cbob 1.6s ease-in-out infinite;transform-origin:50% 100%;filter:drop-shadow(0 calc(var(--u)*6px) calc(var(--u)*6px) rgba(0,0,0,.5))}
+@keyframes cbob{0%,100%{transform:scale(1,1)}50%{transform:scale(1.03,.97)}}
+#chars{color:#fff;text-align:center}
+.cinfo{text-align:center;font-size:calc(var(--u)*22px);margin-top:calc(var(--u)*4px)}
+.cinfo span{font-size:calc(var(--u)*13px);color:#ffd34a;font-weight:800;margin-left:calc(var(--u)*6px)}
+#cdesc{text-align:center;color:#d9ccff;font-size:calc(var(--u)*12.5px);line-height:1.35;margin:calc(var(--u)*4px) calc(var(--u)*8px) calc(var(--u)*8px)}
+#cstats{display:grid;grid-template-columns:auto 1fr;gap:calc(var(--u)*5px) calc(var(--u)*10px);align-items:center;margin:0 calc(var(--u)*10px) calc(var(--u)*10px);font-size:calc(var(--u)*12px);color:#cdbbff;text-align:left}
+.sbar{height:calc(var(--u)*9px);border-radius:calc(var(--u)*5px);background:rgba(0,0,0,.45);overflow:hidden}
+.sbar i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#7dff9a,#ffe27a);transition:width .25s}
+#ctabs{display:flex;gap:calc(var(--u)*8px);margin-bottom:calc(var(--u)*10px)}
+#ctabs button{flex:1;padding:calc(var(--u)*4px) 0;border-radius:calc(var(--u)*12px);background:rgba(20,10,40,.78);border:calc(var(--u)*2px) solid #4a3a7a;font-weight:800;line-height:1.15}
+#ctabs button.on{border-color:#ffd34a;background:rgba(80,50,120,.9)}
+#ctabs .ico{height:calc(var(--u)*38px);width:calc(var(--u)*38px);margin:0 auto}
 .cls{position:absolute;left:calc(var(--u)*18px);right:calc(var(--u)*18px);top:calc(var(--u)*284px);display:flex;gap:calc(var(--u)*8px)}
 .cls button{flex:1;padding:calc(var(--u)*4px) 0;border-radius:calc(var(--u)*12px);background:rgba(20,10,40,.78);border:calc(var(--u)*2px) solid #4a3a7a;font-weight:800;line-height:1.15}
 .cls button.on{border-color:#ffd34a;background:rgba(80,50,120,.9);box-shadow:0 0 calc(var(--u)*10px) rgba(255,211,74,.45)}
@@ -85,6 +105,8 @@ input{font:inherit;font-size:calc(var(--u)*15px);width:calc(var(--u)*120px);text
 /* 카드 */
 .card{width:calc(var(--u)*300px);margin:calc(var(--u)*6px) 0;padding:calc(var(--u)*11px);color:#fff;text-align:left;background:linear-gradient(#4a3380,#2e2050);border:calc(var(--u)*3px) solid #b9c2d9;border-radius:calc(var(--u)*16px);box-shadow:0 calc(var(--u)*4px) 0 #170c2e;display:flex;gap:calc(var(--u)*12px);align-items:center;animation:pop .25s ease-out both}
 .card:nth-child(2){animation-delay:.06s}.card:nth-child(3){animation-delay:.12s}
+@keyframes legend{50%{box-shadow:0 calc(var(--u)*4px) 0 #170c2e,0 0 calc(var(--u)*22px) rgba(255,107,93,.9)}}
+.card.legend{background:linear-gradient(135deg,#7a2a3a,#3a1a50 60%,#7a5a1a);animation:pop .25s ease-out both,legend 1.4s ease-in-out .3s infinite}
 .card:active{transform:translateY(calc(var(--u)*2px))}
 .card .ic{font-size:calc(var(--u)*32px);width:calc(var(--u)*46px);height:calc(var(--u)*46px);text-align:center;flex:none}
 .card b{font-size:calc(var(--u)*17px);display:block}
@@ -117,8 +139,7 @@ input{font:inherit;font-size:calc(var(--u)*15px);width:calc(var(--u)*120px);text
       <div class="chapbox"><div class="n" id="cnum"></div><div class="t" id="cname"></div><div class="s" id="cinfo"></div></div>
       <button class="arrow" id="cnext" aria-label="다음 챕터">▶</button>
     </div>
-    <div class="cls" id="tcls"></div>
-    <div class="clsinfo" id="tclsinfo"></div>
+    <button class="charbtn" id="tcharBtn" aria-label="캐릭터 선택"></button>
     <div class="echoes" id="techo"></div>
     <div class="nem" id="tnem" style="display:none"></div>
     <button class="btn" id="start">출발!</button>
@@ -177,6 +198,17 @@ input{font:inherit;font-size:calc(var(--u)*15px);width:calc(var(--u)*120px);text
     <button class="btn2 adbtn" id="rdouble"></button>
     <button class="btn" id="again">다시 도전</button>
     <div class="row"><button class="btn2" id="rshop">⬆ 강화</button><button class="btn2" id="rshare">📤 메아리 공유</button><button class="btn2" id="home">타이틀</button></div>
+  </div>
+
+  <div id="chars" class="menu">
+    <div class="head"><h2>캐릭터 선택</h2></div>
+    <div class="cstage"><div class="cglow"></div><img id="cimg" alt=""></div>
+    <div class="cinfo"><b id="cname2"></b> <span id="ctag2"></span></div>
+    <div id="cdesc"></div>
+    <div id="cstats"></div>
+    <div id="ctabs"></div>
+    <button class="btn" id="cpick">이 캐릭터로 출발</button>
+    <button class="btn2" data-back style="margin-top:8px">돌아가기</button>
   </div>
 
   <div id="revive" class="scr center dim">

@@ -34,6 +34,12 @@ const heroClip = async (file) => {
 
 for (const sc of scenes) {
   if (sc === 'title') await page.screenshot({ path: `${out}/title.png` });
+  if (sc === 'chars') {
+    await page.screenshot({ path: `${out}/title.png` });
+    await page.click('#tcharBtn'); await page.waitForTimeout(400); await page.screenshot({ path: `${out}/chars-sword.png` });
+    await page.click('#ctabs button[data-cls="archer"]'); await page.waitForTimeout(300); await page.screenshot({ path: `${out}/chars-archer.png` });
+    await page.click('#ctabs button[data-cls="mage"]'); await page.waitForTimeout(300); await page.screenshot({ path: `${out}/chars-mage.png` });
+  }
   if (sc === 'walk') {
     for (const cls of ['sword', 'archer', 'mage']) {
       await run(0, cls);

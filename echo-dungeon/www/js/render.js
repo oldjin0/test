@@ -96,6 +96,7 @@ function viewOf(o) {
   if (dx * dx + dy * dy > 0.04) o._v = Math.abs(dy) > Math.abs(dx) * 1.2 ? (dy > 0 ? 'f' : 'b') : 's';
   return o._v || 'f';
 }
+const ROBED = ['wizard', 'archer'];
 // 방향에 맞는 이미지 (없으면 정면)
 function pick(c, o, n) {
   return SPR[n + (o._v === 'f' ? '' : '_' + o._v)] || SPR[n];
@@ -113,49 +114,40 @@ function fs(c, fill, lw) { c.fillStyle = fill; c.fill(); c.lineWidth = lw || 1.6
 function rr(c, x, y, w, h, r) { c.beginPath(); c.roundRect(x, y, w, h, r); }
 
 /* ---------- 배경 ---------- */
-// 챕터마다 투기장 전체를 그린 한 장짜리 그림(assets/bg/arenaN.jpg)을 쓴다. 없거나 로딩 중이면 코드로 그린 타일 배경.
+// 챕터마다 투기장 전체를 그린 한 장짜리 그림(assets/bg/arenaN.jpg)을 월드 크기로 늘려 쓴다. 없거나 로딩 중이면 코드로 그린 타일 배경.
 const BGI = CHAPTERS.map((_, i) => {
   const im = new Image();
   im.src = `assets/bg/arena${i}.jpg`;
   return im;
 });
+const BGS = 1.5; // 월드 배경 캔버스의 해상도 배율
 const bgCache = {}, procCache = {};
 function newCanvas() {
-  const cv = document.createElement('canvas'); cv.width = W * 2; cv.height = H * 2;
-  const b = cv.getContext('2d'); b.scale(2, 2);
+  const cv = document.createElement('canvas'); cv.width = Math.round(ARENA.w * BGS); cv.height = Math.round(ARENA.h * BGS);
+  const b = cv.getContext('2d'); b.scale(BGS, BGS);
   return [cv, b];
 }
 function paintBase(b, ch) {
-  const cp = CHAPTERS[ch];
-  b.fillStyle = cp.wall; b.fillRect(0, 0, W, H);
-  const rnd = mulberry32(ch * 99 + 1);
-  for (let y = 0; y < ARENA.y; y += 12) for (let x = -(y / 12 % 2) * 14; x < W; x += 28) {
-    b.fillStyle = `rgba(255,255,255,${0.03 + rnd() * 0.05})`; b.fillRect(x + 1, y + 1, 26, 10);
-  }
-  const T = 37;
+  const cp = CHAPTERS[ch], rnd = mulberry32(ch * 99 + 1), T = 37;
+  b.fillStyle = cp.wall; b.fillRect(0, 0, ARENA.w, ARENA.h);
   for (let y = 0; y < ARENA.h; y += T) for (let x = 0; x < ARENA.w; x += T) {
     b.fillStyle = ((x + y) / T) % 2 ? cp.floor[0] : cp.floor[1];
-    b.fillRect(ARENA.x + x, ARENA.y + y, Math.min(T, ARENA.w - x), Math.min(T, ARENA.h - y));
+    b.fillRect(x, y, Math.min(T, ARENA.w - x), Math.min(T, ARENA.h - y));
   }
+  for (let i = 0; i < 140; i++) { b.fillStyle = 'rgba(0,0,0,.12)'; ell(b, rnd() * ARENA.w, rnd() * ARENA.h, 4 + rnd() * 9, 2 + rnd() * 5); b.fill(); }
 }
-function paintTop(b, ch, soft) {
-  const cp = CHAPTERS[ch];
-  // 위쪽 HUD 자리는 어둡게 (글자가 잘 보이도록)
-  const top = b.createLinearGradient(0, 0, 0, ARENA.y + 30);
-  top.addColorStop(0, 'rgba(8,4,16,.75)'); top.addColorStop(1, 'rgba(8,4,16,0)');
-  b.fillStyle = top; b.fillRect(0, 0, W, ARENA.y + 30);
-  // 움직일 수 있는 경계: 그림 위에서는 은은한 선만
-  if (!soft) { b.strokeStyle = 'rgba(0,0,0,.45)'; b.lineWidth = 8; b.strokeRect(ARENA.x - 4, ARENA.y - 4, ARENA.w + 8, ARENA.h + 8); }
-  b.strokeStyle = cp.accent + (soft ? '55' : '99'); b.lineWidth = soft ? 1.5 : 2;
-  b.beginPath(); b.roundRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h, soft ? 10 : 0); b.stroke();
-  // 비네팅
-  const g = b.createRadialGradient(W / 2, H * 0.55, H * 0.25, W / 2, H * 0.55, H * 0.75);
-  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.5)');
-  b.fillStyle = g; b.fillRect(0, 0, W, H);
+// 월드 가장자리는 어둡게 눌러서 "벽이 있다"는 것을 알 수 있게 한다
+function paintEdge(b, ch) {
+  const cp = CHAPTERS[ch], E = 46, w = ARENA.w, h = ARENA.h;
+  for (const [x0, y0, x1, y1, rx, ry, rw, rh] of [[0, 0, E, 0, 0, 0, E, h], [w, 0, w - E, 0, w - E, 0, E, h], [0, 0, 0, E, 0, 0, w, E], [0, h, 0, h - E, 0, h - E, w, E]]) {
+    const g = b.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, 'rgba(6,3,12,.85)'); g.addColorStop(1, 'rgba(6,3,12,0)');
+    b.fillStyle = g; b.fillRect(rx, ry, rw, rh);
+  }
+  b.strokeStyle = cp.accent + '66'; b.lineWidth = 2; b.strokeRect(1, 1, w - 2, h - 2);
 }
 function procBg(ch) {
   if (procCache[ch]) return procCache[ch];
-  const [cv, b] = newCanvas(); paintBase(b, ch); paintTop(b, ch);
+  const [cv, b] = newCanvas(); paintBase(b, ch); paintEdge(b, ch);
   return (procCache[ch] = cv);
 }
 function chapterBg(ch) {
@@ -163,29 +155,62 @@ function chapterBg(ch) {
   const im = BGI[ch];
   if (!im.complete || !im.naturalWidth) return procBg(ch);
   const [cv, b] = newCanvas();
-  // 그림 비율(9:16)이 화면과 같아서 그대로 채운다. 다르면 가운데를 잘라 채운다.
-  const k = Math.max(W / im.naturalWidth, H / im.naturalHeight), sw = W / k, sh = H / k;
-  b.drawImage(im, (im.naturalWidth - sw) / 2, (im.naturalHeight - sh) / 2, sw, sh, 0, 0, W, H);
-  paintTop(b, ch, true);
+  const k = Math.max(ARENA.w / im.naturalWidth, ARENA.h / im.naturalHeight), sw = ARENA.w / k, sh = ARENA.h / k;
+  b.drawImage(im, (im.naturalWidth - sw) / 2, (im.naturalHeight - sh) / 2, sw, sh, 0, 0, ARENA.w, ARENA.h);
+  paintEdge(b, ch);
   return (bgCache[ch] = cv);
+}
+// 카메라가 보는 부분만 화면에 그린다
+function drawBgView(c, ch, cam) {
+  c.drawImage(chapterBg(ch), cam.x * BGS, cam.y * BGS, W * BGS, H * BGS, 0, 0, W, H);
 }
 // 용암·그림자처럼 빛나는 무늬가 있는 챕터는 그림의 밝은 부분이 천천히 숨 쉬듯 빛난다
 const GLOW = [0.05, 0.06, 0.16, 0.07, 0.12, 0.08];
-function drawGlow(c, ch) {
+function drawGlow(c, ch, cam) {
   const im = BGI[ch];
   if (!im.complete || !im.naturalWidth) return;
   const a = GLOW[ch] * (0.5 + 0.5 * Math.sin(S.clock * 1.6)) + GLOW[ch] * 0.3 * Math.sin(S.clock * 5.3);
   if (a <= 0) return;
+  const k = Math.max(ARENA.w / im.naturalWidth, ARENA.h / im.naturalHeight), ox = (im.naturalWidth * k - ARENA.w) / 2, oy = (im.naturalHeight * k - ARENA.h) / 2;
   c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = a;
-  c.drawImage(im, 0, 0, im.naturalWidth, im.naturalHeight, 0, 0, W, H);
+  c.drawImage(im, (cam.x + ox) / k, (cam.y + oy) / k, W / k, H / k, 0, 0, W, H);
   c.restore();
+}
+// 화면 고정 효과: 위쪽 HUD 자리를 어둡게, 가장자리 비네팅
+let fxCv = null;
+function drawScreenFx(c) {
+  if (!fxCv) {
+    fxCv = document.createElement('canvas'); fxCv.width = W * 2; fxCv.height = H * 2;
+    const b = fxCv.getContext('2d'); b.scale(2, 2);
+    const top = b.createLinearGradient(0, 0, 0, 110); top.addColorStop(0, 'rgba(8,4,16,.78)'); top.addColorStop(1, 'rgba(8,4,16,0)');
+    b.fillStyle = top; b.fillRect(0, 0, W, 110);
+    const g = b.createRadialGradient(W / 2, H * 0.55, H * 0.28, W / 2, H * 0.55, H * 0.78);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.45)');
+    b.fillStyle = g; b.fillRect(0, 0, W, H);
+  }
+  c.drawImage(fxCv, 0, 0, W, H);
+}
+// 화면 밖의 보스·원수는 가장자리 화살표로 알려 준다
+function drawOffscreenArrows(c, G) {
+  const cam = G.cam, t = S.clock;
+  for (const e of G.enemies) {
+    if (e.dead || !(e.boss || e.nem)) continue;
+    const sx = e.x - cam.x, sy = e.y - cam.y;
+    if (sx > -6 && sx < W + 6 && sy > 40 && sy < H + 6) continue;
+    const dx = sx - W / 2, dy = sy - H / 2, k = Math.min((W / 2 - 24) / Math.abs(dx || 1e-3), (H / 2 - 70) / Math.abs(dy || 1e-3));
+    const ang = Math.atan2(dy, dx), pul = 1 + Math.sin(t * 8) * 0.12, col = e.nem ? '#ff4d6d' : e.final ? '#ff5d73' : '#ffb15c';
+    c.save(); c.translate(W / 2 + dx * k, H / 2 + dy * k); c.rotate(ang); c.scale(pul, pul);
+    c.fillStyle = 'rgba(20,6,20,.85)'; c.beginPath(); c.moveTo(15, 0); c.lineTo(-8, -11); c.lineTo(-3, 0); c.lineTo(-8, 11); c.closePath(); c.fill();
+    c.fillStyle = col; c.beginPath(); c.moveTo(12, 0); c.lineTo(-6, -8); c.lineTo(-2, 0); c.lineTo(-6, 8); c.closePath(); c.fill();
+    c.restore();
+  }
 }
 
 /* ---------- 살아 있는 배경: 챕터마다 다른 입자와 흐르는 안개 ---------- */
 const AMB = CHAPTERS.map((_, ch) => { const r = mulberry32(ch * 31 + 7); return Array.from({ length: 34 }, () => ({ x: r() * W, y: r() * H, sp: 0.5 + r(), amp: 8 + r() * 22, ph: r() * 6.28, sz: 1 + r() * 1.8 })); });
 const AMB_COL = ['#d8ff7a', '#c9a0ff', '#ffa040', '#eaf8ff', '#ff4d6d', '#ffd34a'];
 const AMB_RISE = [0, 10, 34, -22, 12, 8]; // 위로 뜨는 속도 (음수는 눈처럼 떨어진다, 0은 제자리 맴돌기)
-function drawAmbient(c, ch) {
+function drawAmbient(c, ch, cam) {
   const t = S.clock, P = AMB[ch], col = AMB_COL[ch] || '#fff', rise = AMB_RISE[ch] || 0, acc = CHAPTERS[ch].accent;
   for (let k = 0; k < 2; k++) { // 안개
     const fx = W * (0.5 + 0.4 * Math.sin(t * 0.07 + k * 3)), fy = H * (0.35 + 0.3 * k + 0.08 * Math.sin(t * 0.11 + k));
@@ -195,15 +220,15 @@ function drawAmbient(c, ch) {
   }
   c.save(); c.globalCompositeOperation = 'lighter'; c.fillStyle = col;
   for (const p of P) {
-    const x = p.x + Math.sin(t * 0.5 * p.sp + p.ph) * p.amp;
-    const y = rise ? ((p.y - t * rise * p.sp) % H + H) % H : p.y + Math.cos(t * 0.4 * p.sp + p.ph * 1.3) * p.amp * 0.7;
+    const x = (((p.x + Math.sin(t * 0.5 * p.sp + p.ph) * p.amp - cam.x * 0.35) % W) + W) % W;
+    const y = rise ? (((p.y - t * rise * p.sp - cam.y * 0.35) % H) + H) % H : (((p.y + Math.cos(t * 0.4 * p.sp + p.ph * 1.3) * p.amp * 0.7 - cam.y * 0.35) % H) + H) % H;
     const tw = 0.5 + 0.5 * Math.sin(t * (ch === 2 ? 9 : 2.2) * p.sp + p.ph);
     c.globalAlpha = 0.1 + 0.28 * tw; c.beginPath(); c.arc(x, y, p.sz * 3.2, 0, 6.3); c.fill();
     c.globalAlpha = 0.35 + 0.55 * tw; c.beginPath(); c.arc(x, y, p.sz, 0, 6.3); c.fill();
   }
   c.restore();
 }
-const TORCHES = [[40, 70], [130, 70], [230, 70], [320, 70]];
+const TORCHES = [[70, 56], [215, 56], [360, 56], [505, 56], [650, 56]];
 function drawTorches(c, ch) {
   const t = S.clock, acc = CHAPTERS[ch].accent;
   for (let i = 0; i < TORCHES.length; i++) {
@@ -238,13 +263,14 @@ export function drawChibi(c, o, pal, alpha, scale) {
   const atkK = o.atk > 0.75 ? (1 - o.atk) * 4 : o.atk / 0.75; // 공격: 살짝 웅크렸다(예비 동작) 튀어 나간다
   const sq = Math.sin(ph * 2) * 0.05 * sp + idle * 0.025 + (o.atk > 0.75 ? 0.1 * atkK : -0.06 * atkK);
   const spr = o.sprite || pal.sprite, im = SPR[spr] && pick(c, o, spr);
-  if (!im) c.translate(0, -bob);
+  const robed = ROBED.includes(spr); // 긴 옷은 다리를 따로 자르면 어색하다: 통째로 통통 튀며 흔들린다
+  if (!im || robed) c.translate(0, -bob);
   c.translate(o.face * (o.atk > 0.75 ? -2 : 5) * atkK - o.face * Math.min(o.hit, 0.2) * 14, 0); // 공격은 내딛고, 맞으면 밀린다
-  c.rotate(o.face * 0.05 * sp * Math.sin(ph) + o._lean - o.face * Math.min(o.hit, 0.25) * 0.8);
+  c.rotate(o.face * (robed ? 0.075 : 0.05) * sp * Math.sin(ph) + o._lean - o.face * Math.min(o.hit, 0.25) * 0.8);
   c.scale(fx * (1 + sq), 1 - sq);
   if (im) {
-    puppet(c, im, 50, {
-      legs: true, view: o._v, ph, sp, bob: -bob,
+    puppet(c, im, 64, {
+      legs: !robed, view: o._v, ph, sp, bob: -bob,
       headBob: Math.sin(ph * 2 - 0.9) * 1.2 * sp + Math.sin(clock * 3 + o.id) * 0.6 * (1 - sp),
       headRot: -o._lean * 0.6 + Math.sin(ph - 0.6) * 0.05 * sp,
       red: o.isHero && o.hit > 0 ? o.hit * 3 : 0, white: !o.isHero && o.hit > 0 ? o.hit * 3 : 0,
@@ -308,7 +334,7 @@ function drawSlime(c, e, col, belly) {
   if (im) { // 통통 뛰어다닌다: 뜨면 늘어나고, 떨어지면 납작해진다
     const hp = Math.sin(t * 7 + e.seed), air = Math.max(0, hp), land = Math.max(0, -hp);
     c.translate(0, -air * e.r * 0.7); c.scale(1 - air * 0.12 + land * 0.18, 1 + air * 0.16 - land * 0.2);
-    puppet(c, im, e.r * 2.1, { white: e.wf }); return;
+    puppet(c, im, e.r * 2.7, { white: e.wf }); return;
   }
   ell(c, 0, -h, w, h); fs(c, col || '#7ee06b');
   c.fillStyle = belly || 'rgba(255,255,255,.55)'; ell(c, -w * 0.4, -h * 1.5, w * 0.25, h * 0.18); c.fill();
@@ -320,8 +346,8 @@ function drawBat(c, e) {
   c.scale(k, k);
   if (SPR.bat) {
     const im = pick(c, e, 'bat');
-    c.translate(0, by + 14);
-    puppet(c, im, 28, e._v === 's' ? { white: e.wf } : { wings: fl * 0.32, white: e.wf });
+    c.translate(0, by + 19);
+    puppet(c, im, 38, e._v === 's' ? { white: e.wf } : { wings: fl * 0.32, white: e.wf });
     return;
   }
   for (const sd of [-1, 1]) {
@@ -334,7 +360,7 @@ function drawBat(c, e) {
 }
 function drawBrute(c, e) {
   const t = S.clock, s = e.seed, st = Math.abs(Math.sin(t * 4 + s)), by = -st * 3, r = e.r;
-  if (SPR.brute) { puppet(c, pick(c, e, 'brute'), r * 2.6, { legs: true, view: e._v, ph: e._ph, sp: e._sp, bob: -Math.abs(Math.sin(e._ph)) * 2.5 * e._sp, headBob: Math.sin(e._ph * 2 - 1) * 1.2 * e._sp, white: e.wf }); return; }
+  if (SPR.brute) { puppet(c, pick(c, e, 'brute'), r * 3.3, { legs: true, view: e._v, ph: e._ph, sp: e._sp, bob: -Math.abs(Math.sin(e._ph)) * 2.5 * e._sp, headBob: Math.sin(e._ph * 2 - 1) * 1.2 * e._sp, white: e.wf }); return; }
   rr(c, -r * 0.6, by - r * 1.0, r * 1.2, r * 1.0, 7); fs(c, '#ff9c4a');
   rr(c, -r * 0.55, by - 3, r * 0.45, 7, 3); fs(c, '#7a4a2a');
   rr(c, r * 0.1, by - 3, r * 0.45, 7, 3); fs(c, '#7a4a2a');
@@ -348,7 +374,7 @@ function drawBrute(c, e) {
 }
 function drawMage(c, e) {
   const t = S.clock, s = e.seed, r = e.r, fl = Math.sin(t * 3 + s) * 2, by = -4 + fl;
-  if (SPR.mage) { c.translate(0, fl * 0.6); puppet(c, pick(c, e, 'mage'), r * 2.8, { legs: true, view: e._v, ph: e._ph, sp: e._sp * 0.6, headBob: Math.sin(t * 3 + s), headRot: e.cast ? Math.sin(t * 30) * 0.05 : 0, white: e.wf }); return; }
+  if (SPR.mage) { c.translate(0, fl * 0.6); puppet(c, pick(c, e, 'mage'), r * 3.5, { legs: true, view: e._v, ph: e._ph, sp: e._sp * 0.6, headBob: Math.sin(t * 3 + s), headRot: e.cast ? Math.sin(t * 30) * 0.05 : 0, white: e.wf }); return; }
   c.beginPath(); c.moveTo(-r * 0.9, by); c.quadraticCurveTo(0, by - r * 2.2, r * 0.9, by); c.closePath(); fs(c, '#5b3d9a');
   c.beginPath(); c.arc(0, by - r * 1.7, r * 0.75, 0, 6.3); fs(c, '#efe6d0');
   c.fillStyle = '#2a1830'; ell(c, -r * 0.3, by - r * 1.7, 2.4, 3); c.fill(); ell(c, r * 0.3, by - r * 1.7, 2.4, 3); c.fill();
@@ -363,7 +389,7 @@ function drawBoar(c, e) {
   const wind = e.cs === 'wind', dash = e.cs === 'dash';
   const jit = wind ? Math.sin(t * 60) * 1.5 : 0, run = dash ? 14 : 5, by = -Math.abs(Math.sin(t * run + s)) * (dash ? 4 : 2);
   c.translate(jit, 0);
-  if (SPR.boar) { puppet(c, pick(c, e, 'boar'), r * 2.1, { legs: true, view: e._v, ph: e._ph * (dash ? 1.6 : 1), sp: dash ? 1 : e._sp, bob: by, headRot: wind ? -0.08 : 0, white: e.wf, red: wind ? 0.25 + 0.2 * Math.sin(t * 30) : 0 }); return; }
+  if (SPR.boar) { puppet(c, pick(c, e, 'boar'), r * 2.65, { legs: true, view: e._v, ph: e._ph * (dash ? 1.6 : 1), sp: dash ? 1 : e._sp, bob: by, headRot: wind ? -0.08 : 0, white: e.wf, red: wind ? 0.25 + 0.2 * Math.sin(t * 30) : 0 }); return; }
   for (const lx of [-0.6, -0.2, 0.25, 0.65]) { rr(c, lx * r - 2, by - 5 + Math.sin(t * run + lx * 5) * (dash ? 2 : 1), 4, 7, 2); fs(c, '#5a3a2a'); }
   ell(c, 0, by - r * 0.8, r * 1.15, r * 0.75); fs(c, wind ? '#e0905a' : '#c98a5a');
   c.beginPath(); c.arc(r * 0.85, by - r * 0.95, r * 0.55, 0, 6.3); fs(c, '#d89a6a');
@@ -381,7 +407,7 @@ function drawBossBody(c, e) {
     if (b.pattern === 'jump') { if (e.js === 'crouch') { sx = 1.25; sy = 0.75; } else if (e.js === 'air') { sx = 0.85; sy = 1.2; } }
     c.translate(0, -(e.z || 0) + (e.bid === 'lich' ? Math.sin(t * 2) * 4 - 8 : 0)); c.scale(sx, sy);
     const walker = e.bid === 'dragon' || e.bid === 'shadow' || e.bid === 'slimeking';
-    puppet(c, pick(c, e, e.bid), r * 2.6, { legs: walker && !e.z, view: e._v, ph: e._ph * 0.7, sp: e._sp, bob: -Math.abs(Math.sin(e._ph * 0.7)) * 3 * e._sp,
+    puppet(c, pick(c, e, e.bid), r * 3.2, { legs: walker && !e.z, view: e._v, ph: e._ph * 0.7, sp: e._sp, bob: -Math.abs(Math.sin(e._ph * 0.7)) * 3 * e._sp,
       headBob: Math.sin(t * 2.5) * 1.5, headRot: e.hp < e.maxhp * 0.5 ? Math.sin(t * 9) * 0.04 : 0, white: e.wf, red: e.hp < e.maxhp * 0.3 ? 0.12 + 0.1 * Math.sin(t * 8) : 0 });
     return;
   }
@@ -461,6 +487,11 @@ function drawEnemy(c, e) {
   if (e.slowT > 0) { c.globalAlpha = 0.35; c.fillStyle = '#9fe6ff'; ell(c, 0, -e.r * 0.9, e.r * 1.05, e.r * 0.95); c.fill(); }
   c.restore();
   if (e.dying != null) return;
+  if (e.cast && S.G && S.G.hero) { // 해골 마법사가 쏘기 직전: 붉은 조준선이 깜빡인다
+    const h = S.G.hero, dx = h.x - e.x, dy = h.y - 14 - (e.y - 18), l = Math.hypot(dx, dy) || 1;
+    c.save(); c.strokeStyle = `rgba(255,70,110,${0.25 + 0.3 * Math.sin(S.clock * 40)})`; c.lineWidth = 2; c.setLineDash([6, 6]);
+    c.beginPath(); c.moveTo(e.x, e.y - 18); c.lineTo(e.x + dx / l * Math.min(l, 260), e.y - 18 + dy / l * Math.min(l, 260)); c.stroke(); c.restore();
+  }
   if (!e.boss && (e.nem || e.elite || e.hp < e.maxhp)) {
     const bw = e.r * 2 + 6, by2 = e.y - e.r * 2.3 - 6;
     c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(e.x - bw / 2, by2, bw, 4);
@@ -556,10 +587,12 @@ export function renderGame(c) {
   const G = S.G;
   c.save();
   if (G.shake > 0 && S.save.settings.shake) c.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
-  c.drawImage(chapterBg(G.ch), 0, 0, W, H);
-  drawGlow(c, G.ch);
+  const cam = G.cam || (G.cam = { x: 0, y: 0 });
+  drawBgView(c, G.ch, cam);
+  drawGlow(c, G.ch, cam);
+  drawAmbient(c, G.ch, cam);
+  c.save(); c.translate(-cam.x, -cam.y); // 여기서부터는 월드 좌표
   drawTorches(c, G.ch);
-  drawAmbient(c, G.ch);
   // 독 웅덩이
   for (const p of G.puddles) {
     const a = clamp(p.life / p.max, 0, 1);
@@ -595,7 +628,7 @@ export function renderGame(c) {
   for (const e of G.echoes) if (e.alive || e.fade > 0) list.push({ y: e.y, f: () => {
     c.save(); c.globalAlpha = 0.16 * e.fade; c.fillStyle = '#8fe9ff'; ell(c, e.x - e.face * 8 * e.sp, e.y - 14, 8, 12); c.fill(); c.restore();
     drawChibi(c, e, PAL_ECHO, 0.62 * (e.alive ? 1 : e.fade));
-    if (e.friend && e.alive) label(c, '👥 ' + e.friend, e.x, e.y - 58, '#bfeeff', '#0a2030', 10);
+    if (e.friend && e.alive) label(c, '👥 ' + e.friend, e.x, e.y - 66, '#bfeeff', '#0a2030', 10);
   } });
   for (const e of G.enemies) list.push({ y: e.y, f: () => drawEnemy(c, e) });
   for (const e of G.corpses) list.push({ y: e.y - 1, f: () => drawEnemy(c, e) });
@@ -615,20 +648,50 @@ export function renderGame(c) {
       c.restore();
       continue;
     }
-    if (s.kind === 'arrow') {
-      c.save(); c.translate(s.x, s.y); c.rotate(s.ang);
-      c.strokeStyle = echo ? '#8fe9ff' : '#fff6a8'; c.lineWidth = 2.2; c.lineCap = 'round';
-      c.beginPath(); c.moveTo(-9, 0); c.lineTo(5, 0); c.stroke();
-      c.fillStyle = echo ? '#d8f8ff' : '#ffffff'; c.beginPath(); c.moveTo(9, 0); c.lineTo(3, -3); c.lineTo(3, 3); c.fill();
+    if (s.kind === 'arrow') { // 화살: 어두운 테두리 + 밝은 몸통 + 꼬리빛이라 어떤 배경에서도 보인다
+      const sp = Math.hypot(s.vx, s.vy) || 1, hot = echo ? '#7fe3ff' : '#ffe27a';
+      c.save(); c.translate(s.x, s.y); c.rotate(s.ang); c.lineCap = 'round';
+      const tr = c.createLinearGradient(-34, 0, 0, 0); tr.addColorStop(0, 'rgba(255,255,255,0)'); tr.addColorStop(1, echo ? 'rgba(127,227,255,.6)' : 'rgba(255,226,122,.65)');
+      c.globalCompositeOperation = 'lighter'; c.strokeStyle = tr; c.lineWidth = 5; c.beginPath(); c.moveTo(-34, 0); c.lineTo(-8, 0); c.stroke();
+      c.globalCompositeOperation = 'source-over';
+      c.strokeStyle = 'rgba(20,10,40,.9)'; c.lineWidth = 6; c.beginPath(); c.moveTo(-14, 0); c.lineTo(8, 0); c.stroke();
+      c.beginPath(); c.moveTo(14, 0); c.lineTo(5, -6); c.lineTo(5, 6); c.closePath(); c.fillStyle = 'rgba(20,10,40,.9)'; c.fill(); c.lineWidth = 2; c.strokeStyle = 'rgba(20,10,40,.9)'; c.stroke();
+      c.strokeStyle = hot; c.lineWidth = 3; c.beginPath(); c.moveTo(-13, 0); c.lineTo(7, 0); c.stroke();
+      c.fillStyle = '#ffffff'; c.beginPath(); c.moveTo(13, 0); c.lineTo(5.5, -4.6); c.lineTo(5.5, 4.6); c.fill();
+      c.strokeStyle = '#ffffff'; c.lineWidth = 1.6; c.beginPath(); c.moveTo(-13, 0); c.lineTo(-17, -4); c.moveTo(-13, 0); c.lineTo(-17, 4); c.stroke();
       c.restore();
       continue;
     }
-    c.fillStyle = echo ? 'rgba(143,233,255,.35)' : 'rgba(255,210,90,.35)'; c.beginPath(); c.arc(s.x - s.vx * 0.018, s.y - s.vy * 0.018, 6, 0, 6.3); c.fill();
-    c.fillStyle = s.st.frost ? '#d8f6ff' : echo ? '#8fe9ff' : s.kind === 'orb' ? '#e6c8ff' : '#fff6a8'; c.beginPath(); c.arc(s.x, s.y, s.kind === 'orb' ? 6 : 4, 0, 6.3); c.fill();
+    if (s.kind === 'orb') { // 마법 구슬: 후광 + 어두운 테두리 + 밝은 핵
+      const pul = 1 + Math.sin(S.clock * 24 + s.x) * 0.1, col = echo ? ['#7fe3ff', '#d6f7ff'] : ['#c27cff', '#f4e0ff'];
+      c.save(); c.translate(s.x, s.y);
+      const g = c.createRadialGradient(0, 0, 2, 0, 0, 20 * pul); g.addColorStop(0, echo ? 'rgba(127,227,255,.7)' : 'rgba(194,124,255,.75)'); g.addColorStop(1, 'rgba(194,124,255,0)');
+      c.globalCompositeOperation = 'lighter'; c.fillStyle = g; c.beginPath(); c.arc(0, 0, 20 * pul, 0, 6.3); c.fill();
+      c.globalCompositeOperation = 'source-over';
+      c.fillStyle = 'rgba(25,8,45,.9)'; c.beginPath(); c.arc(0, 0, 9 * pul, 0, 6.3); c.fill();
+      c.fillStyle = col[0]; c.beginPath(); c.arc(0, 0, 7 * pul, 0, 6.3); c.fill();
+      c.fillStyle = col[1]; c.beginPath(); c.arc(-1.5, -1.5, 3.6, 0, 6.3); c.fill();
+      c.restore();
+      continue;
+    }
+    c.fillStyle = echo ? 'rgba(143,233,255,.35)' : 'rgba(255,210,90,.35)'; c.beginPath(); c.arc(s.x - s.vx * 0.018, s.y - s.vy * 0.018, 7, 0, 6.3); c.fill();
+    c.fillStyle = 'rgba(20,10,40,.9)'; c.beginPath(); c.arc(s.x, s.y, 6.5, 0, 6.3); c.fill();
+    c.fillStyle = s.st.frost ? '#d8f6ff' : echo ? '#8fe9ff' : '#fff6a8'; c.beginPath(); c.arc(s.x, s.y, 4.8, 0, 6.3); c.fill();
   }
+  // 적 탄: 붉은 위험 고리 + 어두운 테두리 + 밝은 핵 + 꼬리 (플레이어 탄과 확실히 구분된다)
   for (const eb of G.ebul) {
-    c.fillStyle = eb.col || '#ff5d73'; c.beginPath(); c.arc(eb.x, eb.y, eb.r, 0, 6.3); c.fill();
-    c.fillStyle = '#fff'; c.beginPath(); c.arc(eb.x - 1, eb.y - 1, eb.r * 0.4, 0, 6.3); c.fill();
+    const pul = 1 + Math.sin(S.clock * 14 + eb.x * 0.1) * 0.12, r = eb.r + 2;
+    c.save(); c.translate(eb.x, eb.y);
+    const sp = Math.hypot(eb.vx, eb.vy) || 1;
+    c.globalCompositeOperation = 'lighter'; c.strokeStyle = eb.col || '#ff5d73'; c.globalAlpha = 0.5; c.lineWidth = r * 1.3; c.lineCap = 'round';
+    c.beginPath(); c.moveTo(0, 0); c.lineTo(-eb.vx / sp * 14, -eb.vy / sp * 14); c.stroke();
+    c.globalAlpha = 0.55 + 0.25 * Math.sin(S.clock * 14); c.strokeStyle = '#ff3355'; c.lineWidth = 2;
+    c.beginPath(); c.arc(0, 0, (r + 5) * pul, 0, 6.3); c.stroke();
+    c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+    c.fillStyle = 'rgba(35,0,20,.92)'; c.beginPath(); c.arc(0, 0, r + 2.2, 0, 6.3); c.fill();
+    c.fillStyle = eb.col || '#ff5d73'; c.beginPath(); c.arc(0, 0, r, 0, 6.3); c.fill();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(-r * 0.2, -r * 0.2, r * 0.48, 0, 6.3); c.fill();
+    c.restore();
   }
   // 번개
   for (const bo of G.bolts) {
@@ -654,6 +717,9 @@ export function renderGame(c) {
     label(c, t.s, t.x, t.y - (1 - clamp(t.life / t.max, 0, 1)) * 14, t.col, '#1b1230', t.size * (1 + 0.7 * Math.max(0, 1 - (t.max - t.life) / 0.12)));
   }
   c.globalAlpha = 1;
+  c.restore(); // 월드 좌표 끝
+  drawScreenFx(c);
+  drawOffscreenArrows(c, G);
   if (G.flash > 0) { c.fillStyle = `rgba(255,255,255,${Math.min(0.6, G.flash)})`; c.fillRect(0, 0, W, H); }
   if (G.hurt > 0) { // 맞으면 화면 가장자리가 붉게 번쩍인다
     const a = clamp(G.hurt / 0.45, 0, 1), g = c.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.7);
@@ -672,17 +738,18 @@ export function renderGame(c) {
 
 // 타이틀 배경: 선택한 챕터의 던전에서 영웅과 메아리가 원을 그리며 걷는다
 export function renderTitle(c) {
-  const ch = stageChap(S.chapter).ch;
-  c.drawImage(chapterBg(ch), 0, 0, W, H);
-  drawGlow(c, ch);
-  drawTorches(c, ch);
-  drawAmbient(c, ch);
+  const ch = stageChap(S.chapter).ch, cam = { x: (ARENA.w - W) / 2, y: ARENA.h - H - 90 };
+  drawBgView(c, ch, cam);
+  drawGlow(c, ch, cam);
+  drawAmbient(c, ch, cam);
   c.fillStyle = 'rgba(10,5,20,.35)'; c.fillRect(0, 0, W, H);
   const n = Math.max(1, Math.min(4, S.save.echoes[ch].length + 1));
   const items = [];
   for (let i = 0; i < n; i++) {
     const a = S.clock * 0.8 - i * 0.6, cx = W / 2 + Math.cos(a) * 95, cy = 478 + Math.sin(a) * 20;
-    items.push({ i, o: { id: i, sprite: CLASSES[S.save.cls].sprite, x: cx, y: cy, face: Math.sin(a) > 0 ? -1 : 1, phase: S.clock * 7 - i, sp: 1, atk: 0, hit: 0, ang: 0 } });
+    items.push({ i, o: { id: i, sprite: CLASSES[S.save.cls].sprite, x: cx + cam.x, y: cy + cam.y, face: Math.sin(a) > 0 ? -1 : 1, phase: S.clock * 7 - i, sp: 1, atk: 0, hit: 0, ang: 0 } });
   }
+  c.save(); c.translate(-cam.x, -cam.y);
   items.sort((a, b) => a.o.y - b.o.y).forEach(({ i, o }) => drawChibi(c, o, i === 0 ? PAL_HERO : PAL_ECHO, i === 0 ? 1 : 0.55));
+  c.restore();
 }
