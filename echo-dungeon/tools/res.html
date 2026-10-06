@@ -1,0 +1,56 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:transparent}canvas{display:block}</style></head>
+<body><canvas id="c"></canvas>
+<script type="module">
+import { S } from '../www/js/state.js';
+import { drawChibi, PAL_HERO, PAL_ECHO } from '../www/js/render.js';
+S.clock = 0.4;
+const cv = document.getElementById('c'), c = cv.getContext('2d');
+const hero = (x, y, face, id) => ({ id, x, y, face, phase: 1.2 + id, sp: 0.35, atk: 0.6, hit: 0, ang: 0 });
+// 영웅 + 메아리 둘. 원점은 영웅 발밑, 크기는 높이 약 60 단위
+function art(cx, cy, k) {
+  c.save(); c.translate(cx, cy); c.scale(k, k);
+  drawChibi(c, hero(-22, -4, 1, 2), PAL_ECHO, 0.45);
+  drawChibi(c, hero(-11, -2, 1, 1), PAL_ECHO, 0.7);
+  drawChibi(c, hero(8, 0, 1, 0), PAL_HERO, 1);
+  c.restore();
+}
+function bg(w, h, round, square) {
+  const g = c.createRadialGradient(w * 0.5, h * 0.35, w * 0.05, w * 0.5, h * 0.5, w * 0.75);
+  g.addColorStop(0, '#7a5cff'); g.addColorStop(0.55, '#3b2a6a'); g.addColorStop(1, '#1b1230');
+  c.fillStyle = g;
+  c.beginPath();
+  if (round) c.arc(w / 2, h / 2, w / 2, 0, 6.2832); else if (square) c.rect(0, 0, w, h); else c.roundRect(0, 0, w, h, w * 0.18);
+  c.fill();
+  c.save(); c.clip();
+  for (let i = 0; i < 14; i++) { // 반짝이
+    const x = (Math.sin(i * 12.9) * 0.5 + 0.5) * w, y = (Math.cos(i * 7.3) * 0.5 + 0.5) * h * 0.6;
+    c.fillStyle = `rgba(200,240,255,${0.25 + (i % 3) * 0.15})`; c.beginPath(); c.arc(x, y, w * 0.008 * (1 + i % 3), 0, 6.3); c.fill();
+  }
+  c.restore();
+}
+function title(x, y, size) {
+  c.font = `900 ${size}px 'Noto Sans KR','WenQuanYi Zen Hei',sans-serif`; c.textAlign = 'center';
+  c.lineWidth = size * 0.16; c.strokeStyle = '#7a3b86'; c.lineJoin = 'round';
+  c.strokeText('메아리 던전', x, y); c.fillStyle = '#ffe9a8'; c.fillText('메아리 던전', x, y);
+}
+window.draw = (kind, w, h) => {
+  cv.width = w; cv.height = h; c.clearRect(0, 0, w, h);
+  if (kind === 'icon' || kind === 'round' || kind === 'store') { bg(w, h, kind === 'round', kind === 'store'); art(w * 0.5, h * 0.84, w / 100); }
+  else if (kind === 'fg') { art(w * 0.5, h * 0.74, w / 165); } // 적응형 아이콘: 가운데 66% 안전 영역
+  else if (kind === 'splash') {
+    const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#1b1230'); g.addColorStop(1, '#120b22');
+    c.fillStyle = g; c.fillRect(0, 0, w, h);
+    const m = Math.min(w, h);
+    art(w * 0.49, h * 0.5 + m * 0.08, m / 185);
+    title(w / 2, h * 0.5 + m * 0.24, m * 0.09);
+  } else if (kind === 'feature') {
+    bg(w, h, false, true);
+    art(w * 0.27, h * 0.86, h / 98);
+    title(w * 0.66, h * 0.48, h * 0.17);
+    c.font = `700 ${h * 0.065}px 'Noto Sans KR','WenQuanYi Zen Hei',sans-serif`; c.fillStyle = '#cdbbff';
+    c.fillText('한 판이 끝나면, 과거의 내가 동료가 된다', w * 0.66, h * 0.66);
+  }
+  return cv.toDataURL('image/png');
+};
+window.ready = true;
+</script></body></html>

@@ -1,0 +1,5 @@
+node_modules/
+/android/
+.env
+*.log
+tools/out/

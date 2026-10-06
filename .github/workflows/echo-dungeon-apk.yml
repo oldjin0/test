@@ -1,0 +1,57 @@
+name: Echo Dungeon APK
+
+# echo-dungeon/ 폴더(게임)만 다룬다. 이 저장소의 다른 워크플로와 섞이지 않도록 echo-dungeon 브랜치에서만 돈다.
+on:
+  push:
+    branches: [echo-dungeon]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: echo-dungeon
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: echo-dungeon/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: 게임 전체 흐름 테스트
+        run: npm test
+
+  apk:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: echo-dungeon/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - name: 안드로이드 프로젝트 준비
+        run: bash tools/android-prep.sh
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+      - name: Build debug APK
+        working-directory: echo-dungeon/android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Rename
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cp android/app/build/outputs/apk/debug/app-debug.apk "echo-dungeon-${VERSION}-debug.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: echo-dungeon-debug-apk
+          path: echo-dungeon/echo-dungeon-*-debug.apk
