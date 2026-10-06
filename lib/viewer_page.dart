@@ -29,24 +29,35 @@ Future<void> prepareNextPages(LibraryStore store, ColorizeService service) async
   if (!store.colorize || !service.modelLoaded) return;
   final last = store.recent.where((r) => !isTextFile(r.path)).firstOrNull;
   if (last == null || last.total == 0 || last.page >= last.total - 1) return;
-  if (!await FileSystemEntity.isDirectory(last.path) && !await File(last.path).exists()) return;
+  await prepareBook(
+    last.path,
+    last.page,
+    math.min(store.prefetchPages, backgroundPages) + 1,
+    store,
+    service,
+  );
+}
+
+/// Queues [count] pages of the book at [path] from [first] for background
+/// colorizing (they land in the disk cache).
+Future<void> prepareBook(
+  String path,
+  int first,
+  int count,
+  LibraryStore store,
+  ColorizeService service,
+) async {
+  if (!store.colorize || !service.modelLoaded) return;
   try {
-    final book = await ComicBook.open(last.path, window: 4);
-    final end = math.min(
-      book.length,
-      last.page + 1 + math.min(store.prefetchPages, backgroundPages),
-    );
-    for (var i = last.page; i < end; i++) {
+    if (!await FileSystemEntity.isDirectory(path) && !await File(path).exists()) return;
+    final book = await ComicBook.open(path, window: 4);
+    final end = math.min(book.length, first + count);
+    for (var i = first; i < end; i++) {
       service
           .colorizeInBackground(
-            ColorizeService.keyFor(
-              last.path,
-              i,
-              hints: store.hintsOf(last.path, i),
-              denoise: store.denoise,
-            ),
+            ColorizeService.keyFor(path, i, hints: store.hintsOf(path, i), denoise: store.denoise),
             () => book.page(i),
-            hints: store.hintsOf(last.path, i),
+            hints: store.hintsOf(path, i),
             denoise: store.denoise,
           )
           .then((_) {}, onError: (Object _) {});
@@ -116,7 +127,15 @@ class _ViewerPageState extends State<ViewerPage> {
   final _curlKey = GlobalKey<CurlPageViewState>();
   final _vScroll = ItemScrollController();
   final _vPositions = ItemPositionsListener.create();
-  late final _auto = AutoTurn(() => _turn(true));
+  late final _auto = AutoTurn(() => _turn(true, auto: true));
+
+  // Going on to the next book: found when this one opens, its first pages
+  // are colored while the last ones are read, a second forward press at the
+  // end opens it.
+  String? _next;
+  bool _nextPrepared = false;
+  bool _endArmed = false;
+  Timer? _endTimer;
   int _turns = 0; // page turns, for e-ink refreshes
   int _flash = 0;
 
@@ -146,6 +165,7 @@ class _ViewerPageState extends State<ViewerPage> {
       if (!mounted) return;
       setState(() => _service = s);
       _pages?.setColorizer(s, colorize: _store.colorize);
+      _prepareNext();
     });
   }
 
@@ -174,6 +194,7 @@ class _ViewerPageState extends State<ViewerPage> {
       if (_service != null) pages.setColorizer(_service, colorize: _store.colorize);
       _saveProgress();
       _focus();
+      unawaited(_findNext());
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
@@ -256,9 +277,13 @@ class _ViewerPageState extends State<ViewerPage> {
   void _onPageChanged(int spread) {
     final sp = _spreads;
     if (spread < 0 || spread >= sp.length) return;
-    setState(() => _page = sp[spread].first);
+    setState(() {
+      _page = sp[spread].first;
+      _endArmed = false;
+    });
     _saveProgress();
     _focus();
+    _prepareNext();
     _auto.restart();
     if (_store.eink && _store.refreshEvery > 0 && ++_turns % _store.refreshEvery == 0) {
       setState(() => _flash++);
@@ -266,10 +291,69 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   /// One page (spread) forward or back: keys, taps and auto turn.
-  void _turn(bool forward) {
+  Future<void> _findNext() async {
+    if (!_store.autoNext) return;
+    final next = await nextBookPath(widget.path);
+    if (!mounted) return;
+    setState(() => _next = next);
+    _prepareNext();
+  }
+
+  bool get _atEnd => _book != null && _page ~/ _step >= _spreads.length - 1;
+
+  /// Colors the next book's first pages once the last ones of this book come.
+  void _prepareNext() {
+    final next = _next, book = _book, service = _service;
+    if (next == null || _nextPrepared || book == null || service == null) return;
+    if (!_store.autoNext) return;
+    final close = math.max(5, math.min(_store.prefetchPages, 20));
+    if (book.length - 1 - _page > close) return;
+    _nextPrepared = true;
+    unawaited(prepareBook(next, 0, close, _store, service));
+  }
+
+  void _openNext() {
+    final next = _next;
+    if (next == null || !mounted) return;
+    _endTimer?.cancel();
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => ViewerPage(
+          path: next,
+          store: widget.store,
+          colorizer: widget.colorizer,
+          decodeImages: widget.decodeImages,
+        ),
+      ),
+    );
+  }
+
+  /// A forward turn at the last page: the first press says what comes next,
+  /// the second (within a few seconds) opens it. Never from auto turning.
+  void _pastEnd({required bool auto}) {
+    if (auto || !_store.autoNext || _next == null) return;
+    if (_endArmed) return _openNext();
+    setState(() => _endArmed = true);
+    _endTimer?.cancel();
+    _endTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => _endArmed = false);
+    });
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 5),
+          content: Text('마지막 쪽입니다. 한 번 더 넘기면 다음 권 「${comicTitle(_next!)}」을 엽니다'),
+          action: SnackBarAction(label: '열기', onPressed: _openNext),
+        ),
+      );
+  }
+
+  void _turn(bool forward, {bool auto = false}) {
     if (_book == null) return;
     final cur = _page ~/ _step;
     final target = cur + (forward ? 1 : -1);
+    if (forward && target >= _spreads.length) return _pastEnd(auto: auto);
     if (target < 0 || target >= _spreads.length) return;
     if (_store.vertical) {
       if (_vScroll.isAttached) _vScroll.jumpTo(index: target);
@@ -460,6 +544,7 @@ class _ViewerPageState extends State<ViewerPage> {
     AppPlatform.keepScreenOn(false);
     applyOrientation('auto');
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _endTimer?.cancel();
     _service?.focus(const []);
     _pages?.handOff(); // the pages ahead keep coloring after the reader closes
     _store.removeListener(_onStore);
@@ -892,6 +977,13 @@ class _ViewerPageState extends State<ViewerPage> {
   /// Small chip showing what the colorizer is doing for the visible page.
   Widget _status() {
     final pages = _pages;
+    final next = _next;
+    if (_atEnd && next != null && _store.autoNext) {
+      return GestureDetector(
+        onTap: _openNext,
+        child: _Chip(text: '다음 권 열기 · ${comicTitle(next)}', eink: _store.eink),
+      );
+    }
     if (!_store.colorize || pages == null) return const SizedBox.shrink();
     final service = _service;
     final eink = _store.eink;

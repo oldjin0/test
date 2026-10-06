@@ -12,6 +12,7 @@ import 'package:manga_viewer/comic_loader.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/reader_controls.dart';
 import 'package:manga_viewer/reader_pages.dart';
+import 'package:manga_viewer/storage.dart' show nextBookPath;
 import 'package:manga_viewer/viewer_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -270,6 +271,71 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
       expect(store.progressOf(path)!.page, 2);
+    });
+
+    testWidgets('at the end of a book the next one in the folder opens on a second press', (
+      tester,
+    ) async {
+      final store = await LibraryStore.load();
+      store.setColorize(false);
+      store.setRtl(false);
+      store.update((s) => s.turnStyle = 'none');
+      final (vol2, vol10) = (await tester.runAsync(() async {
+        final dir = await Directory.systemTemp.createTemp('series');
+        final a = await writeComic(dir, 3);
+        final b = await File(a).rename('${dir.path}/vol2.cbz');
+        final c = await b.copy('${dir.path}/vol10.cbz');
+        await File('${dir.path}/vol1.cbz').writeAsBytes(await b.readAsBytes());
+        return (b.path, c.path);
+      }))!;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ViewerPage(
+            path: vol2,
+            store: store,
+            colorizer: Completer<ColorizeService>().future,
+            decodeImages: false,
+          ),
+        ),
+      );
+      for (var i = 0; i < 60 && find.byType(Image).evaluate().isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump();
+      }
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await tester.pump();
+      expect(store.progressOf(vol2)!.page, 2);
+      // finding the next book is a chain of file system calls
+      final chip = find.textContaining('다음 권 열기 · vol10');
+      for (var i = 0; i < 100 && chip.evaluate().isEmpty; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump();
+      }
+      expect(chip, findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageDown); // first press: the hint
+      await tester.pump();
+      expect(find.textContaining('한 번 더 넘기면 다음 권'), findsOneWidget);
+      expect(store.progressOf(vol10), isNull, reason: 'not opened yet');
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageDown); // second press: opens it
+      await tester.pump();
+      for (var i = 0; i < 60 && store.progressOf(vol10) == null; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+        await tester.pump();
+      }
+      expect(store.progressOf(vol10)?.page, 0, reason: 'the next book is open at its start');
+      expect(store.progressOf(vol2)!.page, 2, reason: 'the finished one stays at its end');
+    });
+
+    test('the setting is kept, and a book that is gone has no next one', () async {
+      final store = await LibraryStore.load();
+      expect(store.autoNext, isTrue);
+      store.update((s) => s.autoNext = false);
+      expect((await LibraryStore.load()).autoNext, isFalse);
+      expect(await nextBookPath('/does/not/exist/a.cbz'), isNull);
     });
 
     testWidgets('PC keys: Home/End, B, D; the wheel turns one page per notch', (tester) async {

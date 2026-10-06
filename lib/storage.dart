@@ -102,3 +102,26 @@ Future<FolderListing> listFolder(String path, {String sortBy = 'name'}) async {
 }
 
 String comicTitle(String path) => p.basenameWithoutExtension(path);
+
+/// The book that follows [path] in its folder (natural name order: "vol2"
+/// before "vol10"), or null for the last one or when it cannot be found.
+/// A comic goes on to the next comic (text books are skipped); a folder of
+/// images to the next folder.
+Future<String?> nextBookPath(String path) async {
+  try {
+    final parent = p.dirname(path);
+    final isDir = await FileSystemEntity.isDirectory(path);
+    final listing = await listFolder(parent);
+    final names = isDir
+        ? [for (final d in listing.dirs) d.path]
+        : [
+            for (final f in listing.comics)
+              if (!isTextFile(f.path)) f.path,
+          ];
+    final at = names.indexWhere((n) => p.equals(n, path));
+    if (at < 0 || at + 1 >= names.length) return null;
+    return names[at + 1];
+  } catch (_) {
+    return null;
+  }
+}

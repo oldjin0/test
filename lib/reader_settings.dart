@@ -255,6 +255,13 @@ List<Widget> _turnSection(LibraryStore s, {required bool comic}) => [
     (v) => s.update((s) => s.volumeKeys = v),
     subtitle: '아래 = 다음, 위 = 이전. 이북리더기 페이지 버튼은 항상 동작합니다',
   ),
+  if (comic)
+    _switch(
+      '다음 권으로 이어보기',
+      s.autoNext,
+      (v) => s.update((s) => s.autoNext = v),
+      subtitle: '마지막 쪽에서 한 번 더 넘기면 같은 폴더의 다음 책을 엽니다. 다음 책의 앞부분은 미리 채색해 둡니다',
+    ),
   _choices(
     '자동 넘김',
     const {0: '끔', 5: '5초', 10: '10초', 20: '20초', 30: '30초', 60: '1분'},

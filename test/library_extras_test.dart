@@ -26,6 +26,31 @@ void main() {
   setUp(() => dir = Directory.systemTemp.createTempSync('extras'));
   tearDown(() => dir.deleteSync(recursive: true));
 
+  group('next book', () {
+    late Directory dir;
+    setUp(() => dir = Directory.systemTemp.createTempSync('series'));
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    test('follows the folder in natural order, skips text books, ends at the last', () async {
+      for (final n in ['vol1.cbz', 'vol2.cbz', 'vol10.cbz', 'notes.txt', 'z.zip']) {
+        File('${dir.path}/$n').writeAsBytesSync([1]);
+      }
+      String at(String n) => '${dir.path}/$n';
+      expect(await nextBookPath(at('vol1.cbz')), at('vol2.cbz'));
+      expect(await nextBookPath(at('vol2.cbz')), at('vol10.cbz'), reason: 'natural order');
+      expect(await nextBookPath(at('vol10.cbz')), at('z.zip'));
+      expect(await nextBookPath(at('z.zip')), isNull);
+    });
+
+    test('a folder of images goes on to the next folder', () async {
+      for (final n in ['ch1', 'ch2', 'ch10']) {
+        Directory('${dir.path}/$n').createSync();
+      }
+      expect(await nextBookPath('${dir.path}/ch2'), '${dir.path}/ch10');
+      expect(await nextBookPath('${dir.path}/ch10'), isNull);
+    });
+  });
+
   group('image folders', () {
     test('a folder of images opens as a comic in natural order', () async {
       File('${dir.path}/p10.png').writeAsBytesSync(png(4, 4, 10));

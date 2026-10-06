@@ -103,6 +103,9 @@ class LibraryStore extends ChangeNotifier {
   /// Volume (and e-reader page) buttons turn pages.
   bool volumeKeys = true;
 
+  /// At the end of a book, the next one in its folder can be opened.
+  bool autoNext = true;
+
   /// Tap areas: 'lr' (left/right, by reading direction), 'lrInvert',
   /// 'tb' (top half back, bottom half forward), 'next' (anywhere forward,
   /// left edge back).
@@ -183,6 +186,7 @@ class LibraryStore extends ChangeNotifier {
     prefetchPages = p.getInt('prefetchPages') ?? prefetchPages;
     eink = p.getBool('eink') ?? eink;
     volumeKeys = p.getBool('volumeKeys') ?? volumeKeys;
+    autoNext = p.getBool('autoNext') ?? autoNext;
     tapZones = p.getString('tapZones') ?? tapZones;
     autoCrop = p.getBool('autoCrop') ?? autoCrop;
     contrast = p.getDouble('contrast') ?? contrast;
@@ -277,6 +281,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setInt('prefetchPages', prefetchPages);
     _prefs.setBool('eink', eink);
     _prefs.setBool('volumeKeys', volumeKeys);
+    _prefs.setBool('autoNext', autoNext);
     _prefs.setString('tapZones', tapZones);
     _prefs.setBool('autoCrop', autoCrop);
     _prefs.setDouble('contrast', contrast);
