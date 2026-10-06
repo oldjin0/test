@@ -10,6 +10,7 @@ FONT = "Malgun Gothic"
 
 BADGE_COLORS = {
     dl.ST_QUEUED: "#7A7F87",
+    dl.ST_ANALYZING: "#2F6FDE",
     dl.ST_DOWNLOADING: "#2F6FDE",
     dl.ST_MERGING: "#8E4FD6",
     dl.ST_AUDIO: "#8E4FD6",
@@ -32,7 +33,7 @@ class JobCard(ctk.CTkFrame):
                                   font=ctk.CTkFont(FONT, 12, "bold"))
         self.badge.grid(row=0, column=0, rowspan=2, padx=(12, 10), pady=12, sticky="n")
 
-        self.title_lbl = ctk.CTkLabel(self, text=truncate(job.url, 80), anchor="w",
+        self.title_lbl = ctk.CTkLabel(self, text=truncate(job.title or job.url, 80), anchor="w",
                                       font=ctk.CTkFont(FONT, 13, "bold"))
         self.title_lbl.grid(row=0, column=1, sticky="ew", pady=(10, 0))
         self.url_lbl = ctk.CTkLabel(self, text=truncate(job.url, 100), anchor="w",
@@ -71,6 +72,9 @@ class JobCard(ctk.CTkFrame):
             self.reveal_btn.configure(state="normal")
         if msg:
             self.info_lbl.configure(text=msg)
+
+    def set_note(self, text: str):
+        self.info_lbl.configure(text=text)
 
     def set_progress(self, percent: float | None, text: str):
         if percent is not None:

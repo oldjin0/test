@@ -82,7 +82,7 @@ class App(ctk.CTk):
 
         # 1. URL input
         s1 = self._section(1, "URL 입력")
-        ctk.CTkLabel(s1, text="한 줄에 하나씩 URL을 붙여넣으세요", text_color="gray",
+        ctk.CTkLabel(s1, text="한 줄에 하나씩 URL을 붙여넣으세요 (영상·재생목록·채널·웹페이지 주소 모두 가능 – 페이지 안의 영상을 자동으로 찾아냅니다)", text_color="gray",
                      font=self._font(11), anchor="w").grid(row=1, column=0, sticky="w", padx=14)
         self.textbox = ctk.CTkTextbox(s1, height=110, font=self._font(13))
         self.textbox.grid(row=2, column=0, sticky="ew", padx=14, pady=4)
@@ -136,7 +136,7 @@ class App(ctk.CTk):
                                         font=self._font(), command=self._on_checks)
         self.open_chk.pack(side="left")
         self.pl_var = ctk.BooleanVar(value=self.settings.allow_playlist)
-        self.pl_chk = ctk.CTkCheckBox(chk, text="재생목록 전체 다운로드", variable=self.pl_var,
+        self.pl_chk = ctk.CTkCheckBox(chk, text="페이지·재생목록 안의 영상 모두 받기", variable=self.pl_var,
                                       font=self._font(), command=self._on_checks)
         self.pl_chk.pack(side="left", padx=20)
         if self.ffmpeg_path:
@@ -144,8 +144,22 @@ class App(ctk.CTk):
         else:
             txt, col = "FFmpeg 없음 – 병합 불가, 단일 파일 최고 화질로 대체", "#E08A1E"
         ctk.CTkLabel(chk, text=txt, text_color=col, font=self._font(12)).pack(side="right")
+        sub = ctk.CTkFrame(grid, fg_color="transparent")
+        sub.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.sub_var = ctk.BooleanVar(value=self.settings.subtitles)
+        self.sub_chk = ctk.CTkCheckBox(sub, text="한글 자막 함께 받기 (.srt)", variable=self.sub_var,
+                                       font=self._font(), command=self._on_checks)
+        self.sub_chk.pack(side="left")
+        self.auto_var = ctk.BooleanVar(value=self.settings.auto_subs)
+        self.auto_chk = ctk.CTkCheckBox(sub, text="자동 생성/번역 자막 포함", variable=self.auto_var,
+                                        font=self._font(), command=self._on_checks)
+        self.auto_chk.pack(side="left", padx=20)
+        self.embed_var = ctk.BooleanVar(value=self.settings.embed_subs)
+        self.embed_chk = ctk.CTkCheckBox(sub, text="자막을 영상에 포함 (FFmpeg 필요)", variable=self.embed_var,
+                                         font=self._font(), command=self._on_checks)
+        self.embed_chk.pack(side="left")
         self._option_widgets = [self.choose_btn, self.quality_menu, self.cookie_menu,
-                                self.open_chk, self.pl_chk]
+                                self.open_chk, self.pl_chk, self.sub_chk, self.auto_chk, self.embed_chk]
 
         # 3. progress
         s3 = self._section(3, "진행 상황")
@@ -230,6 +244,9 @@ class App(ctk.CTk):
     def _on_checks(self):
         self.settings.open_folder_after = bool(self.open_var.get())
         self.settings.allow_playlist = bool(self.pl_var.get())
+        self.settings.subtitles = bool(self.sub_var.get())
+        self.settings.auto_subs = bool(self.auto_var.get())
+        self.settings.embed_subs = bool(self.embed_var.get())
         self._save()
 
     def _choose_dir(self):
@@ -325,7 +342,7 @@ class App(ctk.CTk):
             self.current_lbl.configure(text="현재: " + truncate(ev.title, 70))
             if card:
                 card.set_title(ev.title)
-                if card.job.status == dl.ST_QUEUED:
+                if card.job.status in (dl.ST_QUEUED, dl.ST_ANALYZING):
                     card.set_status(dl.ST_DOWNLOADING)
         elif isinstance(ev, dl.Progress):
             if ev.percent is not None:
@@ -346,10 +363,15 @@ class App(ctk.CTk):
             else:
                 self.finished_count += 1
                 self._refresh_total()
+        elif isinstance(ev, dl.JobsExpanded):
+            self._on_expanded(ev)
         elif isinstance(ev, dl.JobDone):
             if card:
                 card.job.filepath = ev.filepath
                 card.set_status(dl.ST_DONE)
+                if self.settings.subtitles:
+                    card.set_note("한글 자막 저장됨 (" + ", ".join(ev.subs) + ")" if ev.subs
+                                  else "한글 자막 없음")
             self.finished_count += 1
             self.item_fraction = 0.0
             self.item_bar.set(1)
@@ -365,6 +387,28 @@ class App(ctk.CTk):
                                       text_color="#E08A1E" if ev.level == "warning" else "#E05555")
         elif isinstance(ev, dl.AllDone):
             self._on_all_done(ev)
+
+    def _on_expanded(self, ev: dl.JobsExpanded):
+        """Replace the page/playlist card with one card per video found inside it."""
+        parent = self.cards.pop(ev.parent_id, None)
+        anchor = parent
+        for job in ev.jobs:
+            card = JobCard(self.list_frame, job, self._reveal)
+            if anchor is not None:
+                card.pack(fill="x", padx=4, pady=4, after=anchor)
+            else:
+                card.pack(fill="x", padx=4, pady=4)
+            anchor = card
+            self.cards[job.id] = card
+        idx = next((i for i, j in enumerate(self.batch) if j.id == ev.parent_id), len(self.batch))
+        if idx < len(self.batch):
+            del self.batch[idx]
+        self.batch[idx:idx] = ev.jobs
+        if parent is not None:
+            parent.destroy()
+        self.status_lbl.configure(text=f"영상 {len(ev.jobs)}개를 찾았습니다. 순서대로 다운로드합니다.",
+                                  text_color=("gray10", "gray90"))
+        self._refresh_total()
 
     def _on_all_done(self, s: dl.AllDone):
         self._set_running(False)

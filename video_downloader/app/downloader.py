@@ -12,10 +12,12 @@ import yt_dlp
 from yt_dlp.utils import DownloadCancelled, DownloadError
 
 from .config import Settings
+from .extractor import extract_entries
 from .utils import clean_error_message, format_bytes, format_eta, format_speed
 
 # ---------- statuses ----------
 ST_QUEUED = "대기 중"
+ST_ANALYZING = "분석 중"
 ST_DOWNLOADING = "다운로드 중"
 ST_MERGING = "병합 중"
 ST_AUDIO = "오디오 변환 중"
@@ -29,6 +31,9 @@ COOKIE_BROWSERS = ["chrome", "edge", "firefox", "whale"]
 COOKIE_CHOICES = [NO_COOKIES] + COOKIE_BROWSERS
 
 OUTTMPL = "%(title).150B [%(id)s].%(ext)s"
+
+# Korean subtitles: "ko" plus regional/variant tags (ko-KR, ko-orig, ...). Entries are regexes.
+SUB_LANGS = ["ko", "ko-.*"]
 
 # ---------- presets ----------
 # Key == Korean label shown in the dropdown. "height" is used for the no-FFmpeg fallback.
@@ -66,7 +71,8 @@ class FFmpegRequiredError(RuntimeError):
 
 def build_ydl_opts(preset_key, save_dir, ffmpeg_path, has_ffmpeg, cookies_browser,
                    allow_playlist, progress_hook=None, postprocessor_hook=None,
-                   logger=None, deno_path=None) -> dict:
+                   logger=None, deno_path=None, subtitles=False, auto_subs=False,
+                   embed_subs=False, item=None) -> dict:
     preset = PRESETS.get(preset_key) or PRESETS[DEFAULT_PRESET]
     opts: dict = {
         "outtmpl": os.path.join(save_dir, OUTTMPL),
@@ -90,8 +96,16 @@ def build_ydl_opts(preset_key, save_dir, ffmpeg_path, has_ffmpeg, cookies_browse
     if deno_path:
         # yt-dlp Python API: {runtime: {"path": ...}} (see YoutubeDL.py js_runtimes docs)
         opts["js_runtimes"] = {"deno": {"path": deno_path}}
+    if item:
+        opts["playlist_items"] = str(item)
     if cookies_browser in COOKIE_BROWSERS:
         opts["cookiesfrombrowser"] = (cookies_browser,)
+
+    if subtitles:
+        opts["writesubtitles"] = True
+        opts["writeautomaticsub"] = bool(auto_subs)
+        opts["subtitleslangs"] = list(SUB_LANGS)
+        opts["subtitlesformat"] = "srt/vtt/best"
 
     if preset.get("audio"):
         if not has_ffmpeg:
@@ -106,6 +120,13 @@ def build_ydl_opts(preset_key, save_dir, ffmpeg_path, has_ffmpeg, cookies_browse
     else:
         h = preset.get("height")
         opts["format"] = f"b[height<={h}]" if h else "b"
+
+    if subtitles and has_ffmpeg:
+        pps = opts.setdefault("postprocessors", [])
+        pps.append({"key": "FFmpegSubtitlesConvertor", "format": "srt", "when": "before_dl"})
+        if embed_subs and not preset.get("audio"):
+            # already_have_subtitle=True keeps the .srt file next to the video
+            pps.append({"key": "FFmpegEmbedSubtitle", "already_have_subtitle": True})
     return opts
 
 
@@ -123,6 +144,15 @@ def pick_final_path(info: dict | None, captured: str | None) -> str | None:
     return None
 
 
+def collect_subtitle_langs(info: dict | None) -> list[str]:
+    """Languages of the subtitles that were downloaded (the video itself or its playlist items)."""
+    found: set[str] = set()
+    for node in [info] + list((info or {}).get("entries") or []):
+        if node:
+            found.update((node.get("requested_subtitles") or {}).keys())
+    return sorted(found)
+
+
 # ---------- model & events ----------
 @dataclass
 class DownloadJob:
@@ -132,6 +162,8 @@ class DownloadJob:
     status: str = ST_QUEUED
     filepath: str | None = None
     error: str = ""
+    resolved: bool = False  # True once the URL is known to be a single video
+    item: int | None = None  # playlist item to take from `url` (video embedded in a page)
 
 
 _ids = itertools.count(1)
@@ -167,6 +199,14 @@ class StatusEvent:
 class JobDone:
     job_id: int
     filepath: str | None
+    subs: list = field(default_factory=list)  # downloaded subtitle languages
+
+
+@dataclass
+class JobsExpanded:
+    """A page/playlist job was replaced by the videos found inside it."""
+    parent_id: int
+    jobs: list
 
 
 @dataclass
@@ -224,12 +264,19 @@ class DownloadWorker(threading.Thread):
 
     def run(self) -> None:
         summary = AllDone()
+        pending = list(self.jobs)
         try:
-            for job in self.jobs:
+            while pending:
+                job = pending.pop(0)
                 if self.cancel.is_set():
                     self._mark_cancelled(job, summary)
                     continue
                 try:
+                    if not job.resolved:
+                        children = self._analyze(job)
+                        if children:
+                            pending[0:0] = children
+                            continue
                     self._run_job(job)
                     summary.ok += 1
                 except DownloadCancelled:
@@ -245,6 +292,32 @@ class DownloadWorker(threading.Thread):
             self.post(LogEvent("error", clean_error_message(repr(e))))
         finally:
             self.post(summary)
+
+    def _analyze(self, job: DownloadJob) -> list[DownloadJob] | None:
+        """Look inside the URL. Returns child jobs when it holds several videos, else None
+        (the job itself is a single video and gets downloaded as is)."""
+        s = self.settings
+        job.status = ST_ANALYZING
+        self.post(StatusEvent(job.id, ST_ANALYZING))
+        entries, truncated = extract_entries(
+            job.url,
+            cookies_browser=s.cookies_browser if s.cookies_browser in COOKIE_BROWSERS else None,
+            deno_path=self.deno_path, logger=_Logger(self.post), allow_many=s.allow_playlist)
+        job.resolved = True
+        if len(entries) == 1:
+            job.url, job.item = entries[0].url, entries[0].index
+            if entries[0].title:
+                job.title = entries[0].title
+            return None
+        children = []
+        for e in entries:
+            c = new_job(e.url)
+            c.title, c.resolved, c.item = e.title, True, e.index
+            children.append(c)
+        self.post(JobsExpanded(job.id, children))
+        if truncated:
+            self.post(LogEvent("warning", f"영상이 너무 많아 처음 {len(entries)}개만 추출했습니다"))
+        return children
 
     def _mark_cancelled(self, job, summary):
         summary.cancelled += 1
@@ -322,8 +395,10 @@ class DownloadWorker(threading.Thread):
 
         opts = build_ydl_opts(
             s.quality, s.save_dir, self.ffmpeg_path, bool(self.ffmpeg_path),
-            s.cookies_browser, s.allow_playlist, progress_hook, pp_hook,
-            _Logger(self.post), self.deno_path)
+            s.cookies_browser, False, progress_hook, pp_hook,
+            _Logger(self.post), self.deno_path,
+            subtitles=s.subtitles, auto_subs=s.auto_subs, embed_subs=s.embed_subs,
+            item=job.item)
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(job.url, download=True)
@@ -333,5 +408,6 @@ class DownloadWorker(threading.Thread):
                     path = ydl.prepare_filename(info)
                 except Exception:
                     path = None
+        subs = collect_subtitle_langs(info)
         job.filepath, job.status = path, ST_DONE
-        self.post(JobDone(job.id, path))
+        self.post(JobDone(job.id, path, subs))

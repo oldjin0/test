@@ -49,7 +49,10 @@ class Settings:
     open_folder_after: bool = False
     theme: str = "System"
     cookies_browser: str = "사용 안 함"
-    allow_playlist: bool = False
+    allow_playlist: bool = True
+    subtitles: bool = True
+    auto_subs: bool = True
+    embed_subs: bool = False
 
     def __post_init__(self):
         if not self.save_dir:
