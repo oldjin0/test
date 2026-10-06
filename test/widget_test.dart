@@ -350,7 +350,13 @@ void main() {
 
     test('color e-ink: a page colorized before is only processed, not run again', () async {
       final cache = Directory.systemTemp.createTempSync('inkcache');
-      addTearDown(() => cache.deleteSync(recursive: true));
+      addTearDown(() {
+        try {
+          cache.deleteSync(recursive: true);
+        } on FileSystemException {
+          // Windows: the service may still hold a cache file; temp is cleaned anyway
+        }
+      });
       final s = await ColorizeService.start(cacheDir: cache); // no model
       final im = img.Image(width: 60, height: 40, numChannels: 3);
       img.fill(im, color: img.ColorRgb8(120, 170, 110)); // a pale green page
