@@ -7,8 +7,9 @@ const OL = '#3a2540';
 /* ---------- 이미지 에셋 (있으면 사용, 없으면 도형) ---------- */
 export const SPR = {};
 // 이름.png = 정면, 이름_b.png = 뒷모습, 이름_s.png = 옆모습(오른쪽을 봄)
+const PLAYER_ART = ['hero', 'archer', 'wizard']; // 8방향(앞·비스듬한 앞·옆·비스듬한 뒤·뒤 + 좌우 반전)
 ['hero', 'archer', 'wizard', 'slime', 'bat', 'brute', 'mage', 'boar', 'blob', ...Object.keys(BOSSES)].forEach((n) => {
-  for (const sfx of ['', '_b', '_s']) {
+  for (const sfx of PLAYER_ART.includes(n) ? ['', '_b', '_s', '_fd', '_bd'] : ['', '_b', '_s']) {
     const im = new Image();
     im.onload = () => { SPR[n + sfx] = im; };
     im.onerror = () => {};
@@ -89,17 +90,28 @@ function stride(o) {
   o._ph = (o._ph || 0) + d * 0.2;
 }
 
-// 프레임 간 위치 변화로 보는 방향을 정한다: f 정면(아래로), b 뒷모습(위로), s 옆모습. 멈추면 마지막 방향 유지.
+// 움직이는 방향으로 보는 방향을 정한다: f 앞, fd 비스듬한 앞, s 옆, bd 비스듬한 뒤, b 뒤 (왼쪽은 좌우 반전). 멈추면 마지막 방향을 유지한다.
+// 속도 방향을 부드럽게 걸러서 경계 근처에서 깜빡이지 않게 하고, 현재 방향에서 벗어날 때는 더 큰 각도를 요구한다(히스테리시스).
 function viewOf(o) {
   const dx = o.x - (o._px ?? o.x), dy = o.y - (o._py ?? o.y);
   o._px = o.x; o._py = o.y; o._dx = dx; o._dy = dy;
-  if (dx * dx + dy * dy > 0.04) o._v = Math.abs(dy) > Math.abs(dx) * 1.2 ? (dy > 0 ? 'f' : 'b') : 's';
+  o._sx = (o._sx || 0) * 0.78 + dx * 0.22; o._sy = (o._sy || 0) * 0.78 + dy * 0.22;
+  if (o._sx * o._sx + o._sy * o._sy > 0.02) {
+    const ax = Math.abs(o._sx), ay = Math.abs(o._sy), cur = o._v;
+    const kv = cur === 'f' || cur === 'b' ? 2.0 : 2.8, ks = cur === 's' ? 2.0 : 2.8; // 세로/가로로 기울었다고 보는 비율
+    let v;
+    if (ay > ax * kv) v = o._sy > 0 ? 'f' : 'b';
+    else if (ax > ay * ks) v = 's';
+    else v = o._sy > 0 ? 'fd' : 'bd';
+    o._v = v;
+  }
   return o._v || 'f';
 }
 const ROBED = ['wizard', 'archer'];
-// 방향에 맞는 이미지 (없으면 정면)
+// 방향에 맞는 이미지. 비스듬한 그림이 없으면 가까운 그림(옆/뒤)으로 대신한다
 function pick(c, o, n) {
-  return SPR[n + (o._v === 'f' ? '' : '_' + o._v)] || SPR[n];
+  const v = o._v || 'f';
+  return SPR[n + (v === 'f' ? '' : '_' + v)] || (v === 'fd' ? SPR[n + '_s'] : v === 'bd' ? SPR[n + '_b'] : null) || SPR[n];
 }
 // 좌우 반전은 순간이동 대신 몸이 얇아졌다 돌아서듯 부드럽게 바꾼다. 앞/뒷모습 이미지를 쓸 때는 반전하지 않는다. 프레임당 한 번만 부른다.
 function flipX(o, name) {

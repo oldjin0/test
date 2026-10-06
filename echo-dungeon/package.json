@@ -1,12 +1,12 @@
 {
   "name": "echo-dungeon",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "메아리 던전 - 60초 타임루프 로그라이트",
   "scripts": {
     "serve": "npx http-server www -p 8080 -c-1",
     "art": "node tools/gen-art.mjs",
-    "test": "node tests/smoke.mjs",
+    "test": "node tests/smoke.mjs && node tools/layout-check.mjs",
     "vendor": "node tools/vendor.mjs"
   },
   "dependencies": {

@@ -246,6 +246,21 @@ ok(fx.smite, '천벌: 화면의 적에게 번개');
 ok(fx.burn, '불씨: 맞은 적이 불탄다');
 ok(fx.crown, '만능의 왕관: 능력치 상승');
 
+// 8방향: 움직이는 방향에 따라 앞/비스듬한 앞/옆/비스듬한 뒤/뒤 그림이 골라지고, 멈추면 마지막 방향을 유지한다
+await ev(() => { const S = __ed.S; S.save.unlocked = 99; S.save.tutorial = 1; S.save.cls = 'sword'; __ed.startRun(0); __ed.show(null); __ed.S.G.enemies.length = 0; __ed.S.G.spawnT = 1e9; __ed.S.G.nextPick = 1e9; __ed.S.G.hero.x = 360; __ed.S.G.hero.y = 600; });
+const dirs = {};
+for (const [name, keys] of [['오른쪽', ['ArrowRight']], ['아래', ['ArrowDown']], ['위', ['ArrowUp']], ['오른쪽 아래', ['ArrowRight', 'ArrowDown']], ['오른쪽 위', ['ArrowRight', 'ArrowUp']], ['왼쪽 아래', ['ArrowLeft', 'ArrowDown']]]) {
+  for (const k of keys) await page.keyboard.down(k);
+  await page.waitForTimeout(450);
+  dirs[name] = await ev(() => ({ v: __ed.S.G.hero._v, face: __ed.S.G.hero.face }));
+  for (const k of keys) await page.keyboard.up(k);
+  await page.waitForTimeout(150);
+}
+const held = await ev(() => __ed.S.G.hero._v);
+ok(dirs['오른쪽'].v === 's' && dirs['아래'].v === 'f' && dirs['위'].v === 'b' && dirs['오른쪽 아래'].v === 'fd' && dirs['오른쪽 위'].v === 'bd' && dirs['왼쪽 아래'].v === 'fd' && dirs['왼쪽 아래'].face === -1, `8방향 그림 선택 ${JSON.stringify(Object.fromEntries(Object.entries(dirs).map(([k, d]) => [k, d.v])))}`);
+ok(held === 'fd', `멈추면 마지막 방향 유지 (${held})`);
+await ev(() => __ed.goTitle());
+
 // 배경음악 9곡: 오프라인으로 렌더링해 소리가 나고(무음 아님), 깨지지 않고(클리핑 없음), 중간에 끊기지 않는지 본다
 const mus = await ev(async () => {
   const { createMusic, SONGS } = await import('./js/music.js');

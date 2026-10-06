@@ -21,7 +21,8 @@ const VIEWS = {
   _b: 'back view, seen from behind, facing away from the viewer, no face visible',
   _s: 'side profile view, facing right',
 };
-const SIZE = 320; // 생성 원본은 1024px. 게임에서는 작게 그려서 줄여 저장한다.
+const SIZE = 320;
+const VIEW_FILES = ['', '_fd', '_s', '_bd', '_b']; // 정면, 비스듬한 앞(오른쪽), 옆(오른쪽), 비스듬한 뒤(오른쪽), 뒤 // 생성 원본은 1024px. 게임에서는 작게 그려서 줄여 저장한다.
 
 // 세 방향(앞·뒤·옆)을 한 장에 그리게 해서 같은 캐릭터로 통일한다 (따로 그리면 매번 다른 캐릭터가 나온다).
 const DETAIL = 'highly detailed, intricate costume details, rich shading and highlights, clean thick outline';
@@ -73,7 +74,8 @@ if (process.argv[2] === '--resize') { // 이미 만든 큰 이미지를 줄인�
   process.exit(0);
 }
 
-if (!ACCOUNT || !TOKEN) {
+const OFFLINE_CMDS = ['--swap', '--flip', '--assign', '--selftest', '--resize']; // 키가 필요 없는 명령
+if ((!ACCOUNT || !TOKEN) && !OFFLINE_CMDS.includes(process.argv[2])) {
   console.error('CLOUDFLARE_ACCOUNT_ID 와 CLOUDFLARE_API_TOKEN 환경 변수가 필요합니다.');
   process.exit(1);
 }
@@ -116,15 +118,15 @@ export function keyOutWhite(jpgBuf, tol = 40) {
 }
 
 // 한 장에 앞·뒤·옆모습을 나란히 그린 시트에서, 빈 세로줄로 갈라지는 덩어리 세 개를 찾아 각각 SIZE 정사각형(바닥 정렬)에 맞춘다.
-function runsOf(png) {
-  const { width: w, height: h, data } = png, col = new Uint8Array(w);
-  for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) if (data[(y * w + x) * 4 + 3] > 40) { col[x] = 1; break; }
+function runsOf(png, ya = 0, yb = png.height - 1, want = 3) {
+  const { width: w, data } = png, col = new Uint8Array(w);
+  for (let x = 0; x < w; x++) for (let y = ya; y <= yb; y++) if (data[(y * w + x) * 4 + 3] > 40) { col[x] = 1; break; }
   let runs = [], x = 0;
   while (x < w) { if (!col[x]) { x++; continue; } let e = x; while (e < w && col[e]) e++; runs.push([x, e - 1]); x = e; }
   // 사이가 12px 미만인 덩어리는 한 몸으로 본다 (지팡이·날개 끝 등)
   for (let i = 1; i < runs.length;) { if (runs[i][0] - runs[i - 1][1] < 6) { runs[i - 1][1] = runs[i][1]; runs.splice(i, 1); } else i++; }
   // 너무 좁은 조각(60px 미만)은 더 가까운 이웃에 붙인다
-  for (let i = 0; i < runs.length && runs.length > 3;) {
+  for (let i = 0; i < runs.length && runs.length > want;) {
     if (runs[i][1] - runs[i][0] >= 60) { i++; continue; }
     const l = i > 0 ? runs[i][0] - runs[i - 1][1] : 1e9, r = i < runs.length - 1 ? runs[i + 1][0] - runs[i][1] : 1e9;
     if (l <= r) { runs[i - 1][1] = runs[i][1]; } else { runs[i + 1][0] = runs[i][0]; }
@@ -133,11 +135,11 @@ function runsOf(png) {
   return runs;
 }
 // 가로 구간 [rx0, rx1]에 그려진 그림만 잘라 SIZE 정사각형(바닥 정렬)에 맞춘다
-function fitRun(png, rx0, rx1) {
+function fitRun(png, rx0, rx1, ya = 0, yb = png.height - 1) {
   const { width: w, height: h, data } = png;
   {
     let y0 = h, y1 = -1;
-    for (let y = 0; y < h; y++) for (let x = rx0; x <= rx1; x++) if (data[(y * w + x) * 4 + 3] > 40) { y0 = Math.min(y0, y); y1 = Math.max(y1, y); break; }
+    for (let y = ya; y <= yb; y++) for (let x = rx0; x <= rx1; x++) if (data[(y * w + x) * 4 + 3] > 40) { y0 = Math.min(y0, y); y1 = Math.max(y1, y); break; }
     let xa = rx1, xb = rx0; // 실제로 그려진 가로 범위로 좁힌다
     for (let x = rx0; x <= rx1; x++) for (let y = y0; y <= y1; y++) if (data[(y * w + x) * 4 + 3] > 40) { xa = Math.min(xa, x); xb = Math.max(xb, x); break; }
     const x0 = xa, bw = xb - xa + 1, bh = y1 - y0 + 1, sc = Math.min(SIZE * 0.94 / bw, SIZE * 0.94 / bh);
@@ -166,10 +168,27 @@ function valleySplit(png) { // 몸이 맞닿아 덩어리가 3개로 안 갈릴 
   const s1 = best(first + span * 0.27, first + span * 0.40), s2 = best(first + span * 0.60, first + span * 0.73);
   return [[first, s1 - 1], [s1, s2 - 1], [s2, last]];
 }
+// 5방향 시트(윗줄 3명, 아랫줄 2명)를 읽는 순서(윗줄 왼→오, 아랫줄 왼→오)대로 자른다
+function rowsOf(png) { // 빈 가로줄로 갈라지는 줄 덩어리
+  const { width: w, height: h, data } = png, rowOn = new Uint8Array(h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (data[(y * w + x) * 4 + 3] > 40) { rowOn[y] = 1; break; }
+  const rows = []; let y = 0;
+  while (y < h) { if (!rowOn[y]) { y++; continue; } let e = y; while (e < h && rowOn[e]) e++; rows.push([y, e - 1]); y = e; }
+  for (let i = 1; i < rows.length;) { if (rows[i][0] - rows[i - 1][1] < 8) { rows[i - 1][1] = rows[i][1]; rows.splice(i, 1); } else i++; }
+  return rows.filter((r) => r[1] - r[0] > 80);
+}
+function splitSheet5(png) {
+  const rows = rowsOf(png);
+  if (rows.length !== 2) throw new Error(`두 줄이 아님 (${rows.length})`);
+  const top = runsOf(png, rows[0][0], rows[0][1], 3), bot = runsOf(png, rows[1][0], rows[1][1], 2);
+  if (top.length !== 3 || bot.length !== 2) throw new Error(`3+2가 아님 (${top.length}+${bot.length})`);
+  return [...top.map((r) => fitRun(png, r[0], r[1], rows[0][0], rows[0][1])), ...bot.map((r) => fitRun(png, r[0], r[1], rows[1][0], rows[1][1]))];
+}
+// 몬스터용: 가로 세 덩어리 시트 (예전 방식, 필요할 때만)
 function splitSheet(png) {
   let runs = runsOf(png);
   if (runs.length !== 3) { runs = valleySplit(png); if (!runs) throw new Error('세 덩어리가 아님'); }
-  return runs.map(([rx0, rx1]) => fitRun(png, rx0, rx1)); // 그려진 순서(왼쪽→오른쪽)
+  return runs.map(([rx0, rx1]) => fitRun(png, rx0, rx1));
 }
 
 /* ---------- 아이콘 · 배경 ---------- */
@@ -246,6 +265,23 @@ async function runGroup(group, want, force) {
   }
 }
 
+if (process.argv[2] === '--selftest') { // 5방향 시트 자르기 점검: 가짜 시트(3+2 색 상자)로 다섯 장이 순서대로 나오는지
+  const W5 = 1024, png = new PNG({ width: W5, height: W5 });
+  const box = (x, y, w, h, c) => { for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) { const o = (j * W5 + i) * 4; png.data[o] = c[0]; png.data[o + 1] = c[1]; png.data[o + 2] = c[2]; png.data[o + 3] = 255; } };
+  [[40, 30, 260, 420], [380, 30, 260, 420], [720, 30, 260, 420]].forEach(([x, y, w, h], i) => box(x, y, w, h, [60 * (i + 1), 0, 0]));
+  [[200, 540, 260, 440], [560, 540, 260, 440]].forEach(([x, y, w, h], i) => box(x, y, w, h, [0, 80 * (i + 1), 0]));
+  const parts = splitSheet5(png);
+  const reds = parts.map((b) => { const q = PNG.sync.read(b); let hit = [0, 0]; for (let i = 0; i < q.data.length; i += 4) if (q.data[i + 3] > 200) { hit[0] += q.data[i]; hit[1] += q.data[i + 1]; } return hit[0] > hit[1] ? 'R' : 'G'; }).join('');
+  const sizes = parts.map((b) => { const q = PNG.sync.read(b); return `${q.width}x${q.height}`; });
+  console.log(reds === 'RRRGG' && parts.length === 5 ? '시트 자르기 OK' : `시트 자르기 실패 ${reds}`, sizes.join(' '));
+  process.exit(reds === 'RRRGG' ? 0 : 1);
+}
+if (process.argv[2] === '--assign') { // node tools/gen-art.mjs --assign hero f=0 fd=1 s=2 bd=3 b=4  → 방금 저장된 다섯 파일(그려진 순서)을 눈으로 본 대로 재배치
+  const [, , , name, ...pairs] = process.argv, keyFile = { f: '', fd: '_fd', s: '_s', bd: '_bd', b: '_b' };
+  const bufs = VIEW_FILES.map((x) => fs.readFileSync(path.join(OUT, `${name}${x}.png`)));
+  for (const pr of pairs) { const [k, i] = pr.split('='); fs.writeFileSync(path.join(OUT, `${name}${keyFile[k]}.png`), bufs[+i]); }
+  process.exit(0);
+}
 if (process.argv[2] === '--swap') { // node tools/gen-art.mjs --swap hero 0 2 1  → 새 정면=기존0, 새 뒷모습=기존2, 새 옆모습=기존1
   const [, , , name, ...ord] = process.argv, sf = ['', '_b', '_s'], files = sf.map((x) => path.join(OUT, `${name}${x}.png`));
   const bufs = files.map((f) => fs.readFileSync(f));
@@ -263,6 +299,7 @@ if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const force = process.argv.includes('--force');
   const want = process.argv.slice(2).filter((a) => a !== '--force');
   if (want[0] === 'icons' || want[0] === 'bg') { await runGroup(want[0], want.slice(1), force); process.exit(0); }
+  const SHEET5 = 'character model sheet showing the same exact character five times with identical outfit, colors and proportions, arranged in two rows with clear empty white space between figures. Top row of three figures from left to right: front view facing the viewer, three-quarter front view turned to the right, side profile view facing right. Bottom row of two figures from left to right: three-quarter back view turned to the right, back view facing away. Full body, standing, plain pure white background, no text, no labels, cute chibi cartoon game art, big head small body';
   const SHEET = 'character turnaround sheet, the same exact character drawn three times side by side in one row, evenly spaced with clear empty white space between each figure, identical outfit and colors and proportions, left: front view, middle: back view seen from behind, right: side profile facing right, full body, standing, plain pure white background, no text, no labels, cute chibi cartoon game art, big head small body';
   fs.mkdirSync(path.join(OUT, '..', '..', 'tools', 'out', 'sheets'), { recursive: true });
   for (const [name, spec] of Object.entries(ASSETS)) {
@@ -286,11 +323,11 @@ if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     for (let attempt = 1; attempt <= 3 && !done; attempt++) {
       process.stdout.write(`${name} (시트 ${attempt}) ... `);
       try {
-        const img = await generate(name, { ...spec, plain: true, prompt: `${spec.prompt}. ${SHEET}` }, '');
+        const img = await generate(name, { ...spec, plain: true, prompt: `${spec.prompt}. ${SHEET5}` }, '');
         fs.writeFileSync(path.join(OUT, '..', '..', 'tools', 'out', 'sheets', `${name}-${attempt}.jpg`), img);
-        const parts = splitSheet(PNG.sync.read(keyOutWhite(img)));
-        // 파일 순서는 그려진 순서(앞·뒤·옆으로 시켰지만 모델이 어길 수 있다). 눈으로 확인해 바꾼다: node tools/gen-art.mjs --swap 이름 0 2 1
-        ['', '_b', '_s'].forEach((sfx, i) => fs.writeFileSync(path.join(OUT, `${name}${sfx}.png`), parts[i]));
+        const parts = splitSheet5(PNG.sync.read(keyOutWhite(img)));
+        // 읽는 순서 [정면, 비스듬한 앞, 옆, 비스듬한 뒤, 뒤]로 시켰지만 모델이 어길 수 있다. 눈으로 확인해 바꾼다: node tools/gen-art.mjs --assign 이름 f=0 fd=1 s=2 bd=3 b=4
+        VIEW_FILES.forEach((sfx, i) => fs.writeFileSync(path.join(OUT, `${name}${sfx}.png`), parts[i]));
         console.log('ok'); done = true;
       } catch (e) {
         console.log('FAIL', e.message);

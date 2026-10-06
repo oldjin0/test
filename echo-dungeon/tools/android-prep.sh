@@ -26,6 +26,23 @@ let s = fs.readFileSync(p, 'utf8');
 if (!s.includes('com.google.android.gms.ads.APPLICATION_ID'))
   s = s.replace(/<application[^>]*>/, (tag) => tag + '\n        <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"' + process.env.ADMOB_APP_ID + '\"/>');
 fs.writeFileSync(p, s);"
+# 시스템의 글꼴 크기 설정이 화면 배치를 흐트러뜨리지 않도록 웹뷰 글자 확대를 100%로 고정한다
+JAVA_DIR=android/app/src/main/java/com/oldjin/echodungeon
+mkdir -p "$JAVA_DIR"
+cat > "$JAVA_DIR/MainActivity.java" <<'JAVA'
+package com.oldjin.echodungeon;
+
+import android.os.Bundle;
+import com.getcapacitor.BridgeActivity;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onStart() {
+        super.onStart();
+        if (getBridge() != null && getBridge().getWebView() != null) getBridge().getWebView().getSettings().setTextZoom(100);
+    }
+}
+JAVA
 VERSION=$(node -p "require('./package.json').version")
 sed -i "s|versionCode [0-9]*$|versionCode ${VERSION_CODE}|; s|versionName \"[^\"]*\"|versionName \"${VERSION}\"|" android/app/build.gradle
 grep -n "versionCode\|versionName" android/app/build.gradle
