@@ -47,10 +47,132 @@ class InkColor {
   /// muted but clearly present at about 55.
   static double targetChroma(int level) => const [0.0, 32.0, 44.0, 56.0, 68.0][level.clamp(0, 4)];
 
+  /// Gathers the color of a page into areas: the panel's color layer has
+  /// about half the resolution of its black and white, so color that sits in
+  /// dots and thin strokes (the model's output on screentone) gets lost,
+  /// while a flat patch of color shows. Chroma is averaged over a
+  /// neighbourhood that leaves out line art and dark pixels (they carry no
+  /// visible color), then mixed back into light pixels; luminance, and so
+  /// every line and tone, is untouched. [radius] is in pixels of a copy
+  /// reduced to about 600 on the long side. [rgb] is changed in place.
+  static void flatten(Uint8List rgb, int width, int height, {int radius = 4}) {
+    if (width * height * 3 != rgb.length || radius <= 0) return;
+    final f = math.max(1, (math.max(width, height) / 600).round());
+    final lw = (width + f - 1) ~/ f, lh = (height + f - 1) ~/ f;
+    final cbN = Float32List(lw * lh), crN = Float32List(lw * lh), wN = Float32List(lw * lh);
+    final cb = Float32List(width * height), cr = Float32List(width * height);
+    final ys = Float32List(width * height);
+    // Chroma per pixel; the weight of a pixel is how light it is (and how
+    // little of a line it is), summed into the reduced copy.
+    for (var y = 0, i = 0; y < height; y++) {
+      final ly = y ~/ f;
+      for (var x = 0; x < width; x++, i++) {
+        final r = rgb[i * 3].toDouble(),
+            g = rgb[i * 3 + 1].toDouble(),
+            b = rgb[i * 3 + 2].toDouble();
+        final yy = 0.299 * r + 0.587 * g + 0.114 * b;
+        ys[i] = yy;
+        cb[i] = b - yy; // scaled differences are enough, no need for exact Cb/Cr
+        cr[i] = r - yy;
+        final wgt = _smooth(70, 150, yy);
+        final li = ly * lw + x ~/ f;
+        cbN[li] += cb[i] * wgt;
+        crN[li] += cr[i] * wgt;
+        wN[li] += wgt;
+      }
+    }
+    for (var i = 0; i < lw * lh; i++) {
+      if (wN[i] > 1e-6) {
+        cbN[i] /= wN[i];
+        crN[i] /= wN[i];
+      }
+    }
+    // Normalized box blur (twice, close to a Gaussian): weights are the
+    // reduced copy's own weights, so empty (line art) cells do not drag
+    // the color towards gray.
+    final wl = Float32List(lw * lh);
+    for (var i = 0; i < lw * lh; i++) {
+      wl[i] = math.min(1.0, wN[i] / (f * f)) > 0.05 ? math.min(1.0, wN[i] / (f * f)) : 0;
+    }
+    var bcb = Float32List(lw * lh), bcr = Float32List(lw * lh), bw = Float32List(lw * lh);
+    for (var i = 0; i < lw * lh; i++) {
+      bcb[i] = cbN[i] * wl[i];
+      bcr[i] = crN[i] * wl[i];
+      bw[i] = wl[i];
+    }
+    for (var pass = 0; pass < 2; pass++) {
+      bcb = _boxBlur(bcb, lw, lh, radius);
+      bcr = _boxBlur(bcr, lw, lh, radius);
+      bw = _boxBlur(bw, lw, lh, radius);
+    }
+    for (var i = 0; i < lw * lh; i++) {
+      if (bw[i] > 1e-4) {
+        bcb[i] /= bw[i];
+        bcr[i] /= bw[i];
+      } else {
+        bcb[i] = cbN[i];
+        bcr[i] = crN[i];
+      }
+    }
+    // Back to full size (bilinear) and mixed into the light pixels.
+    for (var y = 0, i = 0; y < height; y++) {
+      final fy = ((y + 0.5) / f - 0.5).clamp(0.0, lh - 1.0);
+      final y0 = fy.floor(), y1 = math.min(lh - 1, y0 + 1);
+      final ty = fy - y0;
+      for (var x = 0; x < width; x++, i++) {
+        final fx = ((x + 0.5) / f - 0.5).clamp(0.0, lw - 1.0);
+        final x0 = fx.floor(), x1 = math.min(lw - 1, x0 + 1);
+        final tx = fx - x0;
+        double at(Float32List a) =>
+            (a[y0 * lw + x0] * (1 - tx) + a[y0 * lw + x1] * tx) * (1 - ty) +
+            (a[y1 * lw + x0] * (1 - tx) + a[y1 * lw + x1] * tx) * ty;
+        final mix = 0.9 * _smooth(60, 140, ys[i]);
+        if (mix <= 0) continue;
+        final ncb = cb[i] + (at(bcb) - cb[i]) * mix;
+        final ncr = cr[i] + (at(bcr) - cr[i]) * mix;
+        final yy = ys[i];
+        // r = y + cr; b = y + cb; g from the luma identity
+        final r = yy + ncr, b = yy + ncb;
+        final g = (yy - 0.299 * r - 0.114 * b) / 0.587;
+        rgb[i * 3] = r.round().clamp(0, 255);
+        rgb[i * 3 + 1] = g.round().clamp(0, 255);
+        rgb[i * 3 + 2] = b.round().clamp(0, 255);
+      }
+    }
+  }
+
+  static Float32List _boxBlur(Float32List src, int w, int h, int r) {
+    final tmp = Float32List(w * h), out = Float32List(w * h);
+    final k = 2 * r + 1;
+    for (var y = 0; y < h; y++) {
+      var sum = 0.0;
+      for (var x = -r; x <= r; x++) {
+        sum += src[y * w + x.clamp(0, w - 1)];
+      }
+      for (var x = 0; x < w; x++) {
+        tmp[y * w + x] = sum / k;
+        sum += src[y * w + (x + r + 1).clamp(0, w - 1)] - src[y * w + (x - r).clamp(0, w - 1)];
+      }
+    }
+    for (var x = 0; x < w; x++) {
+      var sum = 0.0;
+      for (var y = -r; y <= r; y++) {
+        sum += tmp[y.clamp(0, h - 1) * w + x];
+      }
+      for (var y = 0; y < h; y++) {
+        out[y * w + x] = sum / k;
+        sum += tmp[(y + r + 1).clamp(0, h - 1) * w + x] - tmp[(y - r).clamp(0, h - 1) * w + x];
+      }
+    }
+    return out;
+  }
+
   /// Processes tightly packed RGB bytes in place for [level] (1..4), with the
-  /// gain chosen for this page.
-  static void adapt(Uint8List rgb, int level) {
+  /// gain chosen for this page. With [width] and [height] the color is first
+  /// gathered into areas ([flatten]).
+  static void adapt(Uint8List rgb, int level, {int? width, int? height}) {
     if (level <= 0) return;
+    if (width != null && height != null) flatten(rgb, width, height, radius: 2 + level);
     final s = strengthOf(level), target = targetChroma(level);
     // A sample of the page's colored (not paper, not line art) pixels.
     final samples = <List<double>>[];

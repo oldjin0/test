@@ -381,7 +381,7 @@ ColorizeResult colorizePage(
   final jpg = img.encodeJpg(out, quality: 88);
   if (ink > 0 && mode == ColorizeMode.ai) {
     final rgb = out.getBytes(order: img.ChannelOrder.rgb);
-    InkColor.adapt(rgb, ink);
+    InkColor.adapt(rgb, ink, width: out.width, height: out.height);
     final inked = img.Image.fromBytes(
       width: out.width,
       height: out.height,
@@ -404,7 +404,7 @@ Uint8List inkAdapt(Uint8List jpeg, int ink) {
   if (decoded == null) return jpeg;
   final src = decoded.convert(format: img.Format.uint8, numChannels: 3);
   final rgb = Uint8List.fromList(src.getBytes(order: img.ChannelOrder.rgb));
-  InkColor.adapt(rgb, ink);
+  InkColor.adapt(rgb, ink, width: src.width, height: src.height);
   return img.encodeJpg(
     img.Image.fromBytes(width: src.width, height: src.height, bytes: rgb.buffer, numChannels: 3),
     quality: 88,

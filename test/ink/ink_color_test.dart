@@ -126,4 +126,41 @@ void main() {
     expect(g2, c2);
     expect(copy.length, gray.length);
   });
+
+  test('flatten: color spreads into the area, lines and luminance stay', () {
+    const w = 120, h = 90;
+    final rgb = Uint8List(w * h * 3);
+    for (var i = 0; i < w * h; i++) {
+      rgb.setRange(i * 3, i * 3 + 3, [235, 235, 235]); // paper
+    }
+    // a pink patch speckled with paper-colored dots, and a black line through it
+    for (var y = 20; y < 70; y++) {
+      for (var x = 30; x < 90; x++) {
+        final dot = (x + y) % 4 == 0;
+        final i = (y * w + x) * 3;
+        rgb.setRange(i, i + 3, dot ? [235, 235, 235] : [235, 200, 205]);
+      }
+    }
+    for (var x = 30; x < 90; x++) {
+      final i = (45 * w + x) * 3;
+      rgb.setRange(i, i + 3, [10, 10, 10]);
+    }
+    final before = Uint8List.fromList(rgb);
+    InkColor.flatten(rgb, w, h, radius: 3);
+    int luma(Uint8List a, int x, int y) {
+      final i = (y * w + x) * 3;
+      return (0.299 * a[i] + 0.587 * a[i + 1] + 0.114 * a[i + 2]).round();
+    }
+
+    for (final (x, y) in [(40, 30), (44, 32), (60, 60), (10, 10)]) {
+      expect(luma(rgb, x, y), closeTo(luma(before, x, y), 2), reason: 'luminance at $x,$y');
+    }
+    // a paper-colored dot inside the patch took on the patch's pink
+    final i = (32 * w + 44) * 3; // (44+32) % 4 == 0 -> a dot
+    expect(before[i + 1], 235);
+    expect(rgb[i] - rgb[i + 1], greaterThan(15), reason: 'the dot now carries color');
+    // paper far away stays paper, the line stays black
+    expect(rgb.sublist(10 * 3, 10 * 3 + 3), [235, 235, 235]);
+    expect(rgb[(45 * w + 60) * 3], lessThan(40));
+  });
 }
