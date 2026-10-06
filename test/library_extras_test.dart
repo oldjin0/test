@@ -13,6 +13,7 @@ import 'package:manga_viewer/exporter.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:manga_viewer/storage.dart';
 import 'package:manga_viewer/thumbnails.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 Uint8List png(int w, int h, int v) {
@@ -35,7 +36,7 @@ void main() {
       for (final n in ['vol1.cbz', 'vol2.cbz', 'vol10.cbz', 'notes.txt', 'z.zip']) {
         File('${dir.path}/$n').writeAsBytesSync([1]);
       }
-      String at(String n) => '${dir.path}/$n';
+      String at(String n) => p.join(dir.path, n);
       expect(await nextBookPath(at('vol1.cbz')), at('vol2.cbz'));
       expect(await nextBookPath(at('vol2.cbz')), at('vol10.cbz'), reason: 'natural order');
       expect(await nextBookPath(at('vol10.cbz')), at('z.zip'));
@@ -46,8 +47,8 @@ void main() {
       for (final n in ['ch1', 'ch2', 'ch10']) {
         Directory('${dir.path}/$n').createSync();
       }
-      expect(await nextBookPath('${dir.path}/ch2'), '${dir.path}/ch10');
-      expect(await nextBookPath('${dir.path}/ch10'), isNull);
+      expect(await nextBookPath(p.join(dir.path, 'ch2')), p.join(dir.path, 'ch10'));
+      expect(await nextBookPath(p.join(dir.path, 'ch10')), isNull);
     });
   });
 

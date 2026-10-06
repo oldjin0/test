@@ -14,6 +14,7 @@ import 'package:manga_viewer/reader_controls.dart';
 import 'package:manga_viewer/reader_pages.dart';
 import 'package:manga_viewer/storage.dart' show nextBookPath;
 import 'package:manga_viewer/viewer_page.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A page whose gray level tells pages apart.
@@ -283,9 +284,9 @@ void main() {
       final (vol2, vol10) = (await tester.runAsync(() async {
         final dir = await Directory.systemTemp.createTemp('series');
         final a = await writeComic(dir, 3);
-        final b = await File(a).rename('${dir.path}/vol2.cbz');
-        final c = await b.copy('${dir.path}/vol10.cbz');
-        await File('${dir.path}/vol1.cbz').writeAsBytes(await b.readAsBytes());
+        final b = await File(a).rename(p.join(dir.path, 'vol2.cbz'));
+        final c = await b.copy(p.join(dir.path, 'vol10.cbz'));
+        await File(p.join(dir.path, 'vol1.cbz')).writeAsBytes(await b.readAsBytes());
         return (b.path, c.path);
       }))!;
       await tester.pumpWidget(
