@@ -113,6 +113,10 @@ class LibraryStore extends ChangeNotifier {
   /// Page contrast (1 = unchanged).
   double contrast = 1.0;
 
+  /// Color saturation of comic pages (1 = unchanged). Color e-ink screens
+  /// show washed-out colors: more than 1 makes them stand out.
+  double saturation = 1.0;
+
   /// Turn the page by itself every this many seconds (0 = off).
   int autoTurnSeconds = 0;
 
@@ -174,6 +178,7 @@ class LibraryStore extends ChangeNotifier {
     tapZones = p.getString('tapZones') ?? tapZones;
     autoCrop = p.getBool('autoCrop') ?? autoCrop;
     contrast = p.getDouble('contrast') ?? contrast;
+    saturation = p.getDouble('saturation') ?? saturation;
     autoTurnSeconds = p.getInt('autoTurnSeconds') ?? autoTurnSeconds;
     orientation = p.getString('orientation') ?? orientation;
     showStatus = p.getBool('showStatus') ?? showStatus;
@@ -253,6 +258,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setString('tapZones', tapZones);
     _prefs.setBool('autoCrop', autoCrop);
     _prefs.setDouble('contrast', contrast);
+    _prefs.setDouble('saturation', saturation);
     _prefs.setInt('autoTurnSeconds', autoTurnSeconds);
     _prefs.setString('orientation', orientation);
     _prefs.setBool('showStatus', showStatus);
@@ -365,6 +371,7 @@ class LibraryStore extends ChangeNotifier {
   void update(void Function(LibraryStore s) change) {
     change(this);
     contrast = contrast.clamp(0.5, 2.5);
+    saturation = saturation.clamp(0.0, 3.0);
     prefetchPages = prefetchPages.clamp(1, 1000);
     textSize = textSize.clamp(10.0, 48.0);
     textLineHeight = textLineHeight.clamp(1.0, 3.0);

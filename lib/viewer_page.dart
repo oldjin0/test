@@ -53,6 +53,29 @@ Future<void> prepareNextPages(LibraryStore store, ColorizeService service) async
   }
 }
 
+/// Color matrix for the reader's contrast and saturation settings (1 = no
+/// change), or null when both are unchanged. Saturation first, then contrast.
+List<double>? pageColorMatrix(double contrast, double saturation) {
+  if ((contrast - 1).abs() <= 0.01 && (saturation - 1).abs() <= 0.01) return null;
+  const lr = 0.2126, lg = 0.7152, lb = 0.0722;
+  final s = saturation, c = contrast, t = 128 * (1 - c);
+  final sat = [
+    lr * (1 - s) + s, lg * (1 - s), lb * (1 - s), //
+    lr * (1 - s), lg * (1 - s) + s, lb * (1 - s),
+    lr * (1 - s), lg * (1 - s), lb * (1 - s) + s,
+  ];
+  return [
+    for (var row = 0; row < 3; row++) ...[
+      sat[row * 3] * c,
+      sat[row * 3 + 1] * c,
+      sat[row * 3 + 2] * c,
+      0,
+      t,
+    ],
+    0, 0, 0, 1, 0, //
+  ];
+}
+
 class ViewerPage extends StatefulWidget {
   const ViewerPage({
     super.key,
@@ -728,33 +751,9 @@ class _ViewerPageState extends State<ViewerPage> {
       }
     }
     if (crop != null) content = _cropped(content, crop, vertical: vertical, width: width);
-    if ((_store.contrast - 1).abs() > 0.01) {
-      final c = _store.contrast, t = 128 * (1 - c);
-      content = ColorFiltered(
-        colorFilter: ColorFilter.matrix([
-          c,
-          0,
-          0,
-          0,
-          t,
-          0,
-          c,
-          0,
-          0,
-          t,
-          0,
-          0,
-          c,
-          0,
-          t,
-          0,
-          0,
-          0,
-          1,
-          0,
-        ]),
-        child: content,
-      );
+    final filter = pageColorMatrix(_store.contrast, _store.saturation);
+    if (filter != null) {
+      content = ColorFiltered(colorFilter: ColorFilter.matrix(filter), child: content);
     }
     return content;
   }

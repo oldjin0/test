@@ -211,6 +211,19 @@ List<Widget> _screenSection(LibraryStore s, {required bool comic}) => [
       key: const ValueKey('contrast'),
       onChanged: (v) => s.update((s) => s.contrast = v),
     ),
+    _slider(
+      '색 선명도 ${(s.saturation * 100).round()}%',
+      s.saturation,
+      min: 0.5,
+      max: 3.0,
+      divisions: 25,
+      key: const ValueKey('saturation'),
+      onChanged: (v) => s.update((s) => s.saturation = v),
+    ),
+    const Text(
+      '컬러 전자잉크(E-ink)는 색이 옅게 나옵니다. 150~250%로 올리면 채색이 뚜렷해집니다.',
+      style: TextStyle(fontSize: 12),
+    ),
     _switch(
       '여백 자동 자르기',
       s.autoCrop,

@@ -80,6 +80,24 @@ void main() {
     expect(contentRect(img.encodePng(im)), isNull);
   });
 
+  test('page color matrix: neutral is skipped, gray stays gray, colors gain chroma', () {
+    expect(pageColorMatrix(1, 1), isNull);
+    final m = pageColorMatrix(1, 2)!;
+    List<double> apply(List<double> m, double r, double g, double b) => [
+      for (var i = 0; i < 3; i++) m[i * 5] * r + m[i * 5 + 1] * g + m[i * 5 + 2] * b + m[i * 5 + 4],
+    ];
+    final gray = apply(m, 100, 100, 100);
+    for (final v in gray) {
+      expect(v, closeTo(100, 0.001), reason: 'gray is not tinted');
+    }
+    final red = apply(m, 200, 100, 100);
+    expect(red[0] - red[1], greaterThan(200 - 100), reason: 'red-green gap grows');
+    final off = apply(pageColorMatrix(1, 0)!, 200, 100, 100);
+    expect(off[0], closeTo(off[1], 0.001), reason: 'saturation 0 is gray');
+    final hi = pageColorMatrix(2, 1)!;
+    expect(apply(hi, 128, 128, 128)[0], closeTo(128, 0.001), reason: 'contrast pivots on mid-gray');
+  });
+
   group('ReaderPages', () {
     late Directory dir;
     setUp(() => dir = Directory.systemTemp.createTempSync('pages'));
@@ -342,6 +360,7 @@ void main() {
       s.tapZones = 'next';
       s.autoCrop = true;
       s.contrast = 9; // clamped
+      s.saturation = 9; // clamped
       s.orientation = 'portrait';
       s.refreshEvery = 5;
       s.prefetchPages = 50;
@@ -355,6 +374,7 @@ void main() {
     expect(again.tapZones, 'next');
     expect(again.autoCrop, isTrue);
     expect(again.contrast, 2.5);
+    expect(again.saturation, 3.0);
     expect(again.orientation, 'portrait');
     expect(again.refreshEvery, 5);
     expect(again.prefetchPages, 50);
