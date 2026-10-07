@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { mulberry32, dateKey } from './util.js';
 
-export const VERSION = '0.8.0';
+export const VERSION = '0.9.0';
 export const W = 360, H = 640;
 // 월드는 화면(W×H)보다 훨씬 넓고, 카메라가 영웅을 따라간다
 export const ARENA = { x: 0, y: 0, w: 720, h: 1100 };
@@ -183,7 +183,7 @@ export const CARD_BY_ID = Object.fromEntries(CARDS.map((c) => [c.id, c]));
 export const CLASSES = {
   sword: { name: '검사', ic: '⚔️', tag: '근접', sprite: 'hero', kind: 'slash',
     desc: '체력이 높고 강하다. 짧은 사거리의 넓은 베기가 줄지어 선 적을 모두 벤다.',
-    st: { maxhp: 150, dmg: 15, cd: 0.5, speed: 118, range: 85, shotSpeed: 260, shotLife: 0.3, hitR: 15, pierce: 99, crit: 0.05 } },
+    st: { maxhp: 160, dmg: 16, cd: 0.48, speed: 128, range: 110, shotSpeed: 290, shotLife: 0.38, hitR: 17, pierce: 99, crit: 0.05 } },
   archer: { name: '궁사', ic: '🏹', tag: '원거리', sprite: 'archer', kind: 'arrow',
     desc: '체력이 낮지만 가장 멀리, 빠르게 쏜다. 화살이 적 하나를 뚫고 지나간다.',
     st: { maxhp: 75, dmg: 9, cd: 0.4, speed: 135, range: 340, shotSpeed: 400, shotLife: 1.0, hitR: 3, pierce: 1, crit: 0.14 } },

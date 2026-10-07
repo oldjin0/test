@@ -225,7 +225,7 @@ function weapon(o, dt, mult) {
     if (o.nvT <= 0) {
       o.nvT = 5.2 - 0.7 * st.nova;
       const R = 88 + 8 * st.nova;
-      G.rings.push({ x: o.x, y: o.y - 8, r: 6, max: R, life: 0.4, col: o.isHero ? '#ffe9a8' : '#8fe9ff', round: true });
+      G.rings.push({ x: o.x, y: o.y - 8, r: 6, max: R, life: 0.45, maxLife: 0.45, col: o.isHero ? 'rgb(255,226,140)' : 'rgb(120,225,255)', wave: true });
       for (let i = 0; i < 18; i++) spark(o.x, o.y - 8, o.isHero ? '#ffe9a8' : '#8fe9ff', i / 18 * 6.283, 200, 0.35, 2);
       for (const e of G.enemies) {
         const dx = e.x - o.x, dy = e.y - o.y, d = Math.hypot(dx, dy) || 1;
@@ -425,6 +425,8 @@ function hurtHero(d, src, fx, fy) {
   if (h.st.shield > 0 && h.shieldReady) {
     h.shieldReady = false; h.shieldT = 0; h.inv = 0.5;
     floatText(h.x, h.y - 46, '막음!', '#8fe9ff', 0.8, 14); sfx.block(); haptic('light');
+    G.rings.push({ x: h.x, y: h.y - 22, r: 14, max: 52, life: 0.28, col: '#bff4ff', round: true });
+    for (let i = 0; i < 14; i++) spark(h.x, h.y - 22, '#cfeeff', G.rng() * 6.283, 190, 0.3, 2);
     return;
   }
   const st = h.st;
@@ -462,13 +464,13 @@ function hurtHero(d, src, fx, fy) {
 // 방향이 있는 불꽃(선 모양 파티클)
 function spark(x, y, col, ang, spd, life, w) {
   const G = S.G;
-  if (G.fx.length > 420) return;
+  if (G.fx.length > 280) return; // 입자 상한: 화면이 꽉 차도 휴대폰에서 프레임이 떨어지지 않게
   const v = spd * (0.6 + G.rng() * 0.7);
   G.fx.push({ x, y, vx: Math.cos(ang) * v, vy: Math.sin(ang) * v, life, max: life, col, r: w || 1.6, ln: true });
 }
 function puff(x, y, col, sp, life) {
   const G = S.G;
-  if (G.fx.length > 320) return;
+  if (G.fx.length > 220) return;
   const a = G.rng() * 6.283, v = sp * (0.4 + G.rng() * 0.6);
   G.fx.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 20, life, max: life, col, r: 2 + G.rng() * 3 });
 }
@@ -654,7 +656,7 @@ export function step() {
   // 투사체
   for (const s of G.shots) {
     s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
-    if (s.kind === 'orb' && G.tick % 2 === 0 && G.fx.length < 380) G.fx.push({ x: s.x, y: s.y, vx: (G.rng() - 0.5) * 24, vy: (G.rng() - 0.5) * 24, life: 0.28, max: 0.28, col: s.src === 'echo' ? '#8fe9ff' : '#b88cff', r: 2.6 });
+    if (s.kind === 'orb' && G.tick % 2 === 0 && G.fx.length < 260) G.fx.push({ x: s.x, y: s.y, vx: (G.rng() - 0.5) * 24, vy: (G.rng() - 0.5) * 24, life: 0.28, max: 0.28, col: s.src === 'echo' ? '#8fe9ff' : '#b88cff', r: 2.6 });
     if (s.st.homing) { // 유도: 가까운 적 쪽으로 천천히 휘어진다
       let t = null, bd = 190;
       for (const e of G.enemies) { if (e.dead || e.z > 20 || s.hit.includes(e)) continue; const d = Math.hypot(e.x - s.x, e.y - e.r * 0.6 - s.y); if (d < bd) { bd = d; t = e; } }

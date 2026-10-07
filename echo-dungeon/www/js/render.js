@@ -7,15 +7,26 @@ const OL = '#3a2540';
 /* ---------- 이미지 에셋 (있으면 사용, 없으면 도형) ---------- */
 export const SPR = {};
 // 이름.png = 정면, 이름_b.png = 뒷모습, 이름_s.png = 옆모습(오른쪽을 봄)
-const PLAYER_ART = ['hero', 'archer', 'wizard']; // 8방향(앞·비스듬한 앞·옆·비스듬한 뒤·뒤 + 좌우 반전)
+// 각도별 그림: ''=앞(0도) _a1=22.5 _fd=45 _a2=67.5 _s=옆(90) _a3=112.5 _bd=135 _a4=157.5 _b=뒤(180). 오른쪽을 보는 그림만 있고 왼쪽은 좌우 반전.
+// 파일이 있는 각도만 쓰고, 없으면 가장 가까운 각도로 대신한다 (5장이면 8방향, 9장이면 16방향)
+const VIEW_ANGLES = { '': 0, _a1: 22.5, _fd: 45, _a2: 67.5, _s: 90, _a3: 112.5, _bd: 135, _a4: 157.5, _b: 180 };
+let sprLoaded = 0;
 ['hero', 'archer', 'wizard', 'slime', 'bat', 'brute', 'mage', 'boar', 'blob', ...Object.keys(BOSSES)].forEach((n) => {
-  for (const sfx of PLAYER_ART.includes(n) ? ['', '_b', '_s', '_fd', '_bd'] : ['', '_b', '_s']) {
+  for (const sfx of Object.keys(VIEW_ANGLES)) {
     const im = new Image();
-    im.onload = () => { SPR[n + sfx] = im; };
+    im.onload = () => { SPR[n + sfx] = im; sprLoaded++; };
     im.onerror = () => {};
     im.src = 'assets/' + n + sfx + '.png';
   }
 });
+const viewCache = {};
+function viewsOf(n) { // [[각도, 접미사], …] 각도 순
+  const c = viewCache[n];
+  if (c && c.k === sprLoaded) return c.list;
+  const list = Object.entries(VIEW_ANGLES).filter(([k]) => SPR[n + k]).map(([k, a]) => [a, k]).sort((x, y) => x[0] - y[0]);
+  viewCache[n] = { k: sprLoaded, list };
+  return list;
+}
 
 // UI 아이콘 (카드·HUD). 없으면 이모지로 대신한다.
 export const ICO = {};
@@ -90,28 +101,34 @@ function stride(o) {
   o._ph = (o._ph || 0) + d * 0.2;
 }
 
-// 움직이는 방향으로 보는 방향을 정한다: f 앞, fd 비스듬한 앞, s 옆, bd 비스듬한 뒤, b 뒤 (왼쪽은 좌우 반전). 멈추면 마지막 방향을 유지한다.
-// 속도 방향을 부드럽게 걸러서 경계 근처에서 깜빡이지 않게 하고, 현재 방향에서 벗어날 때는 더 큰 각도를 요구한다(히스테리시스).
+// 움직이는 방향으로 보는 각도를 정한다. phi: 0=아래(앞) · 90=옆 · 180=위(뒤). 왼쪽은 좌우 반전이라 부호는 쓰지 않는다.
+// 속도 방향을 걸러서 떨림을 막고, 현재 그림을 더 가까운 그림보다 7도 넘게 멀어질 때까지 유지한다(히스테리시스).
+const COARSE = ['f', 'fd', 's', 'bd', 'b'], COARSE_A = [0, 45, 90, 135, 180];
 function viewOf(o) {
   const dx = o.x - (o._px ?? o.x), dy = o.y - (o._py ?? o.y);
   o._px = o.x; o._py = o.y; o._dx = dx; o._dy = dy;
   o._sx = (o._sx || 0) * 0.78 + dx * 0.22; o._sy = (o._sy || 0) * 0.78 + dy * 0.22;
   if (o._sx * o._sx + o._sy * o._sy > 0.02) {
-    const ax = Math.abs(o._sx), ay = Math.abs(o._sy), cur = o._v;
-    const kv = cur === 'f' || cur === 'b' ? 2.0 : 2.8, ks = cur === 's' ? 2.0 : 2.8; // 세로/가로로 기울었다고 보는 비율
-    let v;
-    if (ay > ax * kv) v = o._sy > 0 ? 'f' : 'b';
-    else if (ax > ay * ks) v = 's';
-    else v = o._sy > 0 ? 'fd' : 'bd';
-    o._v = v;
+    const phi = Math.atan2(Math.abs(o._sx), o._sy) * 180 / Math.PI;
+    o._phi = phi;
+    let best = 0;
+    for (let k = 1; k < 5; k++) if (Math.abs(phi - COARSE_A[k]) < Math.abs(phi - COARSE_A[best])) best = k;
+    if (o._ci == null || Math.abs(phi - COARSE_A[o._ci]) > 22.5 + 7) o._ci = best;
+    o._v = COARSE[o._ci];
   }
   return o._v || 'f';
 }
 const ROBED = ['wizard', 'archer'];
-// 방향에 맞는 이미지. 비스듬한 그림이 없으면 가까운 그림(옆/뒤)으로 대신한다
+// 현재 각도에 가장 가까운 그림
 function pick(c, o, n) {
-  const v = o._v || 'f';
-  return SPR[n + (v === 'f' ? '' : '_' + v)] || (v === 'fd' ? SPR[n + '_s'] : v === 'bd' ? SPR[n + '_b'] : null) || SPR[n];
+  const list = viewsOf(n);
+  if (!list.length) return null;
+  const phi = o._phi ?? 0;
+  let bi = 0;
+  for (let i = 1; i < list.length; i++) if (Math.abs(phi - list[i][0]) < Math.abs(phi - list[bi][0])) bi = i;
+  if (o._fi != null && o._fn === n && list[o._fi] && Math.abs(phi - list[o._fi][0]) < Math.abs(phi - list[bi][0]) + 7) bi = o._fi;
+  o._fi = bi; o._fn = n;
+  return SPR[n + list[bi][1]];
 }
 // 좌우 반전은 순간이동 대신 몸이 얇아졌다 돌아서듯 부드럽게 바꾼다. 앞/뒷모습 이미지를 쓸 때는 반전하지 않는다. 프레임당 한 번만 부른다.
 function flipX(o, name) {
@@ -218,28 +235,6 @@ function drawOffscreenArrows(c, G) {
   }
 }
 
-/* ---------- 살아 있는 배경: 챕터마다 다른 입자와 흐르는 안개 ---------- */
-const AMB = CHAPTERS.map((_, ch) => { const r = mulberry32(ch * 31 + 7); return Array.from({ length: 34 }, () => ({ x: r() * W, y: r() * H, sp: 0.5 + r(), amp: 8 + r() * 22, ph: r() * 6.28, sz: 1 + r() * 1.8 })); });
-const AMB_COL = ['#d8ff7a', '#c9a0ff', '#ffa040', '#eaf8ff', '#ff4d6d', '#ffd34a'];
-const AMB_RISE = [0, 10, 34, -22, 12, 8]; // 위로 뜨는 속도 (음수는 눈처럼 떨어진다, 0은 제자리 맴돌기)
-function drawAmbient(c, ch, cam) {
-  const t = S.clock, P = AMB[ch], col = AMB_COL[ch] || '#fff', rise = AMB_RISE[ch] || 0, acc = CHAPTERS[ch].accent;
-  for (let k = 0; k < 2; k++) { // 안개
-    const fx = W * (0.5 + 0.4 * Math.sin(t * 0.07 + k * 3)), fy = H * (0.35 + 0.3 * k + 0.08 * Math.sin(t * 0.11 + k));
-    const g = c.createRadialGradient(fx, fy, 10, fx, fy, 200);
-    g.addColorStop(0, acc + '1c'); g.addColorStop(1, acc + '00');
-    c.fillStyle = g; c.fillRect(0, 0, W, H);
-  }
-  c.save(); c.globalCompositeOperation = 'lighter'; c.fillStyle = col;
-  for (const p of P) {
-    const x = (((p.x + Math.sin(t * 0.5 * p.sp + p.ph) * p.amp - cam.x * 0.35) % W) + W) % W;
-    const y = rise ? (((p.y - t * rise * p.sp - cam.y * 0.35) % H) + H) % H : (((p.y + Math.cos(t * 0.4 * p.sp + p.ph * 1.3) * p.amp * 0.7 - cam.y * 0.35) % H) + H) % H;
-    const tw = 0.5 + 0.5 * Math.sin(t * (ch === 2 ? 9 : 2.2) * p.sp + p.ph);
-    c.globalAlpha = 0.1 + 0.28 * tw; c.beginPath(); c.arc(x, y, p.sz * 3.2, 0, 6.3); c.fill();
-    c.globalAlpha = 0.35 + 0.55 * tw; c.beginPath(); c.arc(x, y, p.sz, 0, 6.3); c.fill();
-  }
-  c.restore();
-}
 const TORCHES = [[70, 56], [215, 56], [360, 56], [505, 56], [650, 56]];
 function drawTorches(c, ch) {
   const t = S.clock, acc = CHAPTERS[ch].accent;
@@ -327,6 +322,9 @@ export function drawChibi(c, o, pal, alpha, scale) {
     c.save(); c.globalAlpha = alpha;
     for (let i = 0; i < st.blades; i++) {
       const a = o.ang + i * Math.PI * 2 / st.blades;
+      c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = alpha * 0.55; c.lineCap = 'round'; // 휘두른 자리에 빛나는 꼬리
+      c.strokeStyle = st.bladeDmg > 7 ? '#ffd34a' : '#9fe6ff'; c.lineWidth = 6 * st.bladeSize;
+      c.beginPath(); c.arc(o.x, o.y - 10, st.bladeR, a - 0.6, a); c.stroke(); c.restore();
       c.save(); c.translate(o.x + Math.cos(a) * st.bladeR, o.y - 10 + Math.sin(a) * st.bladeR); c.rotate(a + Math.PI / 2); c.scale(st.bladeSize, st.bladeSize);
       c.beginPath(); c.moveTo(0, -10); c.lineTo(4.5, 4); c.lineTo(-4.5, 4); c.closePath(); fs(c, st.bladeDmg > 7 ? '#ffe27a' : pal.blade, 1.3);
       c.restore();
@@ -334,8 +332,12 @@ export function drawChibi(c, o, pal, alpha, scale) {
     c.restore();
   }
   if (o.isHero && st && st.shield > 0 && o.shieldReady) {
-    c.save(); c.strokeStyle = `rgba(143,233,255,${0.5 + Math.sin(clock * 5) * 0.2})`; c.lineWidth = 2;
-    c.beginPath(); c.arc(o.x, o.y - 20, 24, 0, 6.3); c.stroke(); c.restore();
+    c.save(); c.translate(o.x, o.y - 22);
+    const g = c.createRadialGradient(0, 0, 8, 0, 0, 27); g.addColorStop(0, 'rgba(143,233,255,0)'); g.addColorStop(1, 'rgba(143,233,255,.28)');
+    c.fillStyle = g; c.beginPath(); c.arc(0, 0, 27, 0, 6.3); c.fill();
+    c.strokeStyle = `rgba(190,245,255,${0.7 + Math.sin(clock * 5) * 0.2})`; c.lineWidth = 2.2; c.beginPath(); c.arc(0, 0, 27, 0, 6.3); c.stroke();
+    c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = 3; c.lineCap = 'round'; c.beginPath(); c.arc(0, 0, 27, clock * 2, clock * 2 + 0.7); c.stroke();
+    c.restore();
   }
 }
 
@@ -496,6 +498,25 @@ function drawEnemy(c, e) {
   else if (e.type === 'mage') drawMage(c, e);
   else if (e.type === 'boar') drawBoar(c, e);
   if (e.flash > 0 && !(nm && SPR[nm])) { c.globalAlpha = 0.55; c.fillStyle = '#fff'; ell(c, 0, -e.r * 0.95 - (e.z || 0), e.r * 1.1, e.r * 1.0); c.fill(); }
+  if (e.burnT > 0 && e.dying == null) { // 불타는 중: 주황 빛 + 일렁이는 불꽃 세 줄기
+    const t = S.clock + e.seed, R = e.r;
+    c.save(); c.globalCompositeOperation = 'lighter';
+    const g = c.createRadialGradient(0, -R * 0.9, 2, 0, -R * 0.9, R * 1.6); g.addColorStop(0, 'rgba(255,170,60,.5)'); g.addColorStop(1, 'rgba(255,90,20,0)');
+    c.fillStyle = g; c.fillRect(-R * 1.8, -R * 2.7, R * 3.6, R * 3.6);
+    c.globalCompositeOperation = 'source-over'; // 불꽃 자체는 밝은 바닥에서도 보이게 테두리를 두르고 덧칠하지 않는다
+    c.strokeStyle = 'rgba(110,25,0,.85)'; c.lineWidth = 1.2;
+    for (let i = 0; i < 3; i++) { // 몸 위쪽에서 일렁이는 물방울 모양 불꽃 (바깥 주황 + 안쪽 노랑)
+      const ph = t * 9 + i * 2.1, fx = (i - 1) * R * 0.55 + Math.sin(ph * 0.6) * 1.5, by = -R * (1.75 + (i === 1 ? 0.35 : 0)), hh = R * (0.95 + 0.35 * Math.sin(ph)), w = R * 0.26;
+      for (const [k, col, st] of [[1, 'rgba(255,120,30,.92)', true], [0.55, 'rgba(255,230,120,.95)', false]]) {
+        const H2 = hh * k, W2 = w * k;
+        c.beginPath(); c.moveTo(fx, by - H2);
+        c.bezierCurveTo(fx + W2 * 1.5, by - H2 * 0.45, fx + W2 * 1.1, by, fx, by);
+        c.bezierCurveTo(fx - W2 * 1.1, by, fx - W2 * 1.5, by - H2 * 0.45, fx, by - H2);
+        c.fillStyle = col; c.fill(); if (st) c.stroke();
+      }
+    }
+    c.restore();
+  }
   if (e.slowT > 0) { c.globalAlpha = 0.35; c.fillStyle = '#9fe6ff'; ell(c, 0, -e.r * 0.9, e.r * 1.05, e.r * 0.95); c.fill(); }
   c.restore();
   if (e.dying != null) return;
@@ -602,7 +623,6 @@ export function renderGame(c) {
   const cam = G.cam || (G.cam = { x: 0, y: 0 });
   drawBgView(c, G.ch, cam);
   drawGlow(c, G.ch, cam);
-  drawAmbient(c, G.ch, cam);
   c.save(); c.translate(-cam.x, -cam.y); // 여기서부터는 월드 좌표
   drawTorches(c, G.ch);
   // 독 웅덩이
@@ -610,6 +630,25 @@ export function renderGame(c) {
     const a = clamp(p.life / p.max, 0, 1);
     c.fillStyle = p.src === 'echo' ? `rgba(110,230,255,${0.25 * a})` : `rgba(140,255,90,${0.28 * a})`;
     ell(c, p.x, p.y, p.r, p.r * 0.55); c.fill();
+    c.strokeStyle = p.src === 'echo' ? `rgba(160,240,255,${0.6 * a})` : `rgba(190,255,120,${0.65 * a})`; c.lineWidth = 1.6; c.stroke();
+    for (let i = 0; i < 3; i++) { // 보글보글 올라오는 방울
+      const ph = (S.clock * 1.3 + i * 0.37 + p.x * 0.013) % 1, bx = p.x + Math.sin(i * 2.4 + p.y) * p.r * 0.5, by = p.y - ph * p.r * 0.9;
+      c.fillStyle = `rgba(230,255,200,${0.7 * a * (1 - ph)})`; c.beginPath(); c.arc(bx, by, 1.6 + ph * 1.6, 0, 6.3); c.fill();
+    }
+  }
+  // 오라: 바닥에 퍼지는 빛 + 도는 점선 테두리 (범위가 눈에 보인다)
+  for (const o of [G.hero, ...G.echoes.filter((e) => e.alive)]) {
+    const st = o.st;
+    if (!st || !(st.aura || st.auraSlow)) continue;
+    const R = 52 + 9 * Math.max(st.aura, st.auraSlow), t = S.clock, fire = !!st.aura, e = !o.isHero;
+    const col = fire ? [255, 150, 60] : [130, 215, 255];
+    c.save(); c.translate(o.x, o.y - 2); c.scale(1, 0.62);
+    const g = c.createRadialGradient(0, 0, R * 0.25, 0, 0, R);
+    g.addColorStop(0, `rgba(${col},0)`); g.addColorStop(0.8, `rgba(${col},${e ? 0.08 : 0.16})`); g.addColorStop(1, `rgba(${col},${e ? 0.2 : 0.4})`);
+    c.fillStyle = g; c.beginPath(); c.arc(0, 0, R, 0, 6.3); c.fill();
+    c.strokeStyle = `rgba(${col},${(e ? 0.4 : 0.75) + 0.15 * Math.sin(t * 4)})`; c.lineWidth = 2.5; c.setLineDash([11, 8]); c.lineDashOffset = -t * 38;
+    c.beginPath(); c.arc(0, 0, R, 0, 6.3); c.stroke(); c.setLineDash([]);
+    c.restore();
   }
   // 보스 착지 지점 예고
   for (const b of G.enemies) {
@@ -624,6 +663,15 @@ export function renderGame(c) {
       c.beginPath();
       for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, l = i % 2 ? r.r * 0.22 : (i === 0 ? r.r * 1.5 : i === 4 ? r.r * 0.7 : r.r); c.lineTo(Math.cos(a) * l, Math.sin(a) * l); }
       c.fill(); c.fillStyle = '#fff'; c.beginPath(); c.arc(0, 0, r.r * 0.3, 0, 6.3); c.fill();
+      c.restore(); continue;
+    }
+    if (r.wave) { // 충격파: 바닥을 훑고 지나가는 납작한 원판과 이중 고리
+      const k = clamp(r.life / r.maxLife, 0, 1);
+      c.save(); c.translate(r.x, r.y + 6); c.scale(1, 0.55);
+      const g = c.createRadialGradient(0, 0, r.r * 0.55, 0, 0, r.r); g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, r.col.replace(')', `,${0.45 * k})`).replace('rgb', 'rgba'));
+      c.globalCompositeOperation = 'lighter'; c.fillStyle = g; c.beginPath(); c.arc(0, 0, r.r, 0, 6.3); c.fill();
+      c.strokeStyle = `rgba(255,255,255,${0.9 * k})`; c.lineWidth = 4; c.beginPath(); c.arc(0, 0, r.r, 0, 6.3); c.stroke();
+      c.strokeStyle = r.col.replace(')', `,${0.6 * k})`).replace('rgb', 'rgba'); c.lineWidth = 7; c.beginPath(); c.arc(0, 0, r.r * 0.86, 0, 6.3); c.stroke();
       c.restore(); continue;
     }
     c.strokeStyle = r.col || 'rgba(255,255,255,.8)'; c.globalAlpha = clamp(r.life / 0.35, 0, 1); c.lineWidth = r.round ? 3 : 4; ell(c, r.x, r.y, r.r, r.round ? r.r : r.r * 0.5); c.stroke();
@@ -707,14 +755,20 @@ export function renderGame(c) {
   }
   // 번개
   for (const bo of G.bolts) {
-    c.strokeStyle = bo.echo ? '#9ff0ff' : '#fff59a'; c.lineWidth = 3; c.globalAlpha = clamp(bo.life / 0.22, 0, 1);
-    c.beginPath();
+    const path = []; // 한 번 꺾은 길을 두 번 그린다 (바깥 빛 + 흰 심지)
     for (let i = 0; i < bo.pts.length; i++) {
       const p = bo.pts[i];
-      if (i === 0) c.moveTo(p.x, p.y);
-      else { const q = bo.pts[i - 1]; c.lineTo((p.x + q.x) / 2 + (Math.random() - 0.5) * 12, (p.y + q.y) / 2 + (Math.random() - 0.5) * 12); c.lineTo(p.x, p.y); }
+      if (i === 0) path.push([p.x, p.y]);
+      else { const q = bo.pts[i - 1]; path.push([(p.x + q.x) / 2 + (Math.random() - 0.5) * 14, (p.y + q.y) / 2 + (Math.random() - 0.5) * 14], [p.x, p.y]); }
     }
-    c.stroke();
+    const k = clamp(bo.life / 0.22, 0, 1);
+    c.save(); c.lineJoin = 'round'; c.lineCap = 'round'; c.globalCompositeOperation = 'lighter';
+    for (const [col, w, a] of [[bo.echo ? '#3fb8ff' : '#ffd23a', 9, 0.4], [bo.echo ? '#bff4ff' : '#fff6b0', 4, 0.9], ['#ffffff', 1.8, 1]]) {
+      c.strokeStyle = col; c.lineWidth = w; c.globalAlpha = a * k; c.beginPath();
+      path.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+      c.stroke();
+    }
+    c.restore();
   }
   c.globalAlpha = 1;
   c.globalCompositeOperation = 'lighter'; // 빛나는 불꽃
@@ -753,7 +807,6 @@ export function renderTitle(c) {
   const ch = stageChap(S.chapter).ch, cam = { x: (ARENA.w - W) / 2, y: ARENA.h - H - 90 };
   drawBgView(c, ch, cam);
   drawGlow(c, ch, cam);
-  drawAmbient(c, ch, cam);
   c.fillStyle = 'rgba(10,5,20,.35)'; c.fillRect(0, 0, W, H);
   const n = Math.max(1, Math.min(4, S.save.echoes[ch].length + 1));
   const items = [];

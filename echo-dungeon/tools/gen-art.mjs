@@ -92,7 +92,8 @@ async function generateRef(prompt, refPng) {
   for (let i = 0; i < refPng.data.length; i += 4) { const a = refPng.data[i + 3] / 255; for (let k = 0; k < 3; k++) white.data[i + k] = Math.round(refPng.data[i + k] * a + 255 * (1 - a)); white.data[i + 3] = 255; }
   const form = new FormData();
   form.append('prompt', `${prompt}. Keep exactly the same outfit, colors, hairstyle, proportions, weapon and art style as the reference image. Full body, standing, centered, plain pure white background, no text, no shadow, cute chibi cartoon game art`);
-  form.append('width', '768'); form.append('height', '768');
+  const RS = process.env.REF_SIZE || '512'; // 게임에서는 320px로 줄여 쓰므로 512면 충분하고 한도를 덜 쓴다
+  form.append('width', RS); form.append('height', RS);
   form.append('input_image_0', new Blob([PNG.sync.write(white)], { type: 'image/png' }), 'ref.png');
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${REF_MODEL}`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, body: form });
   const j = await res.json().catch(() => ({}));
