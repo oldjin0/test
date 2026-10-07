@@ -29,9 +29,10 @@ class PageFocus {
 
 /// Settings that change what a page looks like and so its colorization.
 class ColorOptions {
-  const ColorOptions({this.hints = const [], this.denoise = false});
+  const ColorOptions({this.hints = const [], this.denoise = false, this.palette = const []});
   final List<ColorHint> hints;
   final bool denoise;
+  final List<int> palette;
 }
 
 /// Pages of one comic, ready to draw without waiting: originals are read,
@@ -150,6 +151,7 @@ class ReaderPages extends ChangeNotifier {
             () => book.page(i),
             hints: opts.hints,
             denoise: opts.denoise,
+            palette: opts.palette,
           )
           .then((_) {}, onError: (Object _) {}); // nobody waits: cached for later
     }
@@ -260,6 +262,7 @@ class ReaderPages extends ChangeNotifier {
       () => _originals[i] != null ? Future.value(_originals[i]) : book.page(i),
       hints: opts.hints,
       denoise: opts.denoise,
+      palette: opts.palette,
     );
     _requests[i] = (key, f);
     f.then(

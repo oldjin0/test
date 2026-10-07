@@ -168,6 +168,12 @@ List<Widget> _colorSection(LibraryStore s) => [
     (v) => s.update((s) => s.prefetchPages = v),
   ),
   _switch('스크린톤 정리 후 채색', s.denoise, s.setDenoise, subtitle: '인쇄 만화의 망점을 정리해 색이 선명해집니다'),
+  _switch(
+    '표지 · 컬러 페이지의 색 따르기',
+    s.bookPalette,
+    (v) => s.update((s) => s.bookPalette = v),
+    subtitle: '책의 컬러 페이지(표지, 앞부분 컬러 페이지)에서 색을 뽑아, 흑백 페이지의 색을 그 색에 가깝게 맞춥니다',
+  ),
 ];
 
 List<Widget> _pcSection(LibraryStore s, String? engine) => [

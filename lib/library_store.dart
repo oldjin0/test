@@ -67,6 +67,12 @@ class LibraryStore extends ChangeNotifier {
 
   /// Color hints per comic path and page.
   final Map<String, Map<int, List<ColorHint>>> _hints = {};
+
+  /// Per book: the main colors of its color pages (empty: it has none).
+  final Map<String, List<int>> _palettes = {};
+
+  /// Colorized pages follow the colors of the book's own color pages.
+  bool bookPalette = true;
   bool rtl = true;
   bool dual = false;
   bool colorize = true;
@@ -217,6 +223,15 @@ class LibraryStore extends ChangeNotifier {
     textTheme = p.getString('textTheme') ?? textTheme;
     textSerif = p.getBool('textSerif') ?? textSerif;
     _readHints(p.getString('hints'));
+    try {
+      final raw = p.getString('palettes');
+      if (raw != null) {
+        for (final MapEntry(:key, :value) in (jsonDecode(raw) as Map).entries) {
+          _palettes['$key'] = [for (final c in value as List) (c as num).toInt()];
+        }
+      }
+    } catch (_) {}
+    bookPalette = p.getBool('bookPalette') ?? bookPalette;
   }
 
   void _readHints(String? raw) {
@@ -300,6 +315,8 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setString('textTheme', textTheme);
     _prefs.setBool('textSerif', textSerif);
     _prefs.setString('hints', jsonEncode(_hintsJson()));
+    _prefs.setString('palettes', jsonEncode(_palettes));
+    _prefs.setBool('bookPalette', bookPalette);
   }
 
   // Backup
@@ -444,6 +461,17 @@ class LibraryStore extends ChangeNotifier {
   // Color hints
 
   List<ColorHint> hintsOf(String path, int page) => _hints[path]?[page] ?? const [];
+
+  /// The colors of [path]'s color pages, or null when not looked for yet.
+  List<int>? paletteOf(String path) => _palettes[path];
+
+  /// The palette colorizing uses for [path] (empty: none).
+  List<int> activePalette(String path) => bookPalette ? (_palettes[path] ?? const []) : const [];
+
+  void setPalette(String path, List<int> colors) {
+    _palettes[path] = colors;
+    _changed();
+  }
 
   /// Pages of [path] that have hints.
   Set<int> hintedPages(String path) => _hints[path]?.keys.toSet() ?? const {};

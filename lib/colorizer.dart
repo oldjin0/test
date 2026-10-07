@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
+import 'book_palette.dart';
 import 'ink_color.dart';
 import 'xnnpack.dart';
 
@@ -348,6 +349,7 @@ ColorizeResult colorizePage(
   List<ColorHint> hints = const [],
   PageDenoiser? denoiser,
   int ink = 0,
+  List<int> palette = const [],
 }) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
@@ -379,17 +381,19 @@ ColorizeResult colorizePage(
     mode = ColorizeMode.filter;
   }
   final jpg = img.encodeJpg(out, quality: 88);
-  if (ink > 0 && mode == ColorizeMode.ai) {
-    final rgb = out.getBytes(order: img.ChannelOrder.rgb);
-    InkColor.adapt(rgb, ink, width: out.width, height: out.height);
-    final inked = img.Image.fromBytes(
-      width: out.width,
-      height: out.height,
-      bytes: rgb.buffer,
-      numChannels: 3,
-    );
+  if ((ink > 0 || palette.isNotEmpty) && mode == ColorizeMode.ai) {
+    final rgb = Uint8List.fromList(out.getBytes(order: img.ChannelOrder.rgb));
+    _postProcess(rgb, out.width, out.height, palette, ink);
     return ColorizeResult(
-      img.encodeJpg(inked, quality: 88),
+      img.encodeJpg(
+        img.Image.fromBytes(
+          width: out.width,
+          height: out.height,
+          bytes: rgb.buffer,
+          numChannels: 3,
+        ),
+        quality: 88,
+      ),
       mode,
       sw.elapsedMilliseconds,
       plain: jpg,
@@ -398,13 +402,21 @@ ColorizeResult colorizePage(
   return ColorizeResult(jpg, mode, sw.elapsedMilliseconds);
 }
 
-/// Color e-ink processing ([InkColor]) of an already colorized page.
-Uint8List inkAdapt(Uint8List jpeg, int ink) {
+/// The steps after the model, cheap enough to redo from the cached plain
+/// page when their settings change: the book's own colors ([palette], see
+/// applyBookPalette), then the color e-ink processing (level [ink]).
+void _postProcess(Uint8List rgb, int width, int height, List<int> palette, int ink) {
+  if (palette.isNotEmpty) applyBookPalette(rgb, palette);
+  if (ink > 0) InkColor.adapt(rgb, ink, width: width, height: height);
+}
+
+/// [_postProcess] of an already colorized (plain) page.
+Uint8List postProcess(Uint8List jpeg, {List<int> palette = const [], int ink = 0}) {
   final decoded = img.decodeImage(jpeg);
   if (decoded == null) return jpeg;
   final src = decoded.convert(format: img.Format.uint8, numChannels: 3);
   final rgb = Uint8List.fromList(src.getBytes(order: img.ChannelOrder.rgb));
-  InkColor.adapt(rgb, ink, width: src.width, height: src.height);
+  _postProcess(rgb, src.width, src.height, palette, ink);
   return img.encodeJpg(
     img.Image.fromBytes(width: src.width, height: src.height, bytes: rgb.buffer, numChannels: 3),
     quality: 88,

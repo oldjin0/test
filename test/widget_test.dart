@@ -338,7 +338,7 @@ void main() {
       final b = img.decodeImage(inked.bytes)!.getPixel(100, 50);
       expect(a.r, closeTo(img.decodeImage(plain.bytes)!.getPixel(100, 50).r, 2));
       expect([b.r, b.g, b.b], isNot([a.r, a.g, a.b]), reason: 'processed');
-      final again = img.decodeImage(inkAdapt(inked.plain!, 2))!.getPixel(100, 50);
+      final again = img.decodeImage(postProcess(inked.plain!, ink: 2))!.getPixel(100, 50);
       expect(again.r, closeTo(b.r, 3), reason: 'processing the plain page gives the same');
 
       ColorizeService.ink = 2;

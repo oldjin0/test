@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import 'book_palette.dart';
 import 'colorize_service.dart';
 import 'colorizer.dart';
 import 'comic_loader.dart';
@@ -55,10 +57,17 @@ Future<void> prepareBook(
     for (var i = first; i < end; i++) {
       service
           .colorizeInBackground(
-            ColorizeService.keyFor(path, i, hints: store.hintsOf(path, i), denoise: store.denoise),
+            ColorizeService.keyFor(
+              path,
+              i,
+              hints: store.hintsOf(path, i),
+              denoise: store.denoise,
+              palette: store.activePalette(path),
+            ),
             () => book.page(i),
             hints: store.hintsOf(path, i),
             denoise: store.denoise,
+            palette: store.activePalette(path),
           )
           .then((_) {}, onError: (Object _) {});
     }
@@ -66,6 +75,11 @@ Future<void> prepareBook(
     // the book moved or cannot be read: nothing to prepare
   }
 }
+
+/// Top level on purpose: a closure made inside a method could share its
+/// context with the book (and its futures), which cannot cross isolates.
+Future<List<int>> _paletteInBackground(List<Uint8List> pages) =>
+    Isolate.run(() => extractBookPalette(pages));
 
 /// Color matrix for the reader's contrast and saturation settings (1 = no
 /// change), or null when both are unchanged. Saturation first, then contrast.
@@ -180,8 +194,11 @@ class _ViewerPageState extends State<ViewerPage> {
       final pages = ReaderPages(
         book: book,
         colorKey: _key,
-        colorOptions: (i) =>
-            ColorOptions(hints: _store.hintsOf(widget.path, i), denoise: _store.denoise),
+        colorOptions: (i) => ColorOptions(
+          hints: _store.hintsOf(widget.path, i),
+          denoise: _store.denoise,
+          palette: _store.activePalette(widget.path),
+        ),
         decode: widget.decodeImages ? (b) => precacheImage(MemoryImage(b), context) : null,
         margins: _store.autoCrop ? findMargins : null,
       )..addListener(_onPages);
@@ -195,6 +212,7 @@ class _ViewerPageState extends State<ViewerPage> {
       _saveProgress();
       _focus();
       unawaited(_findNext());
+      unawaited(_findPalette(book));
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
@@ -209,6 +227,7 @@ class _ViewerPageState extends State<ViewerPage> {
   late bool _colorize = _store.colorize;
   late bool _denoise = _store.denoise;
   late int _ink = ColorizeService.ink;
+  late String _paletteKey = _store.activePalette(widget.path).join(',');
   late bool _autoCrop = _store.autoCrop;
   late int _prefetch = _store.prefetchPages;
   late String _orientation = _store.orientation;
@@ -238,7 +257,9 @@ class _ViewerPageState extends State<ViewerPage> {
       }
       if (_denoise != _store.denoise ||
           _prefetch != _store.prefetchPages ||
-          _ink != ColorizeService.ink) {
+          _ink != ColorizeService.ink ||
+          _paletteKey != _store.activePalette(widget.path).join(',')) {
+        _paletteKey = _store.activePalette(widget.path).join(',');
         _denoise = _store.denoise;
         _ink = ColorizeService.ink; // colors are processed differently: new cache keys
         _prefetch = _store.prefetchPages;
@@ -291,6 +312,24 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   /// One page (spread) forward or back: keys, taps and auto turn.
+  /// Looks once per book for its color pages (the cover, color inserts at
+  /// the start, a back cover) and keeps their main colors; colorized pages
+  /// then follow them (the new cache keys make them redone).
+  Future<void> _findPalette(ComicBook book) async {
+    if (!_store.bookPalette || _store.paletteOf(widget.path) != null) return;
+    final n = book.length;
+    final indices = {for (var i = 0; i < math.min(n, 8); i++) i, if (n > 8) n - 1};
+    final pages = <Uint8List>[];
+    for (final i in indices) {
+      try {
+        pages.add(await book.page(i));
+      } catch (_) {}
+    }
+    final colors = await _paletteInBackground(pages);
+    if (!mounted) return;
+    _store.setPalette(widget.path, colors);
+  }
+
   Future<void> _findNext() async {
     if (!_store.autoNext) return;
     final next = await nextBookPath(widget.path);
@@ -487,6 +526,7 @@ class _ViewerPageState extends State<ViewerPage> {
     i,
     hints: _store.hintsOf(widget.path, i),
     denoise: _store.denoise,
+    palette: _store.activePalette(widget.path),
   );
 
   /// Queues every page for colorizing in the background, from the current
@@ -505,6 +545,7 @@ class _ViewerPageState extends State<ViewerPage> {
             () => book.page(i),
             hints: _store.hintsOf(widget.path, i),
             denoise: _store.denoise,
+            palette: _store.activePalette(widget.path),
           )
           .then((_) {}, onError: (Object _) {});
     }
@@ -524,10 +565,17 @@ class _ViewerPageState extends State<ViewerPage> {
           loadPage: () => book.page(page),
           initial: _store.hintsOf(widget.path, page),
           preview: (hints) => service.colorize(
-            ColorizeService.keyFor(widget.path, page, hints: hints, denoise: _store.denoise),
+            ColorizeService.keyFor(
+              widget.path,
+              page,
+              hints: hints,
+              denoise: _store.denoise,
+              palette: _store.activePalette(widget.path),
+            ),
             () => book.page(page),
             hints: hints,
             denoise: _store.denoise,
+            palette: _store.activePalette(widget.path),
           ),
         ),
       ),
@@ -880,6 +928,7 @@ class _ViewerPageState extends State<ViewerPage> {
             () => book.page(i),
             hints: _store.hintsOf(widget.path, i),
             denoise: _store.denoise,
+            palette: _store.activePalette(widget.path),
           );
           return r.bytes;
         } catch (e) {

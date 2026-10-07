@@ -209,7 +209,11 @@ class InkColor {
   }
 
   /// Transforms tightly packed RGB bytes in place.
-  void apply(Uint8List rgb) {
+  void apply(Uint8List rgb) => applyTable(_table, rgb);
+
+  /// Applies a 33^3 RGB table ([buildTable]) to tightly packed RGB bytes in
+  /// place, trilinearly.
+  static void applyTable(Uint8List table, Uint8List rgb) {
     const n = _n, step = 255 / (n - 1);
     // Per channel value: lower grid index and weight of the upper one (0..256).
     final idx = Int32List(256), frac = Int32List(256);
@@ -219,7 +223,7 @@ class InkColor {
       idx[v] = i;
       frac[v] = ((f - i) * 256).round();
     }
-    final t = _table;
+    final t = table;
     const sg = n * 3, sr = n * n * 3;
     for (var p = 0; p + 2 < rgb.length; p += 3) {
       final r = rgb[p], g = rgb[p + 1], b = rgb[p + 2];
@@ -246,20 +250,18 @@ class InkColor {
     }
   }
 
-  static Uint8List _build(double s, double boost) {
+  static Uint8List _build(double s, double boost) =>
+      buildTable((r, g, b) => _transform(r, g, b, s, boost));
+
+  /// A 33^3 RGB lookup table of [fn] (input 0..255 per channel).
+  static Uint8List buildTable((int, int, int) Function(double r, double g, double b) fn) {
     const n = _n;
     final t = Uint8List(n * n * n * 3);
     var k = 0;
     for (var ri = 0; ri < n; ri++) {
       for (var gi = 0; gi < n; gi++) {
         for (var bi = 0; bi < n; bi++) {
-          final out = _transform(
-            ri * 255 / (n - 1),
-            gi * 255 / (n - 1),
-            bi * 255 / (n - 1),
-            s,
-            boost,
-          );
+          final out = fn(ri * 255 / (n - 1), gi * 255 / (n - 1), bi * 255 / (n - 1));
           t[k++] = out.$1;
           t[k++] = out.$2;
           t[k++] = out.$3;
@@ -267,6 +269,30 @@ class InkColor {
       }
     }
     return t;
+  }
+
+  /// CIE L*a*b* of an sRGB color (0..255 channels).
+  static List<double> rgbToLab(double r, double g, double b) => _rgbToLab(r, g, b);
+
+  /// The sRGB color (0..255) of L*, a*, b*, with chroma lowered at the same
+  /// lightness and hue until it fits.
+  static (int, int, int) labToRgbFitted(double l, double a, double b) {
+    var c = math.sqrt(a * a + b * b);
+    final h = math.atan2(b, a), ca = math.cos(h), sa = math.sin(h);
+    if (!_inGamut(l, c * ca, c * sa)) {
+      var lo = 0.0, hi = c;
+      for (var i = 0; i < 14; i++) {
+        final mid = (lo + hi) / 2;
+        if (_inGamut(l, mid * ca, mid * sa)) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      c = lo;
+    }
+    final lin = _labToLinear(l, c * ca, c * sa);
+    return (_toByte(lin[0]), _toByte(lin[1]), _toByte(lin[2]));
   }
 
   static double _smooth(double e0, double e1, double x) {
