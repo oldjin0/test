@@ -163,4 +163,20 @@ void main() {
     expect(rgb.sublist(10 * 3, 10 * 3 + 3), [235, 235, 235]);
     expect(rgb[(45 * w + 60) * 3], lessThan(40));
   });
+
+  test('dark colored pixels turn neutral, so line art and black fills stay black', () {
+    final ink = InkColor(InkColor.strengthOf(3));
+    for (final dark in [(60, 25, 30), (40, 20, 45), (30, 35, 20), (70, 40, 40)]) {
+      final (r, g, b) = ink.map(dark.$1, dark.$2, dark.$3);
+      final spread = [r, g, b].reduce(math.max) - [r, g, b].reduce(math.min);
+      final before =
+          [dark.$1, dark.$2, dark.$3].reduce(math.max) -
+          [dark.$1, dark.$2, dark.$3].reduce(math.min);
+      expect(spread, lessThan(before), reason: '$dark -> ($r, $g, $b) is less colored');
+      expect(r + g + b, lessThanOrEqualTo(dark.$1 + dark.$2 + dark.$3 + 20), reason: 'not lighter');
+    }
+    // mid and light colors keep their boost
+    final (r, g, b) = ink.map(80, 160, 90);
+    expect(g - r, greaterThan(160 - 80));
+  });
 }

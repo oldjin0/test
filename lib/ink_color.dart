@@ -290,8 +290,12 @@ class InkColor {
     // Light and faint: the tint the model spreads over the paper.
     final paper = _smooth(80, 90, l) * (1 - _smooth(14, 26, c));
     gain = gain * (1 - paper) + (1 - 0.5 * s) * paper;
-    var cn = c * math.max(0.0, gain);
-    final ln = l + s * w * (1 - paper) * 6 * math.sin(math.pi * l.clamp(0.0, 100.0) / 100);
+    // Dark pixels lose their color: on the panel a dark colored pixel shows
+    // as a muddy maroon or purple instead of black (line art and black fills
+    // looked purple), while true black is the one thing it draws crisply.
+    final dark = _smooth(15, 40, l);
+    var cn = c * math.max(0.0, gain) * dark;
+    final ln = l + s * w * dark * (1 - paper) * 6 * math.sin(math.pi * l.clamp(0.0, 100.0) / 100);
     final ca = math.cos(h), sa = math.sin(h);
     if (!_inGamut(ln, cn * ca, cn * sa)) {
       var lo = 0.0, hi = cn;
