@@ -74,6 +74,32 @@ if (process.argv[2] === '--resize') { // 이미 만든 큰 이미지를 줄인�
   process.exit(0);
 }
 
+// FLUX.2 klein: 기준 그림을 주고 "같은 캐릭터를 다른 각도에서" 그리게 한다 (따로 그리면 매번 다른 캐릭터가 나오지만, 기준 그림을 주면 같은 캐릭터로 나온다)
+const REF_MODEL = process.env.CF_REF_MODEL || '@cf/black-forest-labs/flux-2-klein-4b';
+const VIEW_PROMPTS = {
+  _fd: 'the same character turned to a three-quarter front view, body and face angled 45 degrees toward the right side of the image, front of the body still mostly visible',
+  _s: 'the same character in a strict side profile view, exactly 90 degrees turned, the face in profile with the nose pointing to the right edge of the image, the chest facing right, only the left side of the body visible, like a classic side-scrolling game sprite',
+  _bd: 'the same character turned to a three-quarter back view, seen from behind and slightly from the right side, face mostly hidden, the back and the right side visible',
+  _b: 'the same character seen directly from behind, back view, face not visible',
+  // 16방향용 중간 각도 (22.5도 간격): 앞에서 옆으로, 옆에서 뒤로
+  _a1: 'the same character turned slightly to the right, about 22 degrees from the front view, almost facing the viewer',
+  _a2: 'the same character turned to the right about 67 degrees from the front view, mostly side view but a little of the front visible',
+  _a3: 'the same character turned away from the viewer about 112 degrees from the front view, side view slightly turned toward the back, a little of the back visible',
+  _a4: 'the same character turned away from the viewer about 157 degrees from the front view, almost fully seen from behind, a little of the right side visible',
+};
+async function generateRef(prompt, refPng) {
+  const white = new PNG({ width: refPng.width, height: refPng.height }); // 투명한 곳은 흰색으로 깔아서 기준 그림으로 쓴다
+  for (let i = 0; i < refPng.data.length; i += 4) { const a = refPng.data[i + 3] / 255; for (let k = 0; k < 3; k++) white.data[i + k] = Math.round(refPng.data[i + k] * a + 255 * (1 - a)); white.data[i + 3] = 255; }
+  const form = new FormData();
+  form.append('prompt', `${prompt}. Keep exactly the same outfit, colors, hairstyle, proportions, weapon and art style as the reference image. Full body, standing, centered, plain pure white background, no text, no shadow, cute chibi cartoon game art`);
+  form.append('width', '768'); form.append('height', '768');
+  form.append('input_image_0', new Blob([PNG.sync.write(white)], { type: 'image/png' }), 'ref.png');
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/run/${REF_MODEL}`, { method: 'POST', headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, body: form });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.result || !j.result.image) throw new Error(`${res.status} ${JSON.stringify(j.errors || j).slice(0, 300)}`);
+  return Buffer.from(j.result.image, 'base64');
+}
+const spec0 = (name) => `Reference: ${String((ASSETS[name] || {}).prompt || name).split(', highly')[0]}.`;
 const OFFLINE_CMDS = ['--swap', '--flip', '--assign', '--selftest', '--resize']; // 키가 필요 없는 명령
 if ((!ACCOUNT || !TOKEN) && !OFFLINE_CMDS.includes(process.argv[2])) {
   console.error('CLOUDFLARE_ACCOUNT_ID 와 CLOUDFLARE_API_TOKEN 환경 변수가 필요합니다.');
@@ -249,6 +275,29 @@ function cropPortrait(jpgBuf) { // 가운데 9:16 세로 영역만 남긴다
   return jpeg.encode({ data: d, width: w, height: h }, 84).data;
 }
 
+// 투명 배경 PNG에서 그림이 있는 부분만 잘라 size 정사각형 가운데에 꽉 차게(92%) 맞춘다. 아이콘 크기를 통일한다.
+function fitIcon(buf, size) {
+  const png = PNG.sync.read(buf), { width: w, height: h, data } = png;
+  let x0 = w, x1 = -1, y0 = h, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (data[(y * w + x) * 4 + 3] > 40) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  if (x1 < 0) return shrink(buf, size);
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1, sc = Math.min(size * 0.92 / bw, size * 0.92 / bh);
+  const ow = Math.round(bw * sc), oh = Math.round(bh * sc), ox = Math.round((size - ow) / 2), oy = Math.round((size - oh) / 2);
+  const dst = new PNG({ width: size, height: size });
+  for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
+    let r = 0, g = 0, b = 0, a = 0, n = 0;
+    const sx0 = x0 + Math.floor(x / sc), sx1 = Math.max(sx0 + 1, x0 + Math.floor((x + 1) / sc));
+    const sy0 = y0 + Math.floor(y / sc), sy1 = Math.max(sy0 + 1, y0 + Math.floor((y + 1) / sc));
+    for (let sy = sy0; sy < sy1 && sy < h; sy++) for (let sx = sx0; sx < sx1 && sx < w; sx++) {
+      const i = (sy * w + sx) * 4, al = data[i + 3]; r += data[i] * al; g += data[i + 1] * al; b += data[i + 2] * al; a += al; n++;
+    }
+    const o = ((oy + y) * size + ox + x) * 4;
+    if (a) { dst.data[o] = r / a; dst.data[o + 1] = g / a; dst.data[o + 2] = b / a; }
+    dst.data[o + 3] = n ? a / n : 0;
+  }
+  return PNG.sync.write(dst);
+}
+
 async function runGroup(group, want, force) {
   const icons = group === 'icons', specs = icons ? ICONS : BGS, dir = path.join(OUT, icons ? 'icons' : 'bg');
   fs.mkdirSync(dir, { recursive: true });
@@ -261,7 +310,7 @@ async function runGroup(group, want, force) {
       const img = await generate(id, { prompt: icons ? `${text}. ${ICON_STYLE}` : text, raw: true, plain: true });
       fs.writeFileSync(file, icons ? fitIcon(keyOutWhite(img), 128) : cropPortrait(img));
       console.log('ok');
-    } catch (e) { console.log('FAIL', e.message); }
+    } catch (e) { console.log('FAIL', e.message); if (/429|4006|allocation/.test(e.message)) process.exit(3); } // 하루 한도: 바깥 스크립트가 다음 계정으로
   }
 }
 
@@ -273,6 +322,9 @@ if (process.argv[2] === '--selftest') { // 5방향 시트 자르기 점검: 가�
   const parts = splitSheet5(png);
   const reds = parts.map((b) => { const q = PNG.sync.read(b); let hit = [0, 0]; for (let i = 0; i < q.data.length; i += 4) if (q.data[i + 3] > 200) { hit[0] += q.data[i]; hit[1] += q.data[i + 1]; } return hit[0] > hit[1] ? 'R' : 'G'; }).join('');
   const sizes = parts.map((b) => { const q = PNG.sync.read(b); return `${q.width}x${q.height}`; });
+  // 아이콘·배경 경로도 점검: 투명 PNG → 128 정사각형, 큰 JPEG → 세로 9:16 (이번에 fitIcon이 사라져 있었는데 몰랐다)
+  const ic = PNG.sync.read(fitIcon(PNG.sync.write(png), 128)), jp = jpeg.decode(cropPortrait(jpeg.encode({ data: Buffer.alloc(1024 * 1024 * 4, 200), width: 1024, height: 1024 }, 80).data), { useTArray: true });
+  if (ic.width !== 128 || jp.width !== 576 || jp.height !== 1024) { console.log('아이콘/배경 경로 실패', ic.width, jp.width, jp.height); process.exit(1); }
   console.log(reds === 'RRRGG' && parts.length === 5 ? '시트 자르기 OK' : `시트 자르기 실패 ${reds}`, sizes.join(' '));
   process.exit(reds === 'RRRGG' ? 0 : 1);
 }
@@ -298,6 +350,32 @@ if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   fs.mkdirSync(OUT, { recursive: true });
   const force = process.argv.includes('--force');
   const want = process.argv.slice(2).filter((a) => a !== '--force');
+  if (want[0] === '--views') { // node tools/gen-art.mjs --views hero archer wizard [--sixteen]  → 정면 그림을 기준으로 나머지 방향을 같은 캐릭터로 그린다
+    let keys = process.argv.includes('--sixteen') ? ['_fd', '_s', '_bd', '_b', '_a1', '_a2', '_a3', '_a4'] : ['_fd', '_s', '_bd', '_b'];
+    const oi = process.argv.indexOf('--only'); if (oi > 0) keys = process.argv[oi + 1].split(','); // 예: --only _s,_bd (그 방향만 다시)
+    for (const name of want.slice(1).filter((n) => !n.startsWith('--') && !n.startsWith('_') && n !== process.argv[process.argv.indexOf('--only') + 1])) {
+      const front = path.join(OUT, `${name}.png`);
+      if (!fs.existsSync(front)) { console.log(`${name}: 정면 그림이 없다`); continue; }
+      const ref = PNG.sync.read(fs.readFileSync(front));
+      for (const k of keys) {
+        const file = path.join(OUT, `${name}${k}.png`);
+        if (!force && fs.existsSync(file) && fs.statSync(file).mtimeMs > fs.statSync(front).mtimeMs) continue; // 이번 정면 그림 이후에 만든 것은 건너뛴다
+        let ok2 = false;
+        for (let attempt = 1; attempt <= 2 && !ok2; attempt++) {
+          process.stdout.write(`${name}${k} (${attempt}) ... `);
+          try {
+            const img = await generateRef(`${spec0(name)} ${VIEW_PROMPTS[k]}`, ref);
+            fs.mkdirSync(path.join(OUT, '..', '..', 'tools', 'out', 'views'), { recursive: true });
+            fs.writeFileSync(path.join(OUT, '..', '..', 'tools', 'out', 'views', `${name}${k}-${attempt}.jpg`), img);
+            const png = PNG.sync.read(keyOutWhite(img));
+            fs.writeFileSync(file, fitRun(png, 0, png.width - 1));
+            console.log('ok'); ok2 = true;
+          } catch (e) { console.log('FAIL', e.message); if (/429|4006|allocation/.test(e.message)) process.exit(3); }
+        }
+      }
+    }
+    process.exit(0);
+  }
   if (want[0] === 'icons' || want[0] === 'bg') { await runGroup(want[0], want.slice(1), force); process.exit(0); }
   const SHEET5 = 'character model sheet showing the same exact character five times with identical outfit, colors and proportions, arranged in two rows with clear empty white space between figures. Top row of three figures from left to right: front view facing the viewer, three-quarter front view turned to the right, side profile view facing right. Bottom row of two figures from left to right: three-quarter back view turned to the right, back view facing away. Full body, standing, plain pure white background, no text, no labels, cute chibi cartoon game art, big head small body';
   const SHEET = 'character turnaround sheet, the same exact character drawn three times side by side in one row, evenly spaced with clear empty white space between each figure, identical outfit and colors and proportions, left: front view, middle: back view seen from behind, right: side profile facing right, full body, standing, plain pure white background, no text, no labels, cute chibi cartoon game art, big head small body';

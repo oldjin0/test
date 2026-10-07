@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { mulberry32, dateKey } from './util.js';
 
-export const VERSION = '0.7.1';
+export const VERSION = '0.8.0';
 export const W = 360, H = 640;
 // 월드는 화면(W×H)보다 훨씬 넓고, 카메라가 영웅을 따라간다
 export const ARENA = { x: 0, y: 0, w: 720, h: 1100 };

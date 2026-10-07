@@ -28,7 +28,7 @@ await page.waitForTimeout(800);
 const run = (ch, cls) => page.evaluate(([ch, cls]) => { const S = __ed.S; S.save.cls = cls; S.save.unlocked = 99; S.save.tutorial = 1; __ed.startRun(ch); __ed.show(null); }, [ch, cls]);
 // 영웅 주변을 확대해 캡처
 const heroClip = async (file) => {
-  const b = await page.evaluate(() => { const h = __ed.S.G.hero, cv = document.getElementById('c').getBoundingClientRect(); const k = cv.width / 360; return { x: cv.left + (h.x - 40) * k, y: cv.top + (h.y - 70) * k, w: 80 * k, h: 85 * k }; });
+  const b = await page.evaluate(() => { const G = __ed.S.G, h = G.hero, cam = G.cam, cv = document.getElementById('c').getBoundingClientRect(); const k = cv.width / 360; return { x: cv.left + (h.x - cam.x - 40) * k, y: cv.top + (h.y - cam.y - 70) * k, w: 80 * k, h: 85 * k }; });
   await page.screenshot({ path: file, clip: { x: b.x, y: b.y, width: b.w, height: b.h } });
 };
 
@@ -39,6 +39,22 @@ for (const sc of scenes) {
     await page.click('#tcharBtn'); await page.waitForTimeout(400); await page.screenshot({ path: `${out}/chars-sword.png` });
     await page.click('#ctabs button[data-cls="archer"]'); await page.waitForTimeout(300); await page.screenshot({ path: `${out}/chars-archer.png` });
     await page.click('#ctabs button[data-cls="mage"]'); await page.waitForTimeout(300); await page.screenshot({ path: `${out}/chars-mage.png` });
+  }
+  if (sc === 'dirs') { // 8방향으로 걸을 때 캐릭터별 한 장씩
+    for (const cls of ['sword', 'archer', 'mage']) {
+      await run(0, cls);
+      await page.evaluate(() => { const G = __ed.S.G; G.enemies.length = 0; G.spawnT = 1e9; G.nextPick = 1e9; G.hero.x = 360; G.hero.y = 560; });
+      const D = { 위: ['ArrowUp'], 오른쪽위: ['ArrowUp', 'ArrowRight'], 오른쪽: ['ArrowRight'], 오른쪽아래: ['ArrowDown', 'ArrowRight'], 아래: ['ArrowDown'], 왼쪽아래: ['ArrowDown', 'ArrowLeft'], 왼쪽: ['ArrowLeft'], 왼쪽위: ['ArrowUp', 'ArrowLeft'] };
+      let i = 0;
+      for (const [name, keys] of Object.entries(D)) {
+        await page.evaluate(() => { const h = __ed.S.G.hero; h.x = 360; h.y = 560; });
+        for (const k of keys) await page.keyboard.down(k);
+        await page.waitForTimeout(420); await heroClip(`${out}/dir-${cls}-${i++}-${name}.png`);
+        for (const k of keys) await page.keyboard.up(k);
+        await page.waitForTimeout(120);
+      }
+      await page.evaluate(() => __ed.goTitle());
+    }
   }
   if (sc === 'walk') {
     for (const cls of ['sword', 'archer', 'mage']) {
