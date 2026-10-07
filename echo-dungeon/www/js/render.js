@@ -19,6 +19,15 @@ let sprLoaded = 0;
     im.src = 'assets/' + n + sfx + '.png';
   }
 });
+// 동작 그림: _atk 공격, _hit 맞음 (오른쪽을 향함). 있으면 그 순간에만 바꿔 끼운다
+['hero', 'archer', 'wizard', 'slime', 'bat', 'brute', 'mage', 'boar', 'blob', ...Object.keys(BOSSES)].forEach((n) => {
+  for (const sfx of ['_atk', '_hit']) {
+    const im = new Image();
+    im.onload = () => { im._pose = true; SPR[n + sfx] = im; };
+    im.onerror = () => {};
+    im.src = 'assets/' + n + sfx + '.png';
+  }
+});
 const viewCache = {};
 function viewsOf(n) { // [[각도, 접미사], …] 각도 순
   const c = viewCache[n];
@@ -69,13 +78,13 @@ function puppet(c, im, hgt, P) {
       c.drawImage(src, sx, sy, sw, sh, X + dw * xa + dx, Y + hgt * a + dy, sw * k, sh * k);
       if (rot) c.restore();
     };
-    if (P.wings) { // 박쥐: 좌우 반쪽을 가운데를 축으로 펄럭인다
+    if (P.wings && !im._pose) { // 박쥐: 좌우 반쪽을 가운데를 축으로 펄럭인다
       const py = Y + hgt * 0.45;
       part(0, 1, 0, 0.52, 0, 0, -P.wings, 0, py);
       part(0, 1, 0.48, 1, 0, 0, P.wings, 0, py);
       return;
     }
-    if (!P.legs) { part(0, 1, 0, 1, 0, 0); return; }
+    if (!P.legs || im._pose) { part(0, 1, 0, 1, 0, 0); return; } // 동작 그림은 통째로
     const L = 0.8, N = 0.52, s = Math.sin(P.ph || 0), sp = P.sp || 0, lift = hgt * 0.1 * sp, bob = P.bob || 0;
     if (P.view === 's') { // 옆모습: 앞뒤로 내딛는다
       const st = s * sp * dw * 0.13;
@@ -121,6 +130,7 @@ function viewOf(o) {
 const ROBED = ['wizard', 'archer'];
 // 현재 각도에 가장 가까운 그림
 function pick(c, o, n) {
+  if (o._pose && SPR[n + '_' + o._pose]) return SPR[n + '_' + o._pose];
   const list = viewsOf(n);
   if (!list.length) return null;
   const phi = o._phi ?? 0;
@@ -134,7 +144,7 @@ function pick(c, o, n) {
 function flipX(o, name) {
   o._fx = (o._fx ?? o.face) + (o.face - (o._fx ?? o.face)) * 0.3;
   const v = o._v, dirImg = name && SPR[name] && (v === 'f' || v === 'b') && SPR[name + (v === 'f' ? '' : '_b')];
-  return dirImg ? 1 : o._fx;
+  return dirImg && !(o._pose && SPR[name + '_' + o._pose]) ? 1 : o._fx;
 }
 const easeBack = (k) => 1 + 2.4 * Math.pow(k - 1, 3) + 1.4 * Math.pow(k - 1, 2);
 
@@ -258,6 +268,7 @@ export const PAL_ECHO = { skin: '#cfefff', hair: '#38c8ff', body: '#5ee0ff', bel
 export function drawChibi(c, o, pal, alpha, scale) {
   const sp = o.sp, ph = o.phase, clock = S.clock;
   o._v = viewOf(o);
+  o._pose = o.hit > 0.08 ? 'hit' : o.atk > 0.35 ? 'atk' : null; // 맞은 순간 > 공격 순간
   const fx = flipX(o, o.sprite || pal.sprite);
   o._lean = (o._lean || 0) + (clamp(o._dx * 0.05, -0.14, 0.14) - (o._lean || 0)) * 0.25; // 달리는 쪽으로 기운다
   const idle = Math.sin(clock * 3 + o.id) * (1 - sp);
@@ -477,6 +488,7 @@ function drawEnemy(c, e) {
   const shadowK = e.z ? Math.max(0.4, 1 - e.z / 160) : 1;
   c.fillStyle = 'rgba(0,0,0,.3)'; ell(c, 0, 4, e.r * 0.95 * shadowK, e.r * 0.32 * shadowK); c.fill();
   e._v = viewOf(e); stride(e);
+  e._pose = e.dying != null ? null : e.hitT > 0 ? 'hit' : (e.atkT > 0 || e.cs === 'dash' || e.cs === 'wind' || e.cast || e.js === 'crouch' || e.js === 'air' || e.teleOff != null || e.teleA != null) ? 'atk' : null;
   e.wf = e.dying != null ? Math.max(0, 1 - e.dying * 8) : e.flash > 0 ? 0.9 : 0;
   const nm = e.boss ? e.bid : { slime: 'slime', blob: 'blob', bat: 'bat', brute: 'brute', mage: 'mage', boar: 'boar' }[e.type];
   c.scale(flipX(e, nm), 1);
@@ -537,6 +549,42 @@ function label(c, s, x, y, fill, stroke, size) {
   c.font = `800 ${size}px sans-serif`; c.textAlign = 'center';
   c.lineWidth = 3; c.strokeStyle = stroke; c.strokeText(s, x, y);
   c.fillStyle = fill; c.fillText(s, x, y);
+}
+
+/* ---------- 보스 공격 예고 ---------- */
+function ray(c, x, y, a, len, w, alpha, col) { // 경고 띠: 반투명 띠 + 흐르는 흰 점선 (어떤 바닥에서도 보인다)
+  c.save(); c.translate(x, y); c.rotate(a);
+  const g = c.createLinearGradient(0, 0, len, 0); g.addColorStop(0, col.replace('A', alpha)); g.addColorStop(0.8, col.replace('A', alpha * 0.7)); g.addColorStop(1, col.replace('A', 0));
+  c.fillStyle = g; c.beginPath(); c.moveTo(0, -w / 2); c.lineTo(len, -w * 0.3); c.lineTo(len, w * 0.3); c.lineTo(0, w / 2); c.fill();
+  c.strokeStyle = `rgba(255,255,255,${Math.min(1, alpha * 1.2)})`; c.lineWidth = 2; c.setLineDash([8, 7]); c.lineDashOffset = -S.clock * 70;
+  c.beginPath(); c.moveTo(4, 0); c.lineTo(len * 0.9, 0); c.stroke(); c.setLineDash([]);
+  c.restore();
+}
+function drawBossTelegraph(c, b, G) {
+  const t = S.clock, blink = 0.55 + 0.35 * Math.sin(t * 22);
+  // 점프: 웅크리는 순간부터 떨어질 자리를 표시하고, 떨어질 때 퍼질 탄의 방향을 미리 긋는다
+  if ((b.js === 'crouch' || b.js === 'air') && b.tx != null) {
+    const R = b.r + 30, prog = b.js === 'air' ? clamp(1 - b.jt / 0.8, 0, 1) : 0;
+    c.save(); c.translate(b.tx, b.ty); c.scale(1, 0.45);
+    c.fillStyle = `rgba(255,40,70,${0.12 + 0.25 * prog})`; c.beginPath(); c.arc(0, 0, R * (0.3 + 0.7 * prog), 0, 6.3); c.fill();
+    c.strokeStyle = `rgba(255,60,90,${blink})`; c.lineWidth = 4; c.beginPath(); c.arc(0, 0, R, 0, 6.3); c.stroke();
+    c.restore();
+    if (prog > 0.3) { const n = b.hp < b.maxhp * 0.5 ? 16 : 12; for (let i = 0; i < n; i++) ray(c, b.tx, b.ty - 10, (b.landOff || 0) + i * 6.283 / n, 160, 14, 0.25 + 0.5 * prog, 'rgba(255,50,80,A)'); }
+  }
+  // 회전 탄막: 쏘기 직전 모으는 빛과 탄이 날아갈 방향
+  if (b.teleOff != null) {
+    const k = clamp(1 - b.ft / 0.7, 0, 1), n = b.hp < b.maxhp * 0.5 ? 14 : 10;
+    for (let i = 0; i < n; i++) ray(c, b.x, b.y - 20, b.teleOff + i * 6.283 / n, 70 + 120 * k, 15, 0.35 + 0.45 * k, 'rgba(255,60,40,A)');
+    if (b.hp < b.maxhp * 0.5) ray(c, b.x, b.y - 20, Math.atan2(G.hero.y - b.y, G.hero.x - b.x), 240, 18, 0.5 * k + 0.3 * blink, 'rgba(255,210,40,A)');
+    const g = c.createRadialGradient(b.x, b.y - 20, 2, b.x, b.y - 20, 18 + 26 * k);
+    g.addColorStop(0, `rgba(255,255,220,${0.9 * k})`); g.addColorStop(1, 'rgba(255,120,40,0)');
+    c.save(); c.globalCompositeOperation = 'lighter'; c.fillStyle = g; c.fillRect(b.x - 50, b.y - 70, 100, 100); c.restore();
+  }
+  // 리치 부채꼴: 겨눈 방향으로 갈래 선
+  if (b.teleA != null) {
+    const k = clamp(1 - b.ft / 0.55, 0, 1), n = b.hp < b.maxhp * 0.5 ? 7 : 5;
+    for (let i = 0; i < n; i++) ray(c, b.x, b.y - 26, b.teleA + (i - (n - 1) / 2) * 0.2, 110 + 170 * k, 14, 0.35 + 0.45 * k, 'rgba(190,80,255,A)');
+  }
 }
 
 /* ---------- HUD ---------- */
@@ -650,12 +698,8 @@ export function renderGame(c) {
     c.beginPath(); c.arc(0, 0, R, 0, 6.3); c.stroke(); c.setLineDash([]);
     c.restore();
   }
-  // 보스 착지 지점 예고
-  for (const b of G.enemies) {
-    if (!b.boss || b.dead || b.js !== 'air') continue;
-    c.strokeStyle = `rgba(255,60,90,${0.5 + Math.sin(S.clock * 20) * 0.3})`; c.lineWidth = 3;
-    ell(c, b.tx, b.ty, b.r + 26, (b.r + 26) * 0.45); c.stroke();
-  }
+  // 보스 공격 예고: 어디로 무엇이 오는지 미리 보여 준다
+  for (const b of G.enemies) if (b.boss && !b.dead) drawBossTelegraph(c, b, G);
   for (const r of G.rings) {
     if (r.star) { // 맞은 자리의 별 모양 섬광: 맞은 방향으로 길게 뻗는다
       c.save(); c.globalCompositeOperation = 'lighter'; c.globalAlpha = clamp(r.life / 0.1, 0, 1);

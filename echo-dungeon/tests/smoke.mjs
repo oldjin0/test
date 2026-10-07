@@ -261,6 +261,24 @@ ok(dirs['오른쪽'].v === 's' && dirs['아래'].v === 'f' && dirs['위'].v === 
 ok(held === 'fd', `멈추면 마지막 방향 유지 (${held})`);
 await ev(() => __ed.goTitle());
 
+// 보스 공격 예고: 점프는 웅크릴 때 떨어질 자리를, 회전 탄막·부채꼴은 쏘기 전에 방향을 정하고 그대로 쏜다
+const tele = await ev(() => {
+  const S = __ed.S, r = {};
+  const boss = (ch) => { S.save.unlocked = 99; S.save.tutorial = 1; __ed.startRun(ch); const G = S.G; G.hero.hp = G.hero.st.maxhp = 1e9; G.enemies.length = 0; G.spawnT = 1e9; G.nextPick = 1e9; G.eliteT = 1e9; G.t = G.time + 0.01; S.scene = 'play'; __ed.step(); return G; };
+  const tick = (n) => { for (let i = 0; i < n; i++) { S.scene = 'play'; __ed.step(); } };
+  let G = boss(0), e = G.boss; e.js = 'walk'; e.jt = 0.01; tick(2);
+  const tx = e.tx, ty = e.ty; r.crouch = e.js === 'crouch' && tx != null;
+  G.hero.x += 80; tick(40); r.sameTarget = e.tx === tx && e.ty === ty; // 영웅이 움직여도 예고한 자리에 떨어진다
+  G = boss(2); e = G.boss; e.ft = 0.6; tick(2); const off = e.teleOff; r.radialWarn = off != null;
+  G.ebul.length = 0; tick(40); const b0 = G.ebul[0]; r.radialSame = !!b0 && Math.abs(Math.atan2(b0.vy, b0.vx) - Math.atan2(Math.sin(off), Math.cos(off))) < 0.05;
+  G = boss(1); e = G.boss; e.ft = 0.5; tick(2); r.lichWarn = e.teleA != null;
+  __ed.goTitle();
+  return r;
+});
+ok(tele.crouch && tele.sameTarget, '점프 보스: 웅크릴 때 떨어질 자리를 정하고 그대로 떨어진다');
+ok(tele.radialWarn && tele.radialSame, '회전 탄막: 예고한 방향 그대로 쏜다');
+ok(tele.lichWarn, '리치 부채꼴: 쏘기 전에 겨눈 방향을 보여 준다');
+
 // 배경음악 9곡: 오프라인으로 렌더링해 소리가 나고(무음 아님), 깨지지 않고(클리핑 없음), 중간에 끊기지 않는지 본다
 const mus = await ev(async () => {
   const { createMusic, SONGS } = await import('./js/music.js');

@@ -286,6 +286,7 @@ export function hurtEnemy(e, d, src, crit, quiet, dir) {
   const G = S.G;
   if (e.dead) return;
   e.hp -= d; e.flash = 0.1; G.dmgDealt += d;
+  if (!quiet) e.hitT = e.boss ? 0.1 : 0.17; // 맞은 자세
   const echo = src === 'echo', col = echo ? '#8fe9ff' : crit ? '#ffd34a' : '#fff6b0';
   // 맞은 방향: 투사체가 날아간 쪽, 없으면 영웅 반대쪽
   let ux, uy;
@@ -489,17 +490,21 @@ function bossLogic(e, dt, spMul) {
   const rage = e.hp < e.maxhp * 0.5;
   const dx = h.x - e.x, dy = h.y - e.y, d = Math.hypot(dx, dy) || 1;
   if (pat !== 'jump' && e.js && e.js !== 'walk') { e.js = 'walk'; e.z = 0; } // 패턴이 바뀌면 점프를 끝낸다
+  if (pat !== 'radial') e.teleOff = null;
+  if (pat !== 'lich') e.teleA = null;
 
   if (pat === 'jump') {
     if (!e.js) { e.js = 'walk'; e.jt = 2.2; }
     e.jt -= dt;
     if (e.js === 'walk') {
       e.x += dx / d * e.sp * spMul * dt; e.y += dy / d * e.sp * spMul * dt;
-      if (e.jt <= 0) { e.js = 'crouch'; e.jt = 0.5; }
+      if (e.jt <= 0) {
+        e.js = 'crouch'; e.jt = 0.5;
+        e.tx = clamp(h.x, ARENA.x + 40, ARENA.x + ARENA.w - 40); e.ty = clamp(h.y, ARENA.y + 60, ARENA.y + ARENA.h - 30); e.landOff = G.rng() * 6.28; // 떨어질 자리와 탄 방향을 미리 정해 보여 준다
+      }
     } else if (e.js === 'crouch') {
       if (e.jt <= 0) {
         e.js = 'air'; e.jt = 0.8; e.sx = e.x; e.sy = e.y;
-        e.tx = clamp(h.x, ARENA.x + 40, ARENA.x + ARENA.w - 40); e.ty = clamp(h.y, ARENA.y + 60, ARENA.y + ARENA.h - 30);
       }
     } else if (e.js === 'air') {
       const k = clamp(1 - e.jt / 0.8, 0, 1);
@@ -508,7 +513,7 @@ function bossLogic(e, dt, spMul) {
         e.z = 0; e.js = 'walk'; e.jt = rage ? 1.3 : 2.1;
         G.shake = 9; sfx.land(); haptic('heavy');
         G.rings.push({ x: e.x, y: e.y, r: 10, max: 70, life: 0.35 });
-        const n = rage ? 16 : 12, off = G.rng() * 6.28;
+        const n = rage ? 16 : 12, off = e.landOff ?? G.rng() * 6.28;
         for (let i = 0; i < n; i++) {
           const a = off + i * Math.PI * 2 / n;
           G.ebul.push({ x: e.x, y: e.y - 10, vx: Math.cos(a) * 100, vy: Math.sin(a) * 100, r: 5.5, life: 6, dmg: 10 * G.chap.dmg, src: 'boss', col: e.bid === 'frost' ? '#9fe6ff' : '#7dff9a' });
@@ -521,9 +526,11 @@ function bossLogic(e, dt, spMul) {
     const want = d > 170 ? 1 : d < 130 ? -0.8 : 0.15;
     e.x += dx / d * e.sp * want * spMul * dt; e.y += dy / d * e.sp * want * spMul * dt;
     e.ft = (e.ft == null ? 1.2 : e.ft) - dt;
+    if (e.ft <= 0.55 && e.teleA == null) e.teleA = Math.atan2(dy, dx); // 겨눈 방향을 미리 고정해 보여 준다
     if (e.ft <= 0) {
       e.ft = rage ? 1.25 : 1.85;
-      const n = rage ? 7 : 5, a = Math.atan2(dy, dx);
+      const n = rage ? 7 : 5, a = e.teleA ?? Math.atan2(dy, dx);
+      e.teleA = null; e.atkT = 0.35;
       for (let i = 0; i < n; i++) {
         const aa = a + (i - (n - 1) / 2) * 0.2;
         G.ebul.push({ x: e.x, y: e.y - 26, vx: Math.cos(aa) * 125, vy: Math.sin(aa) * 125, r: 5, life: 5, dmg: 10 * G.chap.dmg, src: 'boss', col: '#c99cff' });
@@ -551,9 +558,11 @@ function bossLogic(e, dt, spMul) {
   } else { // radial
     e.x += dx / d * e.sp * spMul * dt; e.y += dy / d * e.sp * spMul * dt;
     e.ft = (e.ft == null ? 1.2 : e.ft) - dt;
+    if (e.ft <= 0.7 && e.teleOff == null) e.teleOff = G.rng() * 6.28; // 쏠 방향을 미리 정해 보여 준다
     if (e.ft <= 0) {
       e.ft = rage ? 1.5 : 2.3;
-      const n = rage ? 14 : 10, off = e.t;
+      const n = rage ? 14 : 10, off = e.teleOff ?? e.t;
+      e.teleOff = null; e.atkT = 0.35;
       for (let i = 0; i < n; i++) {
         const a = off + i * Math.PI * 2 / n;
         G.ebul.push({ x: e.x, y: e.y - 20, vx: Math.cos(a) * 95, vy: Math.sin(a) * 95, r: 5, life: 6, dmg: 10 * G.chap.dmg, src: 'boss', col: '#ff7a5d' });
@@ -724,6 +733,8 @@ export function step() {
       if (Math.abs(e.kx) + Math.abs(e.ky) < 4) e.kx = e.ky = 0;
     }
     if (e.flash > 0) e.flash -= dt;
+    if (e.hitT > 0) e.hitT -= dt;
+    if (e.atkT > 0) e.atkT -= dt;
     if (e.burnT > 0) { // 불: 0.5초마다 피해
       e.burnT -= dt; e.burnAcc = (e.burnAcc || 0) + dt;
       if (e.burnAcc >= 0.5) { e.burnAcc = 0; for (let i = 0; i < 2; i++) spark(e.x, e.y - e.r, '#ff9a3a', -1.57 + (G.rng() - 0.5), 70, 0.35, 2); hurtEnemy(e, e.burnDps * 0.5, 'hero', false, true); if (e.dead) continue; }
@@ -740,7 +751,7 @@ export function step() {
       e.ft = (e.ft == null ? 1.2 + G.rng() * 1.5 : e.ft) - dt;
       e.cast = e.ft < 0.45;
       if (e.ft <= 0 && d < 300) {
-        e.ft = 2.7;
+        e.ft = 2.7; e.atkT = 0.35;
         G.ebul.push({ x: e.x, y: e.y - 18, vx: dx / d * 115, vy: dy / d * 115, r: 4.5, life: 5, dmg: e.dmg, src: e.nem ? 'nem' : 'mage', col: '#c99cff' });
         sfx.enemyShot();
       }
@@ -766,6 +777,7 @@ export function step() {
     if (e.z < 20 && d < e.r + 9) {
       const thorn = h.st.thorns && h.inv <= 0 ? h.st.thorns : 0;
       hurtHero(e.dmg, e.boss ? 'boss' : e.nem ? 'nem' : e.type, e.x, e.y);
+      e.atkT = 0.35;
       if (thorn) hurtEnemy(e, 22 * thorn * (h.st.dmg / 10), 'hero', false, true);
       if (!e.boss) { e.x -= dx / d * 14; e.y -= dy / d * 14; }
     }

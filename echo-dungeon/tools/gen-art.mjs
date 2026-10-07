@@ -87,6 +87,27 @@ const VIEW_PROMPTS = {
   _a3: 'the same character turned away from the viewer about 112 degrees from the front view, side view slightly turned toward the back, a little of the back visible',
   _a4: 'the same character turned away from the viewer about 157 degrees from the front view, almost fully seen from behind, a little of the right side visible',
 };
+// 동작 그림: 공격(_atk)과 맞았을 때(_hit). 오른쪽을 향하게 그리고 게임이 좌우 반전한다
+const ATK = {
+  hero: 'in a cheerful fencing lunge pose, one foot forward, sword held out toward the right side, smiling, sporty training pose',
+  archer: 'practicing target archery, holding the bow up toward the right side, smiling, friendly sports pose',
+  wizard: 'casting a spell, thrusting the glowing crystal staff forward toward the right side, magic light bursting from the crystal',
+  slime: 'lunging forward toward the right side with its mouth wide open, stretched and squashed, attacking',
+  bat: 'diving forward toward the right side with fangs bared and wings swept back, biting attack',
+  brute: 'swinging the spiked club overhead and smashing down toward the right side, angry roar',
+  mage: 'raising the glowing staff high and casting a purple fireball toward the right side',
+  boar: 'charging forward toward the right side with its head lowered and tusks forward, dust behind',
+  blob: 'bouncing forward toward the right side in a big body slam, squashed wide',
+  slimeking: 'leaping up and slamming down with a furious roar, crown tilted, attacking',
+  lich: 'raising both arms and casting dark green magic toward the right side, glowing eyes',
+  dragon: 'breathing a stream of fire toward the right side, wings spread wide',
+  frost: 'slamming its icy fists into the ground, ice shards flying, attacking',
+  shadow: 'roaring with a burst of dark purple flames around it, claws raised to attack toward the right side',
+};
+const POSE_PROMPTS = {
+  _atk: (name) => `the same character ${ATK[name] || 'attacking toward the right side'}`,
+  _hit: (name) => name === 'archer' ? 'the same character tripping backward with a funny surprised face, arms flailing, cartoon slapstick, facing the right side' : 'the same character stumbling backward with a surprised expression, arms out for balance, leaning back, comic cartoon reaction, facing the right side',
+};
 async function generateRef(prompt, refPng) {
   const white = new PNG({ width: refPng.width, height: refPng.height }); // 투명한 곳은 흰색으로 깔아서 기준 그림으로 쓴다
   for (let i = 0; i < refPng.data.length; i += 4) { const a = refPng.data[i + 3] / 255; for (let k = 0; k < 3; k++) white.data[i + k] = Math.round(refPng.data[i + k] * a + 255 * (1 - a)); white.data[i + 3] = 255; }
@@ -365,7 +386,7 @@ if (path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
         for (let attempt = 1; attempt <= 2 && !ok2; attempt++) {
           process.stdout.write(`${name}${k} (${attempt}) ... `);
           try {
-            const img = await generateRef(`${spec0(name)} ${VIEW_PROMPTS[k]}`, ref);
+            const img = await generateRef(`${spec0(name)} ${POSE_PROMPTS[k] ? POSE_PROMPTS[k](name) : VIEW_PROMPTS[k]}`, ref);
             fs.mkdirSync(path.join(OUT, '..', '..', 'tools', 'out', 'views'), { recursive: true });
             fs.writeFileSync(path.join(OUT, '..', '..', 'tools', 'out', 'views', `${name}${k}-${attempt}.jpg`), img);
             const png = PNG.sync.read(keyOutWhite(img));

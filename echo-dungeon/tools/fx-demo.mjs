@@ -37,7 +37,8 @@ const FX = {
   poison: ['archer', ['poison', 'poison'], [1500], null, true],
   smite: ['mage', ['judgment'], [80, 150, 260], (G) => { G.hero.smT = 0.05; }],
   crit: ['archer', ['crit', 'crit', 'crit', 'crit', 'sharp', 'rapid'], [500, 800, 1100]],
-  melee: ['sword', ['rapid', 'rapid'], [300, 600, 900]],
+  melee: ['sword', ['rapid', 'rapid'], [300, 360, 600, 660, 900]],
+  cast: ['mage', ['rapid'], [300, 360, 420, 700]],
 };
 for (const [name, [cls, cards, times, setup, walk]] of Object.entries(FX)) {
   if (only.length && !only.includes(name)) continue;
