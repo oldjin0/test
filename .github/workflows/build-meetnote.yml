@@ -1,0 +1,43 @@
+name: Build MeetNote APK
+
+on:
+  push:
+    branches: [ccr-c70ea6bc-1gfxyi]
+    paths:
+      - meeting-recorder/**
+      - .github/workflows/build-meetnote.yml
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: meeting-recorder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+      - name: Build release APK
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk MeetNote.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeetNote-apk
+          path: meeting-recorder/MeetNote.apk
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete meetnote-latest --cleanup-tag -y || true
+          gh release create meetnote-latest MeetNote.apk --prerelease \
+            --target "$GITHUB_SHA" --title "MeetNote (latest build)" \
+            --notes "Commit ${GITHUB_SHA::7}"
