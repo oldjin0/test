@@ -1,8 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'book_colors.dart';
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
 
@@ -73,6 +78,18 @@ class LibraryStore extends ChangeNotifier {
 
   /// Colorized pages follow the colors of the book's own color pages.
   bool bookPalette = true;
+
+  /// Per book: color pages found by scanning it (null: not scanned yet),
+  /// pages the reader marked as references, and found ones they unmarked.
+  final Map<String, List<int>> _foundRefs = {};
+  final Map<String, Set<int>> _markedRefs = {};
+  final Map<String, Set<int>> _unmarkedRefs = {};
+
+  /// Per book: the reference pages its learned colors came from ('' when
+  /// learning found too little color), and the learned map itself (in a file
+  /// of its own; loaded by [loadLook]).
+  final Map<String, String> _learnedFrom = {};
+  final Map<String, BookColorMap?> _maps = {};
   bool rtl = true;
   bool dual = false;
   bool colorize = true;
@@ -232,6 +249,21 @@ class LibraryStore extends ChangeNotifier {
       }
     } catch (_) {}
     bookPalette = p.getBool('bookPalette') ?? bookPalette;
+    try {
+      final raw = p.getString('bookRefs');
+      if (raw != null) {
+        for (final MapEntry(:key, :value) in (jsonDecode(raw) as Map).entries) {
+          final m = value as Map;
+          List<int> ints(Object? l) => [
+            for (final v in (l as List?) ?? const []) (v as num).toInt(),
+          ];
+          if (m['found'] != null) _foundRefs['$key'] = ints(m['found']);
+          _markedRefs['$key'] = ints(m['marked']).toSet();
+          _unmarkedRefs['$key'] = ints(m['unmarked']).toSet();
+          if (m['learnedFrom'] != null) _learnedFrom['$key'] = m['learnedFrom'] as String;
+        }
+      }
+    } catch (_) {}
   }
 
   void _readHints(String? raw) {
@@ -317,6 +349,18 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setString('hints', jsonEncode(_hintsJson()));
     _prefs.setString('palettes', jsonEncode(_palettes));
     _prefs.setBool('bookPalette', bookPalette);
+    _prefs.setString(
+      'bookRefs',
+      jsonEncode({
+        for (final path in {..._foundRefs.keys, ..._markedRefs.keys, ..._learnedFrom.keys})
+          path: {
+            'found': _foundRefs[path],
+            'marked': [...?_markedRefs[path]],
+            'unmarked': [...?_unmarkedRefs[path]],
+            'learnedFrom': _learnedFrom[path],
+          },
+      }),
+    );
   }
 
   // Backup
@@ -465,8 +509,98 @@ class LibraryStore extends ChangeNotifier {
   /// The colors of [path]'s color pages, or null when not looked for yet.
   List<int>? paletteOf(String path) => _palettes[path];
 
-  /// The palette colorizing uses for [path] (empty: none).
-  List<int> activePalette(String path) => bookPalette ? (_palettes[path] ?? const []) : const [];
+  /// What colorizing [path] takes from its own color pages: the learned
+  /// colors when there are some, the palette otherwise (none when the
+  /// setting is off).
+  BookLook lookOf(String path) {
+    if (!bookPalette) return BookLook.none;
+    final map = _learnedFrom[path] == referenceKey(path) ? _maps[path] : null;
+    if (map != null) return BookLook(map: map);
+    return BookLook(palette: _palettes[path] ?? const []);
+  }
+
+  /// Tells listeners that a look was loaded (cache keys may change).
+  void notifyLook() => notifyListeners();
+
+  /// Color pages found by scanning [path], or null when not scanned yet.
+  List<int>? foundRefs(String path) => _foundRefs[path];
+
+  void setFoundRefs(String path, List<int> pages) {
+    _foundRefs[path] = pages;
+    _changed();
+  }
+
+  /// The reference pages of [path]: found ones the reader kept, and the ones
+  /// they marked.
+  List<int> referencesOf(String path) => ({
+    ...?_foundRefs[path],
+    ...?_markedRefs[path],
+  }..removeAll(_unmarkedRefs[path] ?? const {})).toList()..sort();
+
+  bool isReference(String path, int page) => referencesOf(path).contains(page);
+
+  /// Marks [page] as a reference of [path], or unmarks it.
+  void toggleReference(String path, int page) {
+    final marked = _markedRefs.putIfAbsent(path, () => {});
+    final unmarked = _unmarkedRefs.putIfAbsent(path, () => {});
+    if (isReference(path, page)) {
+      marked.remove(page);
+      if (_foundRefs[path]?.contains(page) ?? false) unmarked.add(page);
+    } else {
+      unmarked.remove(page);
+      marked.add(page);
+    }
+    _changed();
+  }
+
+  /// Names the current reference set of [path] (learning is redone when it
+  /// changes).
+  String referenceKey(String path) => referencesOf(path).join(',');
+
+  /// Whether colors were learned (or found unlearnable) for the current
+  /// references of [path].
+  bool learnedCurrent(String path) => _learnedFrom[path] == referenceKey(path);
+
+  static Future<File?> _mapFile(String path) async {
+    try {
+      final dir = Directory(p.join((await getApplicationSupportDirectory()).path, 'book_colors'));
+      await dir.create(recursive: true);
+      return File(p.join(dir.path, '${md5.convert(utf8.encode(path))}.b64'));
+    } catch (_) {
+      return null; // no platform storage (tests)
+    }
+  }
+
+  /// Reads [path]'s learned colors into memory (once).
+  Future<void> loadLook(String path) async {
+    if (_maps.containsKey(path)) return;
+    try {
+      final f = await _mapFile(path);
+      _maps[path] = f != null && await f.exists()
+          ? BookColorMap.fromJson(await f.readAsString())
+          : null;
+    } catch (_) {
+      _maps[path] = null;
+    }
+  }
+
+  /// Keeps what was learned from [refsKey] (the reference set it came from);
+  /// [map] null: too little color to learn from.
+  Future<void> setLearned(String path, String refsKey, BookColorMap? map) async {
+    _maps[path] = map;
+    _learnedFrom[path] = refsKey;
+    try {
+      final f = await _mapFile(path);
+      if (f != null) {
+        if (map == null) {
+          if (await f.exists()) await f.delete();
+        } else {
+          await f.writeAsString(map.toJson());
+        }
+      }
+    } catch (_) {}
+    _changed();
+  }
 
   void setPalette(String path, List<int> colors) {
     _palettes[path] = colors;

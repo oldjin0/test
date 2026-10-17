@@ -6,6 +6,7 @@ import 'dart:ui' show Rect;
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 
+import 'book_colors.dart';
 import 'colorize_service.dart';
 import 'colorizer.dart';
 import 'comic_loader.dart';
@@ -29,10 +30,10 @@ class PageFocus {
 
 /// Settings that change what a page looks like and so its colorization.
 class ColorOptions {
-  const ColorOptions({this.hints = const [], this.denoise = false, this.palette = const []});
+  const ColorOptions({this.hints = const [], this.denoise = false, this.look = BookLook.none});
   final List<ColorHint> hints;
   final bool denoise;
-  final List<int> palette;
+  final BookLook look;
 }
 
 /// Pages of one comic, ready to draw without waiting: originals are read,
@@ -151,7 +152,7 @@ class ReaderPages extends ChangeNotifier {
             () => book.page(i),
             hints: opts.hints,
             denoise: opts.denoise,
-            palette: opts.palette,
+            look: opts.look,
           )
           .then((_) {}, onError: (Object _) {}); // nobody waits: cached for later
     }
@@ -262,7 +263,7 @@ class ReaderPages extends ChangeNotifier {
       () => _originals[i] != null ? Future.value(_originals[i]) : book.page(i),
       hints: opts.hints,
       denoise: opts.denoise,
-      palette: opts.palette,
+      look: opts.look,
     );
     _requests[i] = (key, f);
     f.then(

@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'book_palette.dart' show paletteTag;
+import 'book_colors.dart';
 import 'colorizer.dart';
 import 'onnx_engine.dart';
 import 'pc_platform.dart';
@@ -52,7 +52,8 @@ Future<Uint8List?> loadModelBytes([String asset = modelAsset]) async {
 }
 
 class _Job {
-  _Job(this.key, this.load, this.hints, this.denoise, this.palette) : ink = ColorizeService.ink {
+  _Job(this.key, this.load, this.hints, this.denoise, this.look, {int? ink})
+    : ink = ink ?? ColorizeService.ink {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
   }
@@ -60,8 +61,8 @@ class _Job {
   final List<ColorHint> hints;
   final bool denoise;
 
-  /// The book's own colors to pull this page towards (empty: none).
-  final List<int> palette;
+  /// The book's own colors to bring this page towards (none: [BookLook.none]).
+  final BookLook look;
 
   /// Color e-ink processing level the job was asked with (0 = none).
   final int ink;
@@ -102,7 +103,7 @@ class ColorizeService {
   /// cache keys; the library settings set it from the E-ink mode.
   static int ink = 0;
 
-  static final _postSuffix = RegExp(r'(_pal[0-9a-z]+)?(_ink[0-9]+)?$');
+  static final _postSuffix = RegExp(r'(_pal[0-9a-z]+|_bc[0-9a-z]+)?(_ink[0-9]+)?$');
 
   /// The cache key of the same page before the steps after the model (the
   /// book's palette, color e-ink processing).
@@ -139,13 +140,13 @@ class ColorizeService {
   }
 
   /// Cache key for page [index] of the comic at [comicId], colorized with
-  /// [hints], optionally denoised, and pulled towards [palette].
+  /// [hints], optionally denoised, and brought towards the book's [look].
   static String keyFor(
     String comicId,
     int index, {
     List<ColorHint> hints = const [],
     bool denoise = false,
-    List<int> palette = const [],
+    BookLook look = BookLook.none,
   }) {
     var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag';
     if (denoise) key += '_dn';
@@ -153,7 +154,7 @@ class ColorizeService {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
       key += '_h${md5.convert(h.join(';').codeUnits).toString().substring(0, 12)}';
     }
-    if (palette.isNotEmpty) key += '_pal${paletteTag(palette)}';
+    key += look.tag;
     if (ink > 0) key += '_ink$ink';
     return key;
   }
@@ -169,13 +170,14 @@ class ColorizeService {
     Future<Uint8List> Function() loadPage, {
     List<ColorHint> hints = const [],
     bool denoise = false,
-    List<int> palette = const [],
+    BookLook look = BookLook.none,
+    int? ink,
   }) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
     // Already waiting in the background queue: now the reader wants it.
     final promoted = _background.remove(key);
-    final job = promoted ?? _Job(key, loadPage, hints, denoise, palette);
+    final job = promoted ?? _Job(key, loadPage, hints, denoise, look, ink: ink);
     job.background = false;
     _queue[key] = job;
     _updateBackgroundLeft();
@@ -199,11 +201,12 @@ class ColorizeService {
     Future<Uint8List> Function() loadPage, {
     List<ColorHint> hints = const [],
     bool denoise = false,
-    List<int> palette = const [],
+    BookLook look = BookLook.none,
+    int? ink,
   }) {
     final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
-    final job = _Job(key, loadPage, hints, denoise, palette)..background = true;
+    final job = _Job(key, loadPage, hints, denoise, look, ink: ink)..background = true;
     _background[key] = job;
     _updateBackgroundLeft();
     unawaited(_pump());
@@ -255,7 +258,7 @@ class ColorizeService {
       }
       // With color e-ink processing, a page colorized before only needs that
       // processing (cheap) rather than the model again.
-      final post = job.ink > 0 || job.palette.isNotEmpty;
+      final post = job.ink > 0 || !job.look.isEmpty;
       final plain = post && plainKey(job.key) != job.key ? await _readJpg(plainKey(job.key)) : null;
       final bytes = plain ?? await job.load();
       final id = _nextId++;
@@ -269,7 +272,7 @@ class ColorizeService {
         job.denoise,
         job.ink,
         plain != null,
-        job.palette,
+        job.look.toMessage(),
       ]);
     } catch (e) {
       _running = null;
@@ -609,11 +612,11 @@ void _workerMain(List args) {
     final wantDenoise = m[3] as bool;
     final ink = m[4] as int;
     final inkOnly = m[5] as bool; // bytes are a colorized page: process only
-    final palette = (m[6] as List).cast<int>();
+    final look = BookLook.fromMessage(m[6] as List);
     try {
       if (inkOnly) {
         final sw = Stopwatch()..start();
-        final out = postProcess(bytes, palette: palette, ink: ink);
+        final out = postProcess(bytes, look: look, ink: ink);
         reply.send([
           id,
           TransferableTypedData.fromList([out]),
@@ -628,7 +631,7 @@ void _workerMain(List args) {
         hints: hints,
         denoiser: engine?.denoiserFor(wantDenoise),
         ink: ink,
-        palette: palette,
+        look: look,
       );
       ColorizeResult r;
       arm();

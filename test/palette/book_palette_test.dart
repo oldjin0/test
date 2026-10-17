@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:manga_viewer/book_colors.dart';
 import 'package:manga_viewer/book_palette.dart';
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/ink_color.dart';
@@ -58,18 +59,91 @@ void main() {
 
   test('the palette is part of the cache key', () {
     final a = ColorizeService.keyFor('/b.cbz', 3);
-    final b = ColorizeService.keyFor('/b.cbz', 3, palette: const [0xff8800]);
-    final c = ColorizeService.keyFor('/b.cbz', 3, palette: const [0x0088ff]);
+    final b = ColorizeService.keyFor('/b.cbz', 3, look: const BookLook(palette: [0xff8800]));
+    final c = ColorizeService.keyFor('/b.cbz', 3, look: const BookLook(palette: [0x0088ff]));
     expect({a, b, c}, hasLength(3));
   });
 
   test('plain key strips the palette and e-ink parts only', () {
     final plain = ColorizeService.keyFor('/b.cbz', 3, denoise: true);
     ColorizeService.ink = 3;
-    final full = ColorizeService.keyFor('/b.cbz', 3, denoise: true, palette: const [0xff8800]);
+    final full = ColorizeService.keyFor(
+      '/b.cbz',
+      3,
+      denoise: true,
+      look: const BookLook(palette: [0xff8800]),
+    );
     ColorizeService.ink = 0;
     expect(full, isNot(plain));
     expect(ColorizeService.plainKey(full), plain);
     expect(ColorizeService.plainKey(plain), plain);
+  });
+
+  group('learning from the book\'s color pages', () {
+    // A page with three areas; the model paints them "wrong" (as models do),
+    // the real color page has other colors there.
+    Uint8List page((int, int, int) a, (int, int, int) b, (int, int, int) c) {
+      final im = img.Image(width: 240, height: 240, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(250, 250, 250));
+      img.fillRect(im, x1: 10, y1: 10, x2: 230, y2: 80, color: img.ColorRgb8(a.$1, a.$2, a.$3));
+      img.fillRect(im, x1: 10, y1: 90, x2: 230, y2: 160, color: img.ColorRgb8(b.$1, b.$2, b.$3));
+      img.fillRect(im, x1: 10, y1: 170, x2: 230, y2: 230, color: img.ColorRgb8(c.$1, c.$2, c.$3));
+      return img.encodePng(im);
+    }
+
+    const brown = (150, 110, 80), olive = (130, 140, 90), mauve = (170, 130, 150);
+    const pink = (235, 120, 160), teal = (60, 150, 150), gold = (220, 180, 60);
+    final predicted = page(brown, olive, mauve);
+    final real = page(pink, teal, gold);
+
+    test('the model\'s colors are corrected to the real ones it saw', () {
+      final map = learnBookColors([(predicted, real)])!;
+      for (final (from, to) in [(brown, pink), (olive, teal), (mauve, gold)]) {
+        final px = Uint8List.fromList([from.$1, from.$2, from.$3]);
+        applyBookColors(px, map);
+        final before = InkColor.rgbToLab(
+          from.$1.toDouble(),
+          from.$2.toDouble(),
+          from.$3.toDouble(),
+        );
+        final after = InkColor.rgbToLab(px[0].toDouble(), px[1].toDouble(), px[2].toDouble());
+        final want = InkColor.rgbToLab(to.$1.toDouble(), to.$2.toDouble(), to.$3.toDouble());
+        double hueDist(List<double> x, List<double> y) {
+          var d = (math.atan2(x[2], x[1]) - math.atan2(y[2], y[1])).abs();
+          if (d > math.pi) d = 2 * math.pi - d;
+          return d;
+        }
+
+        expect(hueDist(after, want), lessThan(hueDist(before, want) * 0.5), reason: '$from -> $px');
+        expect(after[0], closeTo(before[0], 3), reason: 'lightness stays');
+      }
+      // paper and gray stay
+      final gray = Uint8List.fromList([250, 250, 250, 120, 120, 120]);
+      applyBookColors(gray, map);
+      expect(gray, [250, 250, 250, 120, 120, 120]);
+    });
+
+    test('a book without enough color teaches nothing', () {
+      final plain = page((200, 200, 200), (150, 150, 150), (90, 90, 90));
+      expect(learnBookColors([(plain, plain)]), isNull);
+    });
+
+    test('the learned map survives saving, and names itself in cache keys', () {
+      final map = learnBookColors([(predicted, real)])!;
+      final again = BookColorMap.fromJson(map.toJson())!;
+      expect(again.cells, map.cells);
+      expect(BookLook(map: map).tag, startsWith('_bc'));
+      ColorizeService.ink = 2;
+      final key = ColorizeService.keyFor('/b.cbz', 1, look: BookLook(map: map));
+      ColorizeService.ink = 0;
+      expect(ColorizeService.plainKey(key), ColorizeService.keyFor('/b.cbz', 1));
+    });
+
+    test('one-channel JPEGs are known gray without decoding; color is found', () {
+      final g = img.encodeJpg(img.grayscale(img.decodePng(page(brown, olive, mauve))!));
+      expect(isColorImage(Uint8List.fromList(g)), isFalse);
+      expect(isColorImage(real), isTrue);
+      expect(isColorImage(toGrayJpeg(real)), isFalse);
+    });
   });
 }

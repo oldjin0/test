@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import 'book_colors.dart';
 import 'book_palette.dart';
 import 'colorize_service.dart';
 import 'colorizer.dart';
@@ -52,6 +53,7 @@ Future<void> prepareBook(
   if (!store.colorize || !service.modelLoaded) return;
   try {
     if (!await FileSystemEntity.isDirectory(path) && !await File(path).exists()) return;
+    await store.loadLook(path);
     final book = await ComicBook.open(path, window: 4);
     final end = math.min(book.length, first + count);
     for (var i = first; i < end; i++) {
@@ -62,12 +64,12 @@ Future<void> prepareBook(
               i,
               hints: store.hintsOf(path, i),
               denoise: store.denoise,
-              palette: store.activePalette(path),
+              look: store.lookOf(path),
             ),
             () => book.page(i),
             hints: store.hintsOf(path, i),
             denoise: store.denoise,
-            palette: store.activePalette(path),
+            look: store.lookOf(path),
           )
           .then((_) {}, onError: (Object _) {});
     }
@@ -80,6 +82,13 @@ Future<void> prepareBook(
 /// context with the book (and its futures), which cannot cross isolates.
 Future<List<int>> _paletteInBackground(List<Uint8List> pages) =>
     Isolate.run(() => extractBookPalette(pages));
+
+Future<bool> _isColorInBackground(Uint8List bytes) => Isolate.run(() => isColorImage(bytes));
+
+Future<Uint8List> _grayInBackground(Uint8List bytes) => Isolate.run(() => toGrayJpeg(bytes));
+
+Future<BookColorMap?> _learnInBackground(List<(Uint8List, Uint8List)> pairs) =>
+    Isolate.run(() => learnBookColors(pairs));
 
 /// Color matrix for the reader's contrast and saturation settings (1 = no
 /// change), or null when both are unchanged. Saturation first, then contrast.
@@ -197,7 +206,7 @@ class _ViewerPageState extends State<ViewerPage> {
         colorOptions: (i) => ColorOptions(
           hints: _store.hintsOf(widget.path, i),
           denoise: _store.denoise,
-          palette: _store.activePalette(widget.path),
+          look: _store.lookOf(widget.path),
         ),
         decode: widget.decodeImages ? (b) => precacheImage(MemoryImage(b), context) : null,
         margins: _store.autoCrop ? findMargins : null,
@@ -212,7 +221,7 @@ class _ViewerPageState extends State<ViewerPage> {
       _saveProgress();
       _focus();
       unawaited(_findNext());
-      unawaited(_findPalette(book));
+      unawaited(_learnColors(book));
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
@@ -227,7 +236,7 @@ class _ViewerPageState extends State<ViewerPage> {
   late bool _colorize = _store.colorize;
   late bool _denoise = _store.denoise;
   late int _ink = ColorizeService.ink;
-  late String _paletteKey = _store.activePalette(widget.path).join(',');
+  late String _lookKey = _store.lookOf(widget.path).tag;
   late bool _autoCrop = _store.autoCrop;
   late int _prefetch = _store.prefetchPages;
   late String _orientation = _store.orientation;
@@ -258,8 +267,8 @@ class _ViewerPageState extends State<ViewerPage> {
       if (_denoise != _store.denoise ||
           _prefetch != _store.prefetchPages ||
           _ink != ColorizeService.ink ||
-          _paletteKey != _store.activePalette(widget.path).join(',')) {
-        _paletteKey = _store.activePalette(widget.path).join(',');
+          _lookKey != _store.lookOf(widget.path).tag) {
+        _lookKey = _store.lookOf(widget.path).tag;
         _denoise = _store.denoise;
         _ink = ColorizeService.ink; // colors are processed differently: new cache keys
         _prefetch = _store.prefetchPages;
@@ -312,22 +321,119 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   /// One page (spread) forward or back: keys, taps and auto turn.
-  /// Looks once per book for its color pages (the cover, color inserts at
-  /// the start, a back cover) and keeps their main colors; colorized pages
-  /// then follow them (the new cache keys make them redone).
-  Future<void> _findPalette(ComicBook book) async {
-    if (!_store.bookPalette || _store.paletteOf(widget.path) != null) return;
-    final n = book.length;
-    final indices = {for (var i = 0; i < math.min(n, 8); i++) i, if (n > 8) n - 1};
-    final pages = <Uint8List>[];
-    for (final i in indices) {
-      try {
-        pages.add(await book.page(i));
-      } catch (_) {}
-    }
-    final colors = await _paletteInBackground(pages);
+  /// What the colorizer is learning about this book, for the status chip.
+  String? _learning;
+
+  void _learningIs(String? text) {
+    if (mounted && text != _learning) setState(() => _learning = text);
+  }
+
+  /// Learns this book's colors from its own color pages: finds them once by
+  /// scanning every page (the cover, color inserts, wherever they are in the
+  /// archive or folder), adds the pages the reader marked, runs the model on
+  /// black-and-white copies of them and compares with the real colors (see
+  /// BookColorMap). Until that is done, the palette of those pages is used.
+  /// Redone whenever the set of reference pages changes.
+  Future<void> _learnColors(ComicBook book) async {
+    if (!_store.bookPalette) return;
+    final path = widget.path;
+    await _store.loadLook(path);
     if (!mounted) return;
-    _store.setPalette(widget.path, colors);
+    _store.notifyLook();
+    if (_store.foundRefs(path) == null) {
+      final found = <int>[];
+      for (var i = 0; i < book.length; i++) {
+        if (!mounted) return;
+        if (i % 10 == 0) _learningIs('컬러 페이지 찾는 중 ${i + 1}/${book.length}');
+        try {
+          if (await _isColorInBackground(await book.page(i))) found.add(i);
+        } catch (_) {}
+      }
+      _store.setFoundRefs(path, found);
+    }
+    _learningIs(null);
+    await _learnFromReferences(book);
+  }
+
+  bool _learningRefs = false;
+
+  Future<void> _learnFromReferences(ComicBook book) async {
+    final path = widget.path;
+    if (_learningRefs || !_store.bookPalette || _store.learnedCurrent(path)) return;
+    final refs = _store.referencesOf(path);
+    final refsKey = _store.referenceKey(path);
+    if (refs.isEmpty) {
+      await _store.setLearned(path, refsKey, null);
+      return;
+    }
+    _learningRefs = true;
+    try {
+      // Spread over the book, at most 8 pages.
+      final picked = refs.length <= 8
+          ? refs
+          : [for (var k = 0; k < 8; k++) refs[k * refs.length ~/ 8]];
+      final real = <Uint8List>[];
+      for (final i in picked) {
+        try {
+          real.add(await book.page(i));
+        } catch (_) {}
+      }
+      // the palette of those pages serves until the learning is done
+      _store.setPalette(path, await _paletteInBackground(real));
+      final service = await widget.colorizer;
+      if (!service.modelLoaded) return;
+      final pairs = <(Uint8List, Uint8List)>[];
+      for (final (k, bytes) in real.indexed) {
+        if (!mounted) return;
+        _learningIs('색 참고 페이지 학습 중 ${k + 1}/${real.length}');
+        final gray = await _grayInBackground(bytes);
+        // the model on a black-and-white copy, as it sees the other pages
+        final key = ColorizeService.plainKey(
+          ColorizeService.keyFor('ref:$path', picked[k], denoise: _store.denoise),
+        );
+        try {
+          final r = await service.colorizeInBackground(
+            key,
+            () async => gray,
+            denoise: _store.denoise,
+            ink: 0,
+          );
+          pairs.add((r.bytes, bytes));
+        } catch (_) {}
+      }
+      final map = await _learnInBackground(pairs);
+      if (!mounted || _store.referenceKey(path) != refsKey) return;
+      await _store.setLearned(path, refsKey, map);
+      _say(
+        map == null
+            ? '컬러 페이지에서 배울 색이 충분하지 않아, 그 페이지들의 색감만 따릅니다.'
+            : '컬러 페이지 ${real.length}장에서 이 책의 색을 배웠습니다. 채색이 그 색으로 바뀝니다.',
+      );
+    } finally {
+      _learningRefs = false;
+      _learningIs(null);
+    }
+  }
+
+  /// Marks the visible page as a color reference of this book, or unmarks it.
+  Future<void> _toggleReference() async {
+    final book = _book;
+    if (book == null) return;
+    final page = _page;
+    if (!_store.isReference(widget.path, page)) {
+      final bytes = await book.page(page);
+      if (!await _isColorInBackground(bytes)) {
+        _say('컬러 페이지가 아닙니다. 색이 있는 페이지(표지, 컬러 화보)를 지정해 주세요.');
+        return;
+      }
+    }
+    _store.toggleReference(widget.path, page);
+    _say(
+      _store.isReference(widget.path, page)
+          ? '${page + 1}쪽을 색 참고 페이지로 지정했습니다. 다시 배웁니다.'
+          : '${page + 1}쪽을 색 참고에서 뺐습니다. 다시 배웁니다.',
+    );
+    unawaited(_learnFromReferences(book));
   }
 
   Future<void> _findNext() async {
@@ -526,7 +632,7 @@ class _ViewerPageState extends State<ViewerPage> {
     i,
     hints: _store.hintsOf(widget.path, i),
     denoise: _store.denoise,
-    palette: _store.activePalette(widget.path),
+    look: _store.lookOf(widget.path),
   );
 
   /// Queues every page for colorizing in the background, from the current
@@ -545,7 +651,7 @@ class _ViewerPageState extends State<ViewerPage> {
             () => book.page(i),
             hints: _store.hintsOf(widget.path, i),
             denoise: _store.denoise,
-            palette: _store.activePalette(widget.path),
+            look: _store.lookOf(widget.path),
           )
           .then((_) {}, onError: (Object _) {});
     }
@@ -570,12 +676,12 @@ class _ViewerPageState extends State<ViewerPage> {
               page,
               hints: hints,
               denoise: _store.denoise,
-              palette: _store.activePalette(widget.path),
+              look: _store.lookOf(widget.path),
             ),
             () => book.page(page),
             hints: hints,
             denoise: _store.denoise,
-            palette: _store.activePalette(widget.path),
+            look: _store.lookOf(widget.path),
           ),
         ),
       ),
@@ -655,6 +761,7 @@ class _ViewerPageState extends State<ViewerPage> {
                     'vertical' => _store.setVertical(!_store.vertical),
                     'savePage' => _savePage(),
                     'hints' => _editHints(),
+                    'reference' => _toggleReference(),
                     'export' => _exportComic(),
                     'colorizeAll' => _colorizeWholeBook(),
                     _ => null,
@@ -677,6 +784,15 @@ class _ViewerPageState extends State<ViewerPage> {
                     ),
                     const PopupMenuItem(value: 'display', child: Text('읽기 설정')),
                     const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: 'reference',
+                      enabled: _store.bookPalette,
+                      child: Text(
+                        _store.isReference(widget.path, _page)
+                            ? '이 페이지를 색 참고에서 빼기'
+                            : '이 페이지를 색 참고로 지정 (컬러 페이지)',
+                      ),
+                    ),
                     PopupMenuItem(
                       value: 'hints',
                       enabled: _service?.modelLoaded ?? false,
@@ -928,7 +1044,7 @@ class _ViewerPageState extends State<ViewerPage> {
             () => book.page(i),
             hints: _store.hintsOf(widget.path, i),
             denoise: _store.denoise,
-            palette: _store.activePalette(widget.path),
+            look: _store.lookOf(widget.path),
           );
           return r.bytes;
         } catch (e) {
@@ -1039,6 +1155,8 @@ class _ViewerPageState extends State<ViewerPage> {
     if (service == null) return _Chip(busy: true, text: 'AI 모델 준비 중…', eink: eink);
     if (!service.modelLoaded) return _Chip(text: 'AI 모델 없음 · 색조 필터', eink: eink);
     if (pages.coloring(_page)) return _Chip(busy: true, text: 'AI 채색 중…', eink: eink);
+    final learning = _learning;
+    if (learning != null) return _Chip(text: learning, eink: eink);
     return ValueListenableBuilder<int>(
       valueListenable: service.backgroundLeft,
       builder: (context, left, _) => left == 0
