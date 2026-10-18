@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -113,6 +114,29 @@ class _HomePageState extends State<HomePage> {
   Future<void> _open(String path, {int? page}) =>
       openComic(context, _store, widget.colorizer, path, page: page);
 
+  /// Quits the app, after asking when background colorizing still has pages.
+  Future<void> _exit() async {
+    final service = await widget.colorizer
+        .timeout(const Duration(seconds: 1), onTimeout: () => throw TimeoutException('colorizer'))
+        .then<ColorizeService?>((s) => s, onError: (Object _) => null);
+    final left = service?.backgroundLeft.value ?? 0;
+    if (left > 0 && mounted) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('앱 종료'),
+          content: Text('백그라운드 채색이 $left쪽 남았습니다. 종료하면 멈춥니다 (이미 채색한 페이지는 남습니다).'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('종료')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await AppPlatform.exitApp();
+  }
+
   Future<void> _import() async {
     try {
       final path = await importComicFile();
@@ -180,6 +204,7 @@ class _HomePageState extends State<HomePage> {
                 'backup' => _exportBackup(),
                 'restore' => _importBackup(),
                 'settings' => showReaderSettings(context, _store, comic: true, text: true),
+                'exit' => _exit(),
                 _ => checkForUpdate(context),
               },
               itemBuilder: (context) => [
@@ -207,6 +232,15 @@ class _HomePageState extends State<HomePage> {
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(Icons.restore),
                     title: Text('백업 불러오기'),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'exit',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.power_settings_new),
+                    title: Text('앱 종료'),
+                    subtitle: Text('백그라운드 채색도 멈춥니다'),
                   ),
                 ),
                 PopupMenuItem(

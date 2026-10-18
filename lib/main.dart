@@ -15,6 +15,7 @@ import 'pc_window.dart';
 import 'text_book.dart' show isTextFile;
 import 'home_page.dart';
 import 'library_store.dart';
+import 'updater.dart' show AppPlatform;
 import 'viewer_page.dart' show prepareNextPages;
 
 Future<void> main(List<String> args) async {
@@ -26,6 +27,7 @@ Future<void> main(List<String> args) async {
   }
   final colorizer = startColorizer(store);
   unawaited(colorizer.then((s) => prepareNextPages(store, s)));
+  unawaited(colorizer.then(keepAliveWhileColoring));
   runApp(
     MangaViewerApp(
       store: store,
@@ -33,6 +35,22 @@ Future<void> main(List<String> args) async {
       openOnStart: isPc ? bookFromArguments(args) : null,
     ),
   );
+}
+
+/// Keeps the app alive (screen off, other apps in front) while background
+/// colorizing has pages left, and lets it go when they are done.
+void keepAliveWhileColoring(ColorizeService service) {
+  var last = 0;
+  void update() {
+    final left = service.backgroundLeft.value;
+    // Start and stop at once; while running, refresh the count every 5 pages.
+    if ((left == 0) != (last == 0) || (last - left).abs() >= 5) {
+      last = left;
+      unawaited(AppPlatform.keepAlive(left));
+    }
+  }
+
+  service.backgroundLeft.addListener(update);
 }
 
 /// The book named on the command line (Explorer's "open with"), if any.

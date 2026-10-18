@@ -119,6 +119,24 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(null)
                         }
+                        "keepAlive" -> {
+                            val left = call.argument<Int>("left") ?: 0
+                            if (left > 0) {
+                                ColorizeKeepAlive.onExit = { runOnUiThread { finishAndRemoveTask() } }
+                                ColorizeKeepAlive.show(this, left)
+                            } else {
+                                ColorizeKeepAlive.hide(this)
+                            }
+                            result.success(null)
+                        }
+                        "exitApp" -> {
+                            ColorizeKeepAlive.hide(this)
+                            result.success(null)
+                            finishAndRemoveTask()
+                            android.os.Handler(mainLooper).postDelayed({
+                                android.os.Process.killProcess(android.os.Process.myPid())
+                            }, 300)
+                        }
                         "readerKeys" -> {
                             readerKeys = call.argument<Boolean>("on") == true
                             volumeKeys = readerKeys && call.argument<Boolean>("volume") == true

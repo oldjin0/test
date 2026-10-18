@@ -6,6 +6,8 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:permission_handler/permission_handler.dart';
+
 import 'pc_platform.dart';
 
 /// GitHub repository whose releases carry the app's update APKs. CI publishes
@@ -58,6 +60,37 @@ class AppPlatform {
     if (isPc) return pcKeepScreenOn(on);
     try {
       await _channel.invokeMethod('keepScreenOn', {'on': on});
+    } on MissingPluginException {
+      // tests / non-Android
+    }
+  }
+
+  static bool _askedNotifications = false;
+
+  /// While [left] > 0 pages are colorized in the background, the app keeps
+  /// running with the screen off or another app in front (Android: a
+  /// foreground service with a notification and a wake lock; PC: the system
+  /// stays awake). 0 lets it go.
+  static Future<void> keepAlive(int left) async {
+    if (isPc) return pcKeepBusy(left > 0);
+    try {
+      if (left > 0 && !_askedNotifications) {
+        _askedNotifications = true;
+        // Android 13+: the notification (with its "quit" button) needs this;
+        // the work goes on even without it.
+        await Permission.notification.request();
+      }
+      await _channel.invokeMethod('keepAlive', {'left': left});
+    } on MissingPluginException {
+      // tests / non-Android
+    } catch (_) {}
+  }
+
+  /// Quits the app for good (background colorizing stops with it).
+  static Future<void> exitApp() async {
+    if (isPc) exit(0);
+    try {
+      await _channel.invokeMethod('exitApp');
     } on MissingPluginException {
       // tests / non-Android
     }

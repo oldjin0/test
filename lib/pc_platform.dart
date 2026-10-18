@@ -26,8 +26,22 @@ String get exeDir => File(Platform.resolvedExecutable).parent.path;
 ffi.DynamicLibrary? _kernel;
 int Function(int)? _setExecutionState;
 
+bool _screenOn = false, _busy = false;
+
 /// Keeps the display (and system) awake while reading, or lets them sleep.
 void pcKeepScreenOn(bool on) {
+  _screenOn = on;
+  _applyExecutionState();
+}
+
+/// Keeps the system (not the display) awake while pages are colorized in the
+/// background.
+void pcKeepBusy(bool on) {
+  _busy = on;
+  _applyExecutionState();
+}
+
+void _applyExecutionState() {
   if (!Platform.isWindows) return;
   try {
     _setExecutionState ??= (_kernel ??= ffi.DynamicLibrary.open('kernel32.dll'))
@@ -35,7 +49,7 @@ void pcKeepScreenOn(bool on) {
           'SetThreadExecutionState',
         );
     const continuous = 0x80000000, display = 0x00000002, system = 0x00000001;
-    _setExecutionState!(on ? (continuous | display | system) : continuous);
+    _setExecutionState!(continuous | (_screenOn ? display | system : 0) | (_busy ? system : 0));
   } catch (_) {
     // best effort
   }

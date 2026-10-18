@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:manga_viewer/colorize_service.dart';
@@ -938,6 +939,35 @@ void main() {
     final v = (await tester.runAsync(AppPlatform.version))!;
     expect(v.code, 0);
     expect(v.abis, isPc ? ['windows-x64'] : isEmpty);
+  });
+
+  test('background colorizing keeps the app alive until its pages are done', () async {
+    final calls = <int>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('manga_viewer/app'),
+      (call) async {
+        if (call.method == 'keepAlive') calls.add(call.arguments['left'] as int);
+        return null;
+      },
+    );
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('manga_viewer/app'), null),
+    );
+    final service = await ColorizeService.start(); // no model: tone filter
+    keepAliveWhileColoring(service);
+    final dir = Directory.systemTemp.createTempSync('alive');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final page = img.encodePng(img.Image(width: 20, height: 20, numChannels: 3));
+    final all = [
+      for (var i = 0; i < 12; i++)
+        service.colorizeInBackground('alive$i', () async => page).then((_) {}, onError: (_) {}),
+    ];
+    await Future.wait(all);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(calls.first, greaterThan(0), reason: 'started with the first pages queued');
+    expect(calls.last, 0, reason: 'let go when they are done');
+    expect(calls.length, lessThan(8), reason: 'not on every page');
   });
 
   testWidgets('home shows library tabs', (tester) async {
