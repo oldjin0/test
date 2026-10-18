@@ -1,0 +1,80 @@
+package com.oldjin.meetnote
+
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
+/** Gemini API 키는 Android Keystore(AES-GCM)로 암호화해 저장한다. */
+object Prefs {
+    private const val ALIAS = "meetnote_api_key"
+
+    private fun sp(ctx: Context) = ctx.getSharedPreferences("meetnote", Context.MODE_PRIVATE)
+
+    private fun secretKey(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        gen.init(
+            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .build()
+        )
+        return gen.generateKey()
+    }
+
+    fun apiKey(ctx: Context): String? {
+        val raw = sp(ctx).getString("api_key", null) ?: return null
+        return try {
+            val (iv, ct) = raw.split(":").map { Base64.decode(it, Base64.NO_WRAP) }
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, iv))
+            String(c.doFinal(ct), Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun setApiKey(ctx: Context, key: String) {
+        if (key.isBlank()) {
+            sp(ctx).edit().remove("api_key").apply()
+            return
+        }
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, secretKey())
+        val ct = c.doFinal(key.trim().toByteArray(Charsets.UTF_8))
+        val enc = Base64.encodeToString(c.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(ct, Base64.NO_WRAP)
+        sp(ctx).edit().putString("api_key", enc).apply()
+    }
+
+    /** 비어 있으면 사용 가능한 최신 flash 모델을 자동 선택한다. */
+    fun model(ctx: Context): String =
+        (sp(ctx).getString("model", "") ?: "").takeIf { it != "gemini-2.5-flash" } ?: "" // 구버전 기본값은 무시
+    fun setModel(ctx: Context, m: String) = sp(ctx).edit().putString("model", m.trim()).apply()
+
+    /** API 사용량 절약 옵션 (기본: 모두 켜짐) */
+    /** 실시간 자막 방식: live(Gemini Live, API 사용) / device(기기 내 인식, API 안 씀) / off */
+    fun captionMode(ctx: Context): String =
+        sp(ctx).getString("caption_mode", null) ?: "device" // 기본: API 없이 기기 내 자막
+    fun setCaptionMode(ctx: Context, m: String) = sp(ctx).edit().putString("caption_mode", m).apply()
+    fun autoAnalyze(ctx: Context) = sp(ctx).getBoolean("opt_auto2", false) // 기본: API 자동 분석 끔
+    fun summaryOn(ctx: Context) = sp(ctx).getBoolean("opt_summary", true)
+    fun setOpt(ctx: Context, key: String, v: Boolean) = sp(ctx).edit().putBoolean(key, v).apply()
+
+    fun lang(ctx: Context): String = sp(ctx).getString("lang", "ko-KR") ?: "ko-KR"
+    fun setLang(ctx: Context, l: String) = sp(ctx).edit().putString("lang", l.trim()).apply()
+
+    fun resolvedText(ctx: Context): String = sp(ctx).getString("res_text", "") ?: ""
+    fun resolvedLive(ctx: Context): String = sp(ctx).getString("res_live", "") ?: ""
+    fun resolvedAt(ctx: Context): Long = sp(ctx).getLong("res_at", 0)
+    fun resolvedLite(ctx: Context): String = sp(ctx).getString("res_lite", "") ?: ""
+    fun setResolved(ctx: Context, text: String, live: String, lite: String) =
+        sp(ctx).edit().putString("res_text", text).putString("res_live", live).putString("res_lite", lite)
+            .putLong("res_at", System.currentTimeMillis()).apply()
+}
