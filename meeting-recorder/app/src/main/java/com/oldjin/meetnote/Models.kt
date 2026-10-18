@@ -13,6 +13,7 @@ data class LiveState(
     val elapsedSec: Int = 0,
     val level: Float = 0f,
     val lines: List<Line> = emptyList(),
+    val partial: String = "",
     val pending: Int = 0,
     val failed: Int = 0,
     val status: String = "",

@@ -42,7 +42,7 @@ class RecordingService : Service() {
         private const val CHANNEL = "recording"
         private const val NOTIF_ID = 1
         private const val DONE_ID = 2
-        private const val CHUNK_SEC = 15
+        private const val CHUNK_SEC = 10
         private const val SILENCE_RMS = 120.0
     }
 
@@ -50,6 +50,9 @@ class RecordingService : Service() {
     private var wake: PowerManager.WakeLock? = null
     private var job: Job? = null
     @Volatile private var stopRequested = false
+    @Volatile private var live: LiveTranscriber? = null
+    private val cur = StringBuilder()
+    private var curStartSec = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -130,13 +133,15 @@ class RecordingService : Service() {
 
     private suspend fun runSession(s: Session) {
         val key = Prefs.apiKey(this)
-        val client = key?.let { GeminiClient(it, Prefs.model(this)) }
+        val client = key?.let { GeminiClient(this, it, Prefs.model(this)) }
         val dir = Store.dir(this, s.id)
         val pcmFile = File(dir, "audio.pcm")
         val chunks = Channel<Chunk>(Channel.UNLIMITED)
         val worker = scope.launch(Dispatchers.IO) {
             for (c in chunks) handleChunk(client, c)
         }
+
+        val liveJob = if (client != null) scope.launch(Dispatchers.IO) { runLive(client) } else null
 
         var total = 0L
         val rec = AudioRecord(
@@ -177,7 +182,9 @@ class RecordingService : Service() {
                     if (total - flushed >= SAMPLE_RATE * 2) {
                         out.flush(); flushed = total
                     }
-                    val level = (rms(buf, n) / 6000.0).coerceIn(0.0, 1.0).toFloat()
+                    val r = rms(buf, n)
+                    live?.let { if (r >= SILENCE_RMS) it.markSpeech(); it.send(buf, n) }
+                    val level = (r / 6000.0).coerceIn(0.0, 1.0).toFloat()
                     Live.update { it.copy(elapsedSec = (total / (SAMPLE_RATE * 2)).toInt(), level = level) }
                     if (chunkBuf.size() >= chunkBytes) sendChunk()
                 }
@@ -190,8 +197,11 @@ class RecordingService : Service() {
             rec.release()
         }
         chunks.close()
+        live?.close()
+        liveJob?.cancel()
+        commitLive()
 
-        Live.update { it.copy(phase = Phase.Processing, level = 0f, status = "남은 구간 변환 중…") }
+        Live.update { it.copy(phase = Phase.Processing, level = 0f, partial = "", status = "남은 구간 변환 중…") }
         notify("처리 중 — 앱을 닫아도 계속됩니다", false)
         worker.join()
 
@@ -244,9 +254,66 @@ class RecordingService : Service() {
         )
     }
 
+    @Synchronized
+    private fun onLiveText(text: String, interim: Boolean) {
+        if (cur.isEmpty()) curStartSec = Live.state.value.elapsedSec
+        if (interim) {
+            Live.update { it.copy(partial = (cur.toString() + text).trim()) }
+        } else {
+            cur.append(text)
+            if (cur.length > 100) commitLive() else Live.update { it.copy(partial = cur.toString().trim()) }
+        }
+    }
+
+    @Synchronized
+    private fun commitLive() {
+        val t = cur.toString().trim()
+        cur.setLength(0)
+        if (t.isNotEmpty()) Live.update { it.copy(lines = it.lines + Line(curStartSec, "", t), partial = "") }
+        else Live.update { it.copy(partial = "") }
+    }
+
+    /** Live API 연결을 유지한다. 끊기면 재연결하고, 계속 실패하면 구간 변환 모드로만 동작한다. */
+    private suspend fun runLive(client: GeminiClient) {
+        val model = try { client.liveModel() } catch (e: Exception) { null }
+        if (model == null) {
+            status("녹음 중 · 구간 변환 모드 (Live 모델 없음)")
+            return
+        }
+        var fails = 0
+        while (!stopRequested && fails < 4) {
+            val lt = LiveTranscriber(
+                client.http, client.apiKeyForSocket(), model, client.liveIsTranscribeOnly(), Prefs.lang(this),
+                onText = { t, i -> onLiveText(t, i) },
+                onTurnComplete = { commitLive() },
+            )
+            live = lt
+            lt.connect()
+            var wasHealthy = false
+            while (!lt.closed && !stopRequested) {
+                if (lt.ready && !wasHealthy) {
+                    wasHealthy = true
+                    if (Live.state.value.phase == Phase.Recording) status("녹음 중 · 실시간 변환 (Live)")
+                }
+                if (lt.ready && System.currentTimeMillis() - lt.lastTextAt > 2500 && cur.isNotEmpty()) commitLive()
+                kotlinx.coroutines.delay(400)
+            }
+            lt.close()
+            if (stopRequested) break
+            if (lt.everReady) fails = 0 else fails++
+            live = null
+            if (Live.state.value.phase == Phase.Recording) {
+                status("녹음 중 · 구간 변환 모드 (Live 재연결 중${lt.lastError?.let { ": " + it.take(60) } ?: ""})")
+            }
+            kotlinx.coroutines.delay(1500)
+        }
+        if (!stopRequested && Live.state.value.phase == Phase.Recording) status("녹음 중 · 구간 변환 모드")
+    }
+
     private fun handleChunk(client: GeminiClient?, c: Chunk) {
         try {
             if (client == null || rms(c.pcm) < SILENCE_RMS) return
+            if (live?.healthy == true) return // Live 가 실시간 전사 중이면 구간 변환은 쉰다
             val context = Live.state.value.lines.filter { it.speaker != "!" }.takeLast(8)
             val lines = client.transcribeChunk(Wav.wrap(c.pcm), c.offsetSec, context)
             Live.update { it.copy(lines = it.lines + lines) }
@@ -254,7 +321,7 @@ class RecordingService : Service() {
             Live.update {
                 it.copy(
                     failed = it.failed + 1,
-                    lines = it.lines + Line(c.offsetSec, "!", "이 구간은 실시간 변환에 실패했습니다. 종료 후 최종 분석에서 다시 시도합니다.")
+                    lines = it.lines + Line(c.offsetSec, "!", "이 구간은 실시간 변환에 실패했습니다 (${e.message?.take(90)}). 종료 후 최종 분석에서 다시 시도합니다.")
                 )
             }
         } finally {

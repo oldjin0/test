@@ -12,7 +12,6 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Gemini API 키는 Android Keystore(AES-GCM)로 암호화해 저장한다. */
 object Prefs {
-    const val DEFAULT_MODEL = "gemini-2.5-flash"
     private const val ALIAS = "meetnote_api_key"
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences("meetnote", Context.MODE_PRIVATE)
@@ -54,6 +53,17 @@ object Prefs {
         sp(ctx).edit().putString("api_key", enc).apply()
     }
 
-    fun model(ctx: Context): String = sp(ctx).getString("model", DEFAULT_MODEL) ?: DEFAULT_MODEL
-    fun setModel(ctx: Context, m: String) = sp(ctx).edit().putString("model", m.trim().ifBlank { DEFAULT_MODEL }).apply()
+    /** 비어 있으면 사용 가능한 최신 flash 모델을 자동 선택한다. */
+    fun model(ctx: Context): String =
+        (sp(ctx).getString("model", "") ?: "").takeIf { it != "gemini-2.5-flash" } ?: "" // 구버전 기본값은 무시
+    fun setModel(ctx: Context, m: String) = sp(ctx).edit().putString("model", m.trim()).apply()
+
+    fun lang(ctx: Context): String = sp(ctx).getString("lang", "ko-KR") ?: "ko-KR"
+    fun setLang(ctx: Context, l: String) = sp(ctx).edit().putString("lang", l.trim()).apply()
+
+    fun resolvedText(ctx: Context): String = sp(ctx).getString("res_text", "") ?: ""
+    fun resolvedLive(ctx: Context): String = sp(ctx).getString("res_live", "") ?: ""
+    fun resolvedAt(ctx: Context): Long = sp(ctx).getLong("res_at", 0)
+    fun setResolved(ctx: Context, text: String, live: String) =
+        sp(ctx).edit().putString("res_text", text).putString("res_live", live).putLong("res_at", System.currentTimeMillis()).apply()
 }

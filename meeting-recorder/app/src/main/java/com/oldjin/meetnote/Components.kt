@@ -38,8 +38,10 @@ fun LineRow(line: Line, highlighted: Boolean = false, onClick: (() -> Unit)? = n
             if (warn) {
                 Text(line.text, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
             } else {
-                Text(line.speaker, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = speakerColor(line.speaker))
-                Spacer(Modifier.height(2.dp))
+                if (line.speaker.isNotBlank()) {
+                    Text(line.speaker, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = speakerColor(line.speaker))
+                    Spacer(Modifier.height(2.dp))
+                }
                 Text(line.text, fontSize = 15.sp, lineHeight = 22.sp, color = MaterialTheme.colorScheme.onSurface)
             }
         }

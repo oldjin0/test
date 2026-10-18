@@ -1,5 +1,6 @@
 package com.oldjin.meetnote
 
+import android.content.Context
 import android.util.Base64
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -15,8 +16,12 @@ import java.util.concurrent.TimeUnit
 class ApiException(val code: Int, message: String) : IOException(message)
 
 /** Google Gemini REST 클라이언트. 키는 x-goog-api-key 헤더로만 전송한다. */
-class GeminiClient(private val apiKey: String, private val model: String) {
-    private val http = OkHttpClient.Builder()
+class GeminiClient(private val ctx: Context, private val apiKey: String, modelOverride: String = "") {
+    private val overridden = modelOverride.isNotBlank()
+    @Volatile private var model = modelOverride.ifBlank { Prefs.resolvedText(ctx) }
+    @Volatile private var liveModelName = Prefs.resolvedLive(ctx)
+
+    val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(10, TimeUnit.MINUTES)
@@ -64,18 +69,87 @@ class GeminiClient(private val apiKey: String, private val model: String) {
         withRetry(1) { exec(req("$base/v1beta/models?pageSize=1").build()) }
     }
 
+    /** 현재 계정에서 쓸 수 있는 최신 flash(텍스트)·Live(실시간) 모델을 찾는다. 하루에 한 번 갱신. */
+    @Synchronized
+    fun ensureModels(force: Boolean = false) {
+        val stale = System.currentTimeMillis() - Prefs.resolvedAt(ctx) > 24 * 3600 * 1000L
+        if (!force && !stale && (model.isNotBlank() || overridden)) return
+        val found = discover()
+        if (!overridden || force) model = found.first ?: model.ifBlank { "gemini-flash-latest" }
+        liveModelName = found.second ?: ""
+        Prefs.setResolved(ctx, model, liveModelName)
+    }
+
+    fun textModel(): String { ensureModels(); return model }
+    fun liveModel(): String? { ensureModels(); return liveModelName.ifBlank { null } }
+
+    private fun discover(): Pair<String?, String?> {
+        val all = mutableListOf<Pair<String, List<String>>>()
+        var token: String? = null
+        do {
+            val url = "$base/v1beta/models?pageSize=200" + (token?.let { "&pageToken=$it" } ?: "")
+            val j = JSONObject(withRetry(1) { exec(req(url).build()) })
+            val arr = j.optJSONArray("models")
+            if (arr != null) for (i in 0 until arr.length()) {
+                val m = arr.getJSONObject(i)
+                val methods = m.optJSONArray("supportedGenerationMethods")
+                all += m.optString("name").removePrefix("models/") to
+                    (if (methods == null) emptyList() else (0 until methods.length()).map { methods.getString(it) })
+            }
+            token = j.optString("nextPageToken").ifBlank { null }
+        } while (token != null)
+
+        val bad = listOf("image", "tts", "live", "audio", "transcribe", "embedding", "robotics", "computer", "native", "learnlm")
+        val text = all.filter { (n, m) -> "generateContent" in m && bad.none { n.contains(it) } }
+            .mapNotNull { (n, _) -> flashScore(n)?.let { n to it } }.maxByOrNull { it.second }?.first
+            ?: all.firstOrNull { it.first == "gemini-flash-latest" }?.first
+        val live = all.filter { (_, m) -> "bidiGenerateContent" in m }
+            .maxByOrNull { (n, _) -> liveScore(n) }?.first
+        return text to live
+    }
+
+    private val verRe = Regex("""gemini-(\d+)(?:\.(\d+))?""")
+
+    private fun version(n: String): Long {
+        val m = verRe.find(n) ?: return 0
+        return m.groupValues[1].toLong() * 1_000_000 + (m.groupValues[2].toLongOrNull() ?: 0) * 10_000
+    }
+
+    private fun flashScore(n: String): Long? {
+        if (!Regex("""gemini-\d+(\.\d+)?-flash""").containsMatchIn(n)) return null
+        val lite = n.contains("lite")
+        val unstable = n.contains("preview") || n.contains("exp") || Regex("""-\d{2,}""").containsMatchIn(n.substringAfter("flash"))
+        return version(n) + (if (lite) 0 else 5_000) + (if (unstable) 0 else 1_000)
+    }
+
+    private fun liveScore(n: String): Long =
+        version(n) + (if (n.contains("transcribe")) 1_000_000_000L else 0) + (if (n.contains("live")) 100 else 0)
+
+    fun liveIsTranscribeOnly(): Boolean = liveModelName.contains("transcribe")
+    fun apiKeyForSocket() = apiKey
+
     private fun generate(parts: JSONArray, json: Boolean, fast: Boolean): String {
         val gen = JSONObject().put("temperature", 0.2)
         if (json) gen.put("responseMimeType", "application/json").put("responseSchema", SCHEMA)
-        if (fast && model.contains("flash")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+        if (fast && model.contains("2.5-flash")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
         val body = JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
             .put("generationConfig", gen)
-        val resp = withRetry {
+        ensureModels()
+        fun call() = withRetry {
             exec(
                 req("$base/v1beta/models/$model:generateContent")
                     .post(body.toString().toRequestBody("application/json".toMediaType())).build()
             )
+        }
+        val resp = try {
+            call()
+        } catch (e: ApiException) {
+            // 모델이 내려갔거나 신규 사용자에게 막힌 경우: 목록을 다시 받아 최신 모델로 한 번 재시도
+            if ((e.code == 404 || e.message.orEmpty().contains("no longer available"))) {
+                ensureModels(force = true)
+                call()
+            } else throw e
         }
         val cand = JSONObject(resp).optJSONArray("candidates")?.optJSONObject(0)
             ?: throw IOException("응답이 비어 있습니다 (차단되었을 수 있음)")

@@ -125,7 +125,7 @@ object Store {
     fun loadSummary(ctx: Context, id: String): String? =
         file(ctx, id, "summary.txt").takeIf { it.exists() }?.readText()
 
-    fun toText(lines: List<Line>) = lines.joinToString("\n") { "[${fmtTime(it.sec)}] ${it.speaker}: ${it.text}" }
+    fun toText(lines: List<Line>) = lines.joinToString("\n") { if (it.speaker.isBlank()) "[${fmtTime(it.sec)}] ${it.text}" else "[${fmtTime(it.sec)}] ${it.speaker}: ${it.text}" }
 }
 
 object Exporter {

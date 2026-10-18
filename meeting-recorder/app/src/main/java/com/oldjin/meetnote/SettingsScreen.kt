@@ -49,6 +49,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var key by remember { mutableStateOf("") }
     var model by remember { mutableStateOf(Prefs.model(ctx)) }
+    var lang by remember { mutableStateOf(Prefs.lang(ctx)) }
     var hasKey by remember { mutableStateOf(!Prefs.apiKey(ctx).isNullOrBlank()) }
     var checking by remember { mutableStateOf(false) }
 
@@ -82,24 +83,30 @@ fun SettingsScreen(onBack: () -> Unit) {
             ) { Text("Google AI Studio에서 키 발급받기") }
             OutlinedTextField(
                 value = model, onValueChange = { model = it }, modifier = Modifier.fillMaxWidth(), singleLine = true,
-                label = { Text("모델") }, supportingText = { Text("기본값: ${Prefs.DEFAULT_MODEL}") }
+                label = { Text("모델 (비워두면 자동 선택)") },
+                supportingText = { Text("사용 가능한 최신 Gemini flash 모델을 자동으로 고릅니다") }
+            )
+            OutlinedTextField(
+                value = lang, onValueChange = { lang = it }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+                label = { Text("실시간 인식 언어 (예: ko-KR, en-US)") }
             )
             Button(
-                enabled = !checking && (key.isNotBlank() || model != Prefs.model(ctx)),
+                enabled = !checking && (key.isNotBlank() || model != Prefs.model(ctx) || lang != Prefs.lang(ctx)),
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
                     scope.launch {
                         checking = true
                         val candidate = key.trim().ifBlank { Prefs.apiKey(ctx).orEmpty() }
+                        var found = ""
                         val err = withContext(Dispatchers.IO) {
-                            try { GeminiClient(candidate, model.trim()).validateKey(); null } catch (e: Exception) { e.message ?: "오류" }
+                            try { GeminiClient(ctx, candidate, model.trim()).also { it.validateKey(); it.ensureModels(force = true) }.let { c -> found = "텍스트: " + c.textModel() + " / 실시간: " + (c.liveModel() ?: "없음(구간 변환)") }; null } catch (e: Exception) { e.message ?: "오류" }
                         }
                         checking = false
                         if (err == null) {
                             if (key.isNotBlank()) Prefs.setApiKey(ctx, key)
-                            Prefs.setModel(ctx, model)
+                            Prefs.setModel(ctx, model); Prefs.setLang(ctx, lang)
                             key = ""; hasKey = true
-                            Toast.makeText(ctx, "저장되었습니다", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, "저장되었습니다\n$found", Toast.LENGTH_LONG).show()
                         } else {
                             Toast.makeText(ctx, "키 확인 실패: $err", Toast.LENGTH_LONG).show()
                         }

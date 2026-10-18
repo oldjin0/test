@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,8 +46,10 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun RecordingScreen(live: LiveState, onBack: () -> Unit, onStop: () -> Unit, onResult: () -> Unit) {
     val listState = rememberLazyListState()
-    LaunchedEffect(live.lines.size) {
-        if (live.lines.isNotEmpty()) listState.animateScrollToItem(live.lines.size - 1)
+    val hasPartial = live.partial.isNotBlank()
+    LaunchedEffect(live.lines.size, live.partial) {
+        val count = live.lines.size + if (hasPartial) 1 else 0
+        if (count > 0) listState.scrollToItem(count - 1)
     }
     val level by animateFloatAsState(live.level, label = "level")
     val recording = live.phase == Phase.Recording
@@ -90,14 +93,21 @@ fun RecordingScreen(live: LiveState, onBack: () -> Unit, onStop: () -> Unit, onR
             Box(
                 Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)
             ) {
-                if (live.lines.isEmpty()) {
+                if (live.lines.isEmpty() && !hasPartial) {
                     Text(
-                        if (recording) "말씀하시면 여기에 실시간으로 표시됩니다\n(약 15~30초 간격으로 갱신)" else "변환된 내용이 없습니다",
+                        if (recording) "말씀하시면 여기에 실시간으로 표시됩니다" else "변환된 내용이 없습니다",
                         Modifier.align(Alignment.Center).padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp
                     )
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(6.dp)) {
                         itemsIndexed(live.lines) { _, l -> LineRow(l) }
+                        if (hasPartial) item {
+                            Text(
+                                live.partial, fontSize = 15.sp, lineHeight = 22.sp, fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)
+                            )
+                        }
                     }
                 }
             }
