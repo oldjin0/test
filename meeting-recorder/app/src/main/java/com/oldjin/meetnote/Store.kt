@@ -15,7 +15,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class Session(val id: String, val title: String, val startedAt: Long, val durationSec: Int, val favorite: Boolean = false)
+data class Session(val id: String, val title: String, val startedAt: Long, val durationSec: Int, val favorite: Boolean = false, val ai: Boolean = false)
 
 const val SAMPLE_RATE = 16000
 
@@ -55,7 +55,7 @@ object Store {
 
     fun writeMeta(ctx: Context, s: Session) {
         file(ctx, s.id, "meta.json").writeText(
-            JSONObject().put("title", s.title).put("startedAt", s.startedAt).put("durationSec", s.durationSec).put("favorite", s.favorite).toString()
+            JSONObject().put("title", s.title).put("startedAt", s.startedAt).put("durationSec", s.durationSec).put("favorite", s.favorite).put("ai", s.ai).toString()
         )
     }
 
@@ -64,7 +64,7 @@ object Store {
         if (!f.exists()) return null
         return try {
             val j = JSONObject(f.readText())
-            Session(id, j.optString("title", id), j.optLong("startedAt"), j.optInt("durationSec"), j.optBoolean("favorite"))
+            Session(id, j.optString("title", id), j.optLong("startedAt"), j.optInt("durationSec"), j.optBoolean("favorite"), j.optBoolean("ai"))
         } catch (e: Exception) {
             null
         }
@@ -90,6 +90,10 @@ object Store {
     fun rename(ctx: Context, id: String, title: String) {
         val t = title.trim()
         if (t.isNotEmpty()) readMeta(ctx, id)?.let { writeMeta(ctx, it.copy(title = t)) }
+    }
+
+    fun setAi(ctx: Context, id: String, ai: Boolean) {
+        readMeta(ctx, id)?.let { writeMeta(ctx, it.copy(ai = ai)) }
     }
 
     fun setFavorite(ctx: Context, id: String, fav: Boolean) {

@@ -34,7 +34,7 @@ object Pipeline {
         onStatus("최종 화자 분석 중…")
         try {
             val full = client.transcribeFull(wav)
-            if (full.isNotEmpty()) lines = full
+            if (full.isNotEmpty()) { lines = full; Store.setAi(ctx, id, true) }
         } catch (e: Exception) {
             warning = "텍스트 변환 실패 (${e.message?.take(120)}). 녹음은 안전하게 저장돼 있어요. 잠시 후 다시 실행해 보세요."
         }
@@ -46,6 +46,7 @@ object Pipeline {
         try {
             File(Store.dir(ctx, id), "summary.txt").writeText(client.summarize(Store.toText(lines)))
         } catch (e: Exception) {
+            if (!Store.file(ctx, id, "summary.txt").exists()) LocalSummary.write(ctx, id)
             warning = (warning?.plus(" / ") ?: "") + "요약 실패 (${e.message?.take(120)}). 다시 실행하면 요약만 새로 만듭니다."
         }
         return warning

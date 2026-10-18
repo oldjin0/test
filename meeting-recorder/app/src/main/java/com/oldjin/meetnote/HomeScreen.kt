@@ -255,6 +255,7 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 item { UpdateBanner() }
+                if (!busy) item { ModelInstallCard() }
                 if (busy) item {
                     Card(
                         Modifier.fillMaxWidth().clickable(onClick = onOpenLive),

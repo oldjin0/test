@@ -69,7 +69,7 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
     val warnMap by Analysis.warnings.collectAsState()
     val working = statusMap[id]
     var ver by remember { mutableIntStateOf(0) }
-    LaunchedEffect(working) { if (working == null) ver++ } // 분석이 끝나면 결과를 다시 읽는다
+    LaunchedEffect(working) { if (working == null) { ver++; session = Store.readMeta(ctx, id) } } // 분석이 끝나면 결과를 다시 읽는다
     val lines = remember(id, ver) { Store.loadLines(ctx, id) }
     val summary = remember(id, ver) { Store.loadSummary(ctx, id) }
     val wav = remember(id) { Store.file(ctx, id, "audio.wav") }
@@ -162,8 +162,14 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                 warnMap[id]?.let {
                     Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
                 }
+                val ai = session?.ai == true
+                Text(
+                    if (ai) "✓ AI 정밀 분석 완료 (화자 구분 · AI 요약)" else "기기 내 자막 · 간이 요약 (API 미사용)",
+                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                    color = if (ai) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
                 if (wav.exists()) {
-                    val done = lines.isNotEmpty() && summary != null
                     Button(
                         onClick = {
                             if (Prefs.apiKey(ctx).isNullOrBlank()) {
@@ -175,7 +181,12 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (done) "다시 분석 (텍스트 변환 · 요약)" else "텍스트 변환 · 요약 실행") }
+                    ) { Text(if (ai) "AI 다시 분석 (API 사용)" else "AI 정밀 분석 요청 (API 사용 · 화자 구분 + 요약)") }
+                    if (summary == null && lines.isNotEmpty()) {
+                        TextButton(onClick = { LocalSummary.write(ctx, id); ver++ }, modifier = Modifier.fillMaxWidth()) {
+                            Text("기기 내 간이 요약 만들기 (무료)")
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
                 }
             }
@@ -189,7 +200,7 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                 if (tab == 0) {
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(4.dp)) {
                         if (summary != null) MarkdownText(summary)
-                        else Text("아직 요약이 없습니다. 위의 \"텍스트 변환 · 요약 실행\" 버튼으로 만들 수 있어요.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        else Text("아직 요약이 없습니다. 위 버튼으로 기기 내 요약 또는 AI 분석을 실행하세요.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else if (lines.isEmpty()) {
                     Text("아직 텍스트로 변환되지 않았어요", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))

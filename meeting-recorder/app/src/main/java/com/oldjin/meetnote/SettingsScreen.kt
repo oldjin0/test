@@ -161,8 +161,8 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ) { Text(if (installed) "기기 내 인식 모델 설치됨" else if (prog != null) "$msg ${(prog!! * 100).toInt()}%" else "한국어 모델 설치 (약 80MB)") }
                 if (!installed && msg.startsWith("설치 실패")) Text(msg, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
             }
-            OptRow("종료 후 자동 분석", "녹음이 끝나면 바로 화자 구분 변환 (요청 1회)", optAuto, "opt_auto") { optAuto = it }
-            OptRow("요약 만들기", "변환 뒤 요약 생성 (요청 1회)", optSummary, "opt_summary") { optSummary = it }
+            OptRow("종료 후 AI 자동 분석", "끄면 기기 내 간이 요약만 만들고, 필요한 녹음만 상세 화면에서 AI 분석 (요청 1~2회)", optAuto, "opt_auto2") { optAuto = it }
+            OptRow("AI 요약", "AI 분석 때 요약도 생성 (요청 1회). 끄면 기기 내 요약을 사용", optSummary, "opt_summary") { optSummary = it }
 
             Spacer(Modifier.height(8.dp))
             Text("앱 업데이트", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)

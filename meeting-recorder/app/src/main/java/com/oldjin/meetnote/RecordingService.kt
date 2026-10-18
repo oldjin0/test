@@ -254,13 +254,17 @@ class RecordingService : Service() {
         val draft = Live.state.value.lines.filter { it.speaker != "!" }
         Store.saveLines(this, s.id, draft)
         var warning: String? = null
-        if (client == null) {
-            warning = "API 키 없이 녹음만 저장했습니다. 목록에서 이 녹음을 열어 나중에 텍스트 변환·요약을 실행할 수 있어요."
-        } else if (!Prefs.autoAnalyze(this)) {
-            warning = "자동 분석이 꺼져 있어요. 이 녹음을 열어 '텍스트 변환 · 요약 실행'을 누르면 그때 변환합니다."
-        } else if (duration >= 2) {
+        val useAi = client != null && Prefs.autoAnalyze(this) && duration >= 2
+        if (useAi) {
             warning = Pipeline.analyze(this, s.id) { status(it) }
             Live.update { it.copy(lines = Store.loadLines(this, s.id).ifEmpty { draft }) }
+        }
+        // 기본(API 없이): 실시간 자막으로 기기 내 간이 요약
+        if (!Store.file(this, s.id, "summary.txt").exists()) {
+            status("기기 내 요약 작성 중…")
+            if (!LocalSummary.write(this, s.id) && !useAi) {
+                warning = "자막이 없어 요약하지 못했어요. 이 녹음을 열어 'AI 정밀 분석'으로 변환할 수 있어요."
+            }
         }
 
         status("다운로드 폴더에 저장 중…")
