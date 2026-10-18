@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class ProcessingService : Service() {
     companion object {
         const val EXTRA_ID = "id"
+        const val EXTRA_MODE = "mode" // "ai"(기본) 또는 "whisper"
         private const val CHANNEL = "processing"
         private const val NOTIF_ID = 3
     }
@@ -31,6 +32,7 @@ class ProcessingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getStringExtra(EXTRA_ID)
+        val mode = intent?.getStringExtra(EXTRA_MODE) ?: "ai"
         getSystemService(NotificationManager::class.java)
             .createNotificationChannel(NotificationChannel(CHANNEL, "텍스트 변환", NotificationManager.IMPORTANCE_LOW))
         startForeground(NOTIF_ID, notification("텍스트 변환 중…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -47,7 +49,17 @@ class ProcessingService : Service() {
         scope.launch {
             var warning: String? = null
             try {
-                warning = Pipeline.analyze(this@ProcessingService, id) { Analysis.set(id, it) }
+                warning = if (mode == "whisper") {
+                    Analysis.set(id, "Whisper 모델 불러오는 중…")
+                    val lines = LocalWhisper.transcribe(this@ProcessingService, id) { Analysis.set(id, "Whisper 기기 내 변환 중 $it%") }
+                    if (lines.isEmpty()) "Whisper가 인식한 음성이 없어요." else {
+                        Store.saveLines(this@ProcessingService, id, lines)
+                        Store.setEngine(this@ProcessingService, id, "whisper")
+                        Analysis.set(id, "기기 내 요약 작성 중…")
+                        LocalSummary.write(this@ProcessingService, id)
+                        null
+                    }
+                } else Pipeline.analyze(this@ProcessingService, id) { Analysis.set(id, it) }
                 Store.readMeta(this@ProcessingService, id)?.let {
                     Analysis.set(id, "다운로드 폴더에 저장 중…")
                     try { Exporter.toDownloads(this@ProcessingService, it) } catch (_: Exception) {}

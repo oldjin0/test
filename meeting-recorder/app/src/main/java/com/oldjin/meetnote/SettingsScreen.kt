@@ -147,22 +147,26 @@ fun SettingsScreen(onBack: () -> Unit) {
             Text(
                 when (capMode) {
                     "live" -> "정확하고 빠르지만 API 한도를 씁니다."
-                    "device" -> "API·한도·네트워크 없이 기기에서 인식합니다. 정확도는 낮을 수 있고 화자 구분은 종료 후 분석에서 합니다. 한국어 모델(약 80MB)을 한 번 설치해야 합니다."
+                    "device" -> "API·한도 없이 기기에서 인식합니다. Google 기기 내 인식을 먼저 쓰고, 안 되면 Sherpa 모델로 바꿉니다. 화자 구분은 녹음 후 AI 분석에서 합니다."
                     else -> "녹음 중 자막을 만들지 않습니다. 녹음이 끝난 뒤에 변환할 수 있어요."
                 },
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             if (capMode == "device") {
-                val prog by ModelInstaller.progress.collectAsState()
-                val msg by ModelInstaller.message.collectAsState()
-                val installed = ModelInstaller.installed(ctx) || msg == "설치 완료"
-                OutlinedButton(
-                    onClick = { ModelInstaller.install(ctx) }, enabled = prog == null && !installed, modifier = Modifier.fillMaxWidth()
-                ) { Text(if (installed) "기기 내 인식 모델 설치됨" else if (prog != null) "$msg ${(prog!! * 100).toInt()}%" else "한국어 모델 설치 (약 80MB)") }
-                if (!installed && msg.startsWith("설치 실패")) Text(msg, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                Text(
+                    if (GoogleCaption.available(ctx)) "이 폰은 Google 기기 내 인식을 지원해요 (1순위로 사용, 안 되면 Sherpa로 자동 전환)"
+                    else "이 폰은 Google 기기 내 인식을 쓸 수 없어 Sherpa 모델을 사용해요",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.primary
+                )
             }
+
             OptRow("종료 후 AI 자동 분석", "끄면 기기 내 간이 요약만 만들고, 필요한 녹음만 상세 화면에서 AI 분석 (요청 1~2회)", optAuto, "opt_auto2") { optAuto = it }
             OptRow("AI 요약", "AI 분석 때 요약도 생성 (요청 1회). 끄면 기기 내 요약을 사용", optSummary, "opt_summary") { optSummary = it }
+
+            Spacer(Modifier.height(8.dp))
+            Text("기기 내 인식 모델 (무료 · 오프라인)", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Text("Wi-Fi에서 받는 것을 권장해요. 한 번 설치하면 API 없이 계속 사용합니다.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            LocalModels.ALL.forEach { ModelRow(it) }
 
             Spacer(Modifier.height(8.dp))
             Text("앱 업데이트", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)

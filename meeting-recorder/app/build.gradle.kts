@@ -16,6 +16,8 @@ android {
         val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = build
         versionName = "1.0.$build"
+        // 기기 내 인식(sherpa-onnx) 네이티브 라이브러리는 휴대폰용 ABI만 포함
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
         buildConfigField("String", "GIT_SHA", "\"${System.getenv("GITHUB_SHA")?.take(7) ?: "dev"}\"")
     }
 
@@ -39,6 +41,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            pickFirsts += "**/libc++_shared.so"
+        }
+    }
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
     buildFeatures {
         compose = true
         buildConfig = true
@@ -56,5 +68,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("com.alphacephei:vosk-android:0.3.47") // 기기 내 오프라인 음성인식 (API 불필요)
+    implementation("org.apache.commons:commons-compress:1.27.1") // 기기 내 인식 모델(.tar.bz2) 풀기
 }

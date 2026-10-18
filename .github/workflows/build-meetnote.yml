@@ -25,6 +25,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
+      - name: Fetch sherpa-onnx native libs (on-device speech recognition)
+        run: |
+          V=1.13.8
+          curl -fsSL -o sherpa.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v$V/sherpa-onnx-$V.aar \
+            || curl -fsSL -o sherpa.aar https://huggingface.co/csukuangfj2/sherpa-onnx-libs/resolve/main/android/aar/sherpa-onnx-$V.aar
+          rm -rf aarx && mkdir aarx && unzip -q sherpa.aar 'jni/*' -d aarx
+          for abi in arm64-v8a armeabi-v7a; do
+            mkdir -p app/src/main/jniLibs/$abi
+            cp -v aarx/jni/$abi/*.so app/src/main/jniLibs/$abi/
+          done
+          rm -rf aarx sherpa.aar
       - name: Build release APK
         run: gradle :app:assembleRelease --no-daemon --stacktrace
       - name: Rename APK

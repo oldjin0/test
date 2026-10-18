@@ -52,7 +52,7 @@ class RecordingService : Service() {
     private var job: Job? = null
     @Volatile private var stopRequested = false
     @Volatile private var live: LiveTranscriber? = null
-    @Volatile private var offline: OfflineTranscriber? = null
+    @Volatile private var engine: CaptionEngine? = null
     @Volatile private var draftOpen = true
     @Volatile private var liveGaveUp = false
     @Volatile private var chunkPausedUntil = 0L
@@ -156,15 +156,8 @@ class RecordingService : Service() {
         val mode = Prefs.captionMode(this)
         val liveOn = client != null && mode == "live"
         if (mode == "device") {
-            offline = try {
-                if (!ModelInstaller.installed(this)) throw IllegalStateException("기기 내 인식 모델이 설치되지 않았어요 (설정에서 설치)")
-                OfflineTranscriber(this, { t, i -> onLiveText(t, i) }, { commitLive() }).also {
-                    caption("기기 내 자막 (API 사용 안 함 · 화자 구분은 종료 후)")
-                }
-            } catch (e: Throwable) {
-                caption("기기 내 자막 시작 실패: ${e.message?.take(100)}", error = true)
-                null
-            }
+            // 모델 로딩이 녹음 시작을 늦추지 않도록 백그라운드에서 시작
+            scope.launch(Dispatchers.IO) { startDeviceEngine(preferGoogle = true) }
         } else if (mode == "off" || (client != null && !liveOn)) caption("실시간 자막 꺼짐 — 녹음 후 변환")
         val liveJob = if (liveOn && client != null) scope.launch(Dispatchers.IO) { runLive(client) } else null
 
@@ -209,7 +202,7 @@ class RecordingService : Service() {
                     }
                     val r = rms(buf, n)
                     live?.let { if (r >= SPEECH_RMS) it.markSpeech(); it.send(buf, n) }
-                    offline?.feed(buf, n)
+                    engine?.feed(buf, n)
                     val nowMs = System.currentTimeMillis()
                     if (r < 1.0) {
                         if (zeroSince == 0L) zeroSince = nowMs
@@ -233,8 +226,8 @@ class RecordingService : Service() {
         chunks.close()
         live?.close()
         liveJob?.cancel()
-        offline?.close()
-        offline = null
+        engine?.close()
+        engine = null
         commitLive()
 
         Live.update { it.copy(phase = Phase.Processing, level = 0f, partial = "", status = "남은 구간 변환 중…") }
@@ -285,6 +278,35 @@ class RecordingService : Service() {
                     PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
                 ).build()
         )
+    }
+
+    /** 기기 내 자막 엔진 시작: Google 기기 내 인식(Android 13+) → 안 되면 Sherpa. */
+    private fun startDeviceEngine(preferGoogle: Boolean, why: String? = null) {
+        if (stopRequested) return
+        val onText: (String, Boolean) -> Unit = { t, i -> onLiveText(t, i) }
+        val onEnd: () -> Unit = { commitLive() }
+        val e: CaptionEngine? = try {
+            if (preferGoogle && GoogleCaption.available(this)) {
+                GoogleCaption(this, Prefs.lang(this), onText, onEnd) { reason ->
+                    scope.launch(Dispatchers.IO) { engine = null; startDeviceEngine(false, reason) }
+                }
+            } else if (LocalModels.installed(this, LocalModels.KO_STREAM)) {
+                SherpaCaption(this, onText, onEnd)
+            } else null
+        } catch (t: Throwable) {
+            caption("기기 내 자막 시작 실패: ${t.message?.take(100)}", error = true)
+            return
+        }
+        if (stopRequested) { e?.close(); return }
+        engine = e
+        if (e == null) {
+            caption(
+                (why?.let { "Google 인식 불가($it). " } ?: "") + "실시간 자막 모델이 없어요 — 설정에서 '실시간 한국어 인식' 설치 (녹음은 정상)",
+                error = true
+            )
+        } else {
+            caption("${e.name} (API 사용 안 함)" + (why?.let { " · Google 인식 불가: $it" } ?: ""), error = false)
+        }
     }
 
     @Synchronized

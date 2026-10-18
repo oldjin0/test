@@ -163,8 +163,11 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                     Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
                 }
                 val ai = session?.ai == true
+                val whisperDone = session?.engine == "whisper"
                 Text(
-                    if (ai) "✓ AI 정밀 분석 완료 (화자 구분 · AI 요약)" else "기기 내 자막 · 간이 요약 (API 미사용)",
+                    if (ai) "✓ AI 정밀 분석 완료 (화자 구분 · AI 요약)"
+                    else if (whisperDone) "✓ Whisper 기기 내 정밀 변환 · 간이 요약 (API 미사용)"
+                    else "기기 내 실시간 자막 · 간이 요약 (API 미사용)",
                     fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                     color = if (ai) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 6.dp)
@@ -182,6 +185,19 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (ai) "AI 다시 분석 (API 사용)" else "AI 정밀 분석 요청 (API 사용 · 화자 구분 + 요약)") }
+                    OutlinedButton(
+                        onClick = {
+                            if (LocalModels.bestWhisper(ctx) == null) {
+                                Toast.makeText(ctx, "설정에서 Whisper 모델을 먼저 설치하세요", Toast.LENGTH_LONG).show()
+                            } else {
+                                ContextCompat.startForegroundService(
+                                    ctx, Intent(ctx, ProcessingService::class.java)
+                                        .putExtra(ProcessingService.EXTRA_ID, id).putExtra(ProcessingService.EXTRA_MODE, "whisper")
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                    ) { Text(if (whisperDone) "Whisper 다시 변환 (무료 · 기기 내)" else "Whisper 정밀 변환 (무료 · 기기 내 · 느림)") }
                     if (summary == null && lines.isNotEmpty()) {
                         TextButton(onClick = { LocalSummary.write(ctx, id); ver++ }, modifier = Modifier.fillMaxWidth()) {
                             Text("기기 내 간이 요약 만들기 (무료)")

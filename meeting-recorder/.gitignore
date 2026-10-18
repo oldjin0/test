@@ -3,3 +3,5 @@ build/
 local.properties
 .idea/
 *.iml
+# CI가 sherpa-onnx AAR에서 내려받아 넣는 네이티브 라이브러리
+app/src/main/jniLibs/
