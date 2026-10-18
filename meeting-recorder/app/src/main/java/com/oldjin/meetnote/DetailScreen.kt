@@ -1,7 +1,6 @@
 package com.oldjin.meetnote
 
 import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,13 +17,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,10 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,56 +48,45 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(id: String, onBack: () -> Unit) {
     val ctx = LocalContext.current
-    val session = remember(id) { Store.readMeta(ctx, id) }
+    var session by remember(id) { mutableStateOf(Store.readMeta(ctx, id)) }
     val lines = remember(id) { Store.loadLines(ctx, id) }
     val summary = remember(id) { Store.loadSummary(ctx, id) }
     val wav = remember(id) { Store.file(ctx, id, "audio.wav") }
     var tab by remember { mutableIntStateOf(if (summary != null) 0 else 1) }
     var confirmDelete by remember { mutableStateOf(false) }
 
-    val player = remember(id) {
-        ExoPlayer.Builder(ctx).build().apply {
-            if (wav.exists()) {
-                setMediaItem(MediaItem.fromUri(Uri.fromFile(wav)))
-                prepare()
-            }
-        }
-    }
-    DisposableEffect(player) { onDispose { player.release() } }
-    var playing by remember { mutableStateOf(false) }
-    var posMs by remember { mutableStateOf(0L) }
-    var durMs by remember { mutableStateOf(0L) }
-    var speed by remember { mutableFloatStateOf(1f) }
-    LaunchedEffect(player) {
-        while (true) {
-            playing = player.isPlaying
-            posMs = player.currentPosition
-            durMs = player.duration.coerceAtLeast(0L)
-            delay(250)
-        }
-    }
+    val ps by rememberPlayState()
+    val isThis = ps.id == id
+    val playing = isThis && ps.playing
+    val posMs = if (isThis) ps.posMs else 0L
+    val durMs = if (isThis) ps.durMs else 0L
     val curSec = (posMs / 1000).toInt()
-    val activeIdx = if (playing || posMs > 0) lines.indexOfLast { it.sec <= curSec } else -1
+    val activeIdx = if (isThis && (playing || posMs > 0)) lines.indexOfLast { it.sec <= curSec } else -1
+    var renaming by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(session?.title ?: "회의", fontWeight = FontWeight.Bold, maxLines = 1) },
+                title = { Text(session?.title ?: "회의", fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.clickable { renaming = true }) },
                 navigationIcon = { IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로") } },
                 actions = {
+                    IconButton({ renaming = true }) { Icon(Icons.Filled.Edit, "이름 변경") }
+                    IconButton({
+                        session?.let { Store.setFavorite(ctx, id, !it.favorite); session = Store.readMeta(ctx, id) }
+                    }) {
+                        Icon(Icons.Filled.Star, "즐겨찾기", tint = if (session?.favorite == true) Color(0xFFF4B400) else MaterialTheme.colorScheme.outlineVariant)
+                    }
                     IconButton({
                         val text = buildString {
                             summary?.let { append(it).append("\n\n") }
@@ -122,31 +107,28 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                 Column(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).padding(12.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Box(
-                            Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
-                                .clickable { if (playing) player.pause() else player.play() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (playing) Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                repeat(2) { Box(Modifier.size(width = 4.dp, height = 16.dp).background(MaterialTheme.colorScheme.onPrimary)) }
-                            } else Icon(Icons.Filled.PlayArrow, "재생", tint = MaterialTheme.colorScheme.onPrimary)
-                        }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayButton(playing, 48.dp) { Playback.toggle(ctx, id) }
                         Column(Modifier.weight(1f)) {
                             Slider(
-                                value = if (durMs > 0) posMs.toFloat() / durMs else 0f,
-                                onValueChange = { if (durMs > 0) { player.seekTo((it * durMs).toLong()); posMs = player.currentPosition } }
+                                value = if (durMs > 0) (posMs.toFloat() / durMs).coerceIn(0f, 1f) else 0f,
+                                onValueChange = { f ->
+                                    if (Playback.load(ctx, id)) {
+                                        val d = Playback.snapshot().durMs
+                                        if (d > 0) Playback.seekTo(ctx, id, (f * d).toLong())
+                                    }
+                                }
                             )
-                            Text("${fmtTime(curSec)} / ${fmtTime((durMs / 1000).toInt())}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(fmtTime(curSec), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(fmtTime((durMs / 1000).toInt().takeIf { it > 0 } ?: (session?.durationSec ?: 0)), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
-                        Text(
-                            "${if (speed % 1f == 0f) speed.toInt().toString() else speed.toString()}x",
-                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
-                                speed = when (speed) { 1f -> 1.25f; 1.25f -> 1.5f; 1.5f -> 2f; else -> 1f }
-                                player.setPlaybackSpeed(speed)
-                            }.padding(8.dp)
-                        )
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                        ChipText("-10초") { Playback.skip(ctx, id, -10_000) }
+                        ChipText("+10초") { Playback.skip(ctx, id, 10_000) }
+                        ChipText("${ps.speed.let { if (it % 1f == 0f) it.toInt().toString() else it.toString() }}x") { Playback.cycleSpeed() }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -169,7 +151,7 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                     LazyColumn(Modifier.fillMaxSize()) {
                         itemsIndexed(lines) { i, l ->
                             LineRow(l, highlighted = i == activeIdx, onClick = {
-                                if (wav.exists()) { player.seekTo(l.sec * 1000L); player.play() }
+                                if (wav.exists()) Playback.seekTo(ctx, id, l.sec * 1000L, play = true)
                             })
                         }
                     }
@@ -186,6 +168,18 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
         }
     }
 
+    if (renaming) {
+        var text by remember { mutableStateOf(session?.title.orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { renaming = false },
+            title = { Text("이름 변경") },
+            text = { OutlinedTextField(text, { text = it }, singleLine = true) },
+            confirmButton = {
+                TextButton({ Store.rename(ctx, id, text); session = Store.readMeta(ctx, id); renaming = false }) { Text("저장") }
+            },
+            dismissButton = { TextButton({ renaming = false }) { Text("취소") } }
+        )
+    }
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -195,4 +189,12 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
             dismissButton = { TextButton({ confirmDelete = false }) { Text("취소") } }
         )
     }
+}
+
+@Composable
+private fun ChipText(label: String, onClick: () -> Unit) {
+    Text(
+        label, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
+        modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 8.dp)
+    )
 }

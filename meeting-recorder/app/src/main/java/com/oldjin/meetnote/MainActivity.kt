@@ -47,6 +47,7 @@ sealed interface Screen {
 }
 
 private fun startRecording(ctx: Context) {
+    Playback.stop()
     Live.state.value = LiveState(phase = Phase.Recording, status = "준비 중…")
     ContextCompat.startForegroundService(ctx, Intent(ctx, RecordingService::class.java).setAction(RecordingService.ACTION_START))
 }

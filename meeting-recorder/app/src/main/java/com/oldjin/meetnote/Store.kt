@@ -15,7 +15,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-data class Session(val id: String, val title: String, val startedAt: Long, val durationSec: Int)
+data class Session(val id: String, val title: String, val startedAt: Long, val durationSec: Int, val favorite: Boolean = false)
 
 const val SAMPLE_RATE = 16000
 
@@ -55,7 +55,7 @@ object Store {
 
     fun writeMeta(ctx: Context, s: Session) {
         file(ctx, s.id, "meta.json").writeText(
-            JSONObject().put("title", s.title).put("startedAt", s.startedAt).put("durationSec", s.durationSec).toString()
+            JSONObject().put("title", s.title).put("startedAt", s.startedAt).put("durationSec", s.durationSec).put("favorite", s.favorite).toString()
         )
     }
 
@@ -64,7 +64,7 @@ object Store {
         if (!f.exists()) return null
         return try {
             val j = JSONObject(f.readText())
-            Session(id, j.optString("title", id), j.optLong("startedAt"), j.optInt("durationSec"))
+            Session(id, j.optString("title", id), j.optLong("startedAt"), j.optInt("durationSec"), j.optBoolean("favorite"))
         } catch (e: Exception) {
             null
         }
@@ -87,7 +87,17 @@ object Store {
         }.sortedByDescending { it.startedAt }
     }
 
+    fun rename(ctx: Context, id: String, title: String) {
+        val t = title.trim()
+        if (t.isNotEmpty()) readMeta(ctx, id)?.let { writeMeta(ctx, it.copy(title = t)) }
+    }
+
+    fun setFavorite(ctx: Context, id: String, fav: Boolean) {
+        readMeta(ctx, id)?.let { writeMeta(ctx, it.copy(favorite = fav)) }
+    }
+
     fun delete(ctx: Context, id: String) {
+        if (Playback.currentId == id) Playback.stop()
         dir(ctx, id).deleteRecursively()
     }
 
