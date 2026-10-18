@@ -65,5 +65,20 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:text="yt-dlp 업데이트 (변환이 실패할 때)" />
+
+        <Button
+            android:id="@+id/loginBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="유튜브 로그인 (로그인 요구 오류 시)" />
+
+        <Button
+            android:id="@+id/logoutBtn"
+            style="?android:attr/buttonBarButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="로그아웃"
+            android:visibility="gone" />
     </LinearLayout>
 </ScrollView>

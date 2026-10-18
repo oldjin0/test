@@ -32,6 +32,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var spinner: Spinner
     private lateinit var convertBtn: Button
     private lateinit var updateBtn: Button
+    private lateinit var loginBtn: Button
+    private lateinit var logoutBtn: Button
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
 
@@ -45,6 +47,8 @@ class MainActivity : AppCompatActivity() {
         spinner = findViewById(R.id.qualitySpinner)
         convertBtn = findViewById(R.id.convertBtn)
         updateBtn = findViewById(R.id.updateBtn)
+        loginBtn = findViewById(R.id.loginBtn)
+        logoutBtn = findViewById(R.id.logoutBtn)
         progress = findViewById(R.id.progress)
         status = findViewById(R.id.status)
 
@@ -59,12 +63,25 @@ class MainActivity : AppCompatActivity() {
 
         convertBtn.setOnClickListener { convert() }
         updateBtn.setOnClickListener { updateYtDlp() }
+        loginBtn.setOnClickListener { startActivity(Intent(this, LoginActivity::class.java)) }
+        logoutBtn.setOnClickListener {
+            LoginActivity.logout(this)
+            refreshLoginUi()
+            setStatus("로그아웃됨")
+        }
 
         setBusy(true, "엔진 초기화 중...")
         thread {
             try {
                 YoutubeDL.getInstance().init(applicationContext)
                 FFmpeg.getInstance().init(applicationContext)
+                // 내장 yt-dlp는 금방 낡아서 유튜브가 거부하므로 켤 때마다 최신으로 맞춘다
+                ui { setStatus("yt-dlp 최신 버전 확인 중...") }
+                try {
+                    YoutubeDL.getInstance()
+                        .updateYoutubeDL(applicationContext, YoutubeDL.UpdateChannel.STABLE)
+                } catch (_: Exception) {
+                }
                 ready = true
                 ui { setBusy(false, "준비됨") }
             } catch (e: Exception) {
@@ -89,6 +106,8 @@ class MainActivity : AppCompatActivity() {
                     addOption("--audio-format", "mp3")
                     addOption("--audio-quality", bitrate)
                     addOption("-o", "${workDir.absolutePath}/%(title)s.%(ext)s")
+                    val cookies = LoginActivity.cookieFile(this@MainActivity)
+                    if (cookies.exists()) addOption("--cookies", cookies.absolutePath)
                 }
                 YoutubeDL.getInstance().execute(request, "ytmp3") { p, _, line ->
                     ui {
@@ -101,7 +120,10 @@ class MainActivity : AppCompatActivity() {
                 saveToDownloads(mp3)
                 ui { setBusy(false, "완료! 다운로드(Download) 폴더에 저장됨\n${mp3.name}") }
             } catch (e: Exception) {
-                ui { setBusy(false, "실패: ${e.message}") }
+                val hint = if (e.message.orEmpty().contains("sign in", ignoreCase = true) &&
+                    !LoginActivity.cookieFile(this@MainActivity).exists()
+                ) "\n\n→ 아래 '유튜브 로그인' 후 다시 시도하세요" else ""
+                ui { setBusy(false, "실패: ${e.message}$hint") }
             } finally {
                 workDir.deleteRecursively()
             }
@@ -133,6 +155,17 @@ class MainActivity : AppCompatActivity() {
                 ui { setBusy(false, "업데이트 실패: ${e.message}") }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshLoginUi()
+    }
+
+    private fun refreshLoginUi() {
+        val loggedIn = LoginActivity.cookieFile(this).exists()
+        loginBtn.text = if (loggedIn) "유튜브 다시 로그인" else "유튜브 로그인 (로그인 요구 오류 시)"
+        logoutBtn.visibility = if (loggedIn) android.view.View.VISIBLE else android.view.View.GONE
     }
 
     private fun setBusy(busy: Boolean, msg: String) {
