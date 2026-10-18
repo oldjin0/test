@@ -146,4 +146,37 @@ void main() {
       expect(isColorImage(toGrayJpeg(real)), isFalse);
     });
   });
+
+  test('page signatures tell gray files and formats apart', () {
+    final gray = img.Image(width: 40, height: 60, numChannels: 1);
+    final rgb = img.Image(width: 40, height: 60, numChannels: 3);
+    // a scanner's one-channel JPEG: SOI, SOF0 (60x40, 1 component), SOS
+    final oneChannel = Uint8List.fromList([
+      0xFF, 0xD8, //
+      0xFF, 0xC0, 0, 11, 8, 0, 60, 0, 40, 1, 1, 0x11, 0, //
+      0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 63, 0,
+    ]);
+    expect(pageSignature(oneChannel).gray, isTrue);
+    expect(pageSignature(oneChannel).key, startsWith('jpg 40x60 c1'));
+    expect(pageSignature(img.encodeJpg(rgb)).gray, isFalse);
+    expect(pageSignature(img.encodePng(gray)).gray, isTrue);
+    expect(pageSignature(img.encodePng(rgb)).gray, isFalse);
+    final a = pageSignature(img.encodeJpg(rgb, quality: 90));
+    final b = pageSignature(img.encodeJpg(rgb, quality: 60));
+    expect(a.key, isNot(b.key), reason: 'other quality tables');
+    expect(pageSignature(img.encodeJpg(rgb, quality: 90)).key, a.key);
+  });
+
+  test('only pages off the black-and-white pattern are color candidates', () {
+    const page = PageSignature('jpg 800x1200 c3 q1', 100000);
+    final sigs = [for (var i = 0; i < 40; i++) page];
+    sigs[10] = const PageSignature('jpg 800x1200 c3 q2', 100000); // other encoder
+    sigs[20] = const PageSignature('jpg 800x1200 c3 q1', 250000); // much bigger
+    sigs[30] = const PageSignature('jpg 800x1200 c1 q1', 50000, gray: true);
+    sigs[0] = const PageSignature('jpg 800x1200 c1 q1', 50000, gray: true);
+    expect(colorCandidates(sigs), [1, 2, 10, 20, 38, 39]);
+    // no pattern: everything not known gray
+    final mixed = [for (var i = 0; i < 6; i++) PageSignature('k$i', 10)];
+    expect(colorCandidates(mixed), [0, 1, 2, 3, 4, 5]);
+  });
 }

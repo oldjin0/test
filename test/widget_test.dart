@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:manga_viewer/color_learner.dart';
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/colorizer.dart';
 import 'package:manga_viewer/comic_loader.dart';
@@ -974,7 +975,11 @@ void main() {
   test('background colorizing keeps the app alive until its pages are done', () async {
     final calls = <int>[];
     final service = await ColorizeService.start(); // no model: tone filter
-    keepAliveWhileColoring(service, keepAlive: (left) async => calls.add(left));
+    keepAliveWhileColoring(
+      service,
+      keepAlive: (left) async => calls.add(left),
+      learning: ValueNotifier(0),
+    );
     final dir = Directory.systemTemp.createTempSync('alive');
     addTearDown(() => dir.deleteSync(recursive: true));
     final page = img.encodePng(img.Image(width: 20, height: 20, numChannels: 3));
@@ -987,6 +992,44 @@ void main() {
     expect(calls.first, greaterThan(0), reason: 'started with the first pages queued');
     expect(calls.last, 0, reason: 'let go when they are done');
     expect(calls.length, lessThan(8), reason: 'not on every page');
+  });
+
+  test('scanning or learning a book keeps the app alive too', () async {
+    final calls = <int>[];
+    final service = await ColorizeService.start();
+    final learning = ValueNotifier<int>(0);
+    keepAliveWhileColoring(service, keepAlive: (left) async => calls.add(left), learning: learning);
+    learning.value = 1;
+    learning.value = 0;
+    expect(calls, [1, 0]);
+  });
+
+  test('the color pages of a book are found off the reader, by pattern', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await LibraryStore.load();
+    final dir = Directory.systemTemp.createTempSync('scan');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final bw = img.Image(width: 60, height: 90, numChannels: 3);
+    img.fill(bw, color: img.ColorRgb8(240, 240, 240));
+    img.fillRect(bw, x1: 10, y1: 10, x2: 50, y2: 50, color: img.ColorRgb8(20, 20, 20));
+    final color = img.Image(width: 60, height: 90, numChannels: 3);
+    img.fill(color, color: img.ColorRgb8(230, 90, 40));
+    final archive = Archive();
+    for (var i = 0; i < 20; i++) {
+      final bytes = i == 9 ? img.encodeJpg(color, quality: 95) : img.encodeJpg(bw, quality: 80);
+      archive.addFile(ArchiveFile('p${i.toString().padLeft(2, '0')}.jpg', bytes.length, bytes));
+    }
+    final path = p.join(dir.path, 'book.zip');
+    File(path).writeAsBytesSync(ZipEncoder().encode(archive));
+    final busy = <int>[];
+    final before = ColorLearner.instance.busy.value; // other tests' books
+    void watch() => busy.add(ColorLearner.instance.busy.value);
+    ColorLearner.instance.busy.addListener(watch);
+    addTearDown(() => ColorLearner.instance.busy.removeListener(watch));
+    await ColorLearner.instance.learn(path, store, ColorizeService.start());
+    expect(store.foundRefs(path), [9]);
+    expect(busy, [before + 1, before]);
+    expect(ColorLearner.instance.status.value.containsKey(path), isFalse);
   });
 
   testWidgets('home shows library tabs', (tester) async {

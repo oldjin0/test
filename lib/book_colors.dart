@@ -127,6 +127,107 @@ int? _jpegComponents(Uint8List b) {
   return null;
 }
 
+/// What a page looks like from its file header alone, without decoding it:
+/// the black-and-white pages of a book come out of one scanner or one
+/// process and share it, while color inserts and covers usually do not.
+class PageSignature {
+  const PageSignature(this.key, this.size, {this.gray = false});
+
+  /// Format, size, channels, subsampling and quantization tables.
+  final String key;
+
+  /// Bytes of the encoded file.
+  final int size;
+
+  /// Known black-and-white from the header (one-channel JPEG, gray PNG).
+  final bool gray;
+}
+
+PageSignature pageSignature(Uint8List b) {
+  // JPEG: SOF (size, channels, sampling) and DQT (quality tables)
+  if (b.length > 4 && b[0] == 0xFF && b[1] == 0xD8) {
+    var i = 2, q = 0;
+    String? sof;
+    var comps = 0;
+    while (i + 4 < b.length) {
+      if (b[i] != 0xFF) break;
+      final marker = b[i + 1];
+      if (marker == 0xD8 || (marker >= 0xD0 && marker <= 0xD7)) {
+        i += 2;
+        continue;
+      }
+      final len = (b[i + 2] << 8) | b[i + 3];
+      if (marker == 0xDB) {
+        for (var k = i + 4; k < math.min(b.length, i + 2 + len); k++) {
+          q = (q * 31 + b[k]) & 0x7fffffff;
+        }
+      } else if (marker >= 0xC0 &&
+          marker <= 0xCF &&
+          marker != 0xC4 &&
+          marker != 0xC8 &&
+          marker != 0xCC &&
+          i + 9 < b.length) {
+        final h = (b[i + 5] << 8) | b[i + 6], w = (b[i + 7] << 8) | b[i + 8];
+        comps = b[i + 9];
+        final sampling = [
+          for (var c = 0; c < comps && i + 11 + c * 3 < b.length; c++) b[i + 11 + c * 3],
+        ].join('.');
+        sof = 'jpg ${w}x$h c$comps s$sampling';
+      } else if (marker == 0xDA) {
+        break; // image data follows
+      }
+      i += 2 + len;
+    }
+    return PageSignature('${sof ?? 'jpg'} q$q', b.length, gray: comps == 1);
+  }
+  // PNG: IHDR size, bit depth and color type (0, 4: gray)
+  if (b.length > 26 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) {
+    final w = (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19];
+    final h = (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23];
+    final type = b[25];
+    return PageSignature('png ${w}x$h d${b[24]} t$type', b.length, gray: type == 0 || type == 4);
+  }
+  return PageSignature(
+    'other ${b.length > 12 ? String.fromCharCodes(b.sublist(8, 12)) : ''}',
+    b.length,
+  );
+}
+
+/// The pages worth decoding to look for color: the black-and-white pages
+/// share a signature (the pattern), so the ones that do not - or that are
+/// much bigger than their pattern - are the candidates; the first and last
+/// pages (covers) always are. Pages known gray from their header never are.
+/// Without a clear pattern every page is a candidate.
+List<int> colorCandidates(List<PageSignature> sigs) {
+  final n = sigs.length;
+  final counts = <String, int>{};
+  for (final s in sigs) {
+    if (!s.gray) counts[s.key] = (counts[s.key] ?? 0) + 1;
+  }
+  final pattern = {
+    for (final MapEntry(:key, :value) in counts.entries)
+      if (value >= math.max(5, n * 0.15)) key,
+  };
+  final medians = <String, int>{};
+  for (final key in pattern) {
+    final sizes = [
+      for (final s in sigs)
+        if (s.key == key) s.size,
+    ]..sort();
+    medians[key] = sizes[sizes.length ~/ 2];
+  }
+  return [
+    for (var i = 0; i < n; i++)
+      if (!sigs[i].gray &&
+          (i < 3 ||
+              i >= n - 2 ||
+              pattern.isEmpty ||
+              !pattern.contains(sigs[i].key) ||
+              sigs[i].size > medians[sigs[i].key]! * 1.8))
+        i,
+  ];
+}
+
 /// Learns a book's correction from (model output on the gray copy, real
 /// color page) pairs. Null when the pages hold too little color to learn
 /// from.

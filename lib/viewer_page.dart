@@ -9,7 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'book_colors.dart';
-import 'book_palette.dart';
+import 'color_learner.dart';
 import 'colorize_service.dart';
 import 'colorizer.dart';
 import 'comic_loader.dart';
@@ -80,15 +80,7 @@ Future<void> prepareBook(
 
 /// Top level on purpose: a closure made inside a method could share its
 /// context with the book (and its futures), which cannot cross isolates.
-Future<List<int>> _paletteInBackground(List<Uint8List> pages) =>
-    Isolate.run(() => extractBookPalette(pages));
-
 Future<bool> _isColorInBackground(Uint8List bytes) => Isolate.run(() => isColorImage(bytes));
-
-Future<Uint8List> _grayInBackground(Uint8List bytes) => Isolate.run(() => toGrayJpeg(bytes));
-
-Future<BookColorMap?> _learnInBackground(List<(Uint8List, Uint8List)> pairs) =>
-    Isolate.run(() => learnBookColors(pairs));
 
 /// Color matrix for the reader's contrast and saturation settings (1 = no
 /// change), or null when both are unchanged. Saturation first, then contrast.
@@ -178,6 +170,7 @@ class _ViewerPageState extends State<ViewerPage> {
   @override
   void initState() {
     super.initState();
+    ColorLearner.instance.status.addListener(_onLearning);
     _store.addListener(_onStore);
     _vPositions.itemPositions.addListener(_onVerticalScroll);
     AppPlatform.keepScreenOn(_store.keepScreenOn);
@@ -221,7 +214,7 @@ class _ViewerPageState extends State<ViewerPage> {
       _saveProgress();
       _focus();
       unawaited(_findNext());
-      unawaited(_learnColors(book));
+      unawaited(_learnColors());
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
@@ -322,97 +315,17 @@ class _ViewerPageState extends State<ViewerPage> {
 
   /// One page (spread) forward or back: keys, taps and auto turn.
   /// What the colorizer is learning about this book, for the status chip.
-  String? _learning;
+  String? get _learning => ColorLearner.instance.status.value[widget.path];
 
-  void _learningIs(String? text) {
-    if (mounted && text != _learning) setState(() => _learning = text);
+  void _onLearning() {
+    if (mounted) setState(() {});
   }
 
-  /// Learns this book's colors from its own color pages: finds them once by
-  /// scanning every page (the cover, color inserts, wherever they are in the
-  /// archive or folder), adds the pages the reader marked, runs the model on
-  /// black-and-white copies of them and compares with the real colors (see
-  /// BookColorMap). Until that is done, the palette of those pages is used.
-  /// Redone whenever the set of reference pages changes.
-  Future<void> _learnColors(ComicBook book) async {
-    if (!_store.bookPalette) return;
-    final path = widget.path;
-    await _store.loadLook(path);
-    if (!mounted) return;
-    _store.notifyLook();
-    if (_store.foundRefs(path) == null) {
-      final found = <int>[];
-      for (var i = 0; i < book.length; i++) {
-        if (!mounted) return;
-        if (i % 10 == 0) _learningIs('컬러 페이지 찾는 중 ${i + 1}/${book.length}');
-        try {
-          if (await _isColorInBackground(await book.page(i))) found.add(i);
-        } catch (_) {}
-      }
-      _store.setFoundRefs(path, found);
-    }
-    _learningIs(null);
-    await _learnFromReferences(book);
-  }
-
-  bool _learningRefs = false;
-
-  Future<void> _learnFromReferences(ComicBook book) async {
-    final path = widget.path;
-    if (_learningRefs || !_store.bookPalette || _store.learnedCurrent(path)) return;
-    final refs = _store.referencesOf(path);
-    final refsKey = _store.referenceKey(path);
-    if (refs.isEmpty) {
-      await _store.setLearned(path, refsKey, null);
-      return;
-    }
-    _learningRefs = true;
-    try {
-      // Spread over the book, at most 8 pages.
-      final picked = refs.length <= 8
-          ? refs
-          : [for (var k = 0; k < 8; k++) refs[k * refs.length ~/ 8]];
-      final real = <Uint8List>[];
-      for (final i in picked) {
-        try {
-          real.add(await book.page(i));
-        } catch (_) {}
-      }
-      // the palette of those pages serves until the learning is done
-      _store.setPalette(path, await _paletteInBackground(real));
-      final service = await widget.colorizer;
-      if (!service.modelLoaded) return;
-      final pairs = <(Uint8List, Uint8List)>[];
-      for (final (k, bytes) in real.indexed) {
-        if (!mounted) return;
-        _learningIs('색 참고 페이지 학습 중 ${k + 1}/${real.length}');
-        final gray = await _grayInBackground(bytes);
-        // the model on a black-and-white copy, as it sees the other pages
-        final key = ColorizeService.plainKey(
-          ColorizeService.keyFor('ref:$path', picked[k], denoise: _store.denoise),
-        );
-        try {
-          final r = await service.colorizeInBackground(
-            key,
-            () async => gray,
-            denoise: _store.denoise,
-            ink: 0,
-          );
-          pairs.add((r.bytes, bytes));
-        } catch (_) {}
-      }
-      final map = await _learnInBackground(pairs);
-      if (!mounted || _store.referenceKey(path) != refsKey) return;
-      await _store.setLearned(path, refsKey, map);
-      _say(
-        map == null
-            ? '컬러 페이지에서 배울 색이 충분하지 않아, 그 페이지들의 색감만 따릅니다.'
-            : '컬러 페이지 ${real.length}장에서 이 책의 색을 배웠습니다. 채색이 그 색으로 바뀝니다.',
-      );
-    } finally {
-      _learningRefs = false;
-      _learningIs(null);
-    }
+  /// Learns this book's colors from its own color pages (ColorLearner: it
+  /// goes on after the reader closes, with the screen off too).
+  Future<void> _learnColors() async {
+    final message = await ColorLearner.instance.learn(widget.path, _store, widget.colorizer);
+    if (message != null && mounted) _say(message);
   }
 
   /// Marks the visible page as a color reference of this book, or unmarks it.
@@ -433,7 +346,7 @@ class _ViewerPageState extends State<ViewerPage> {
           ? '${page + 1}쪽을 색 참고 페이지로 지정했습니다. 다시 배웁니다.'
           : '${page + 1}쪽을 색 참고에서 뺐습니다. 다시 배웁니다.',
     );
-    unawaited(_learnFromReferences(book));
+    unawaited(_learnColors());
   }
 
   Future<void> _findNext() async {
@@ -694,6 +607,7 @@ class _ViewerPageState extends State<ViewerPage> {
 
   @override
   void dispose() {
+    ColorLearner.instance.status.removeListener(_onLearning);
     _vPositions.itemPositions.removeListener(_onVerticalScroll);
     AppPlatform.keepScreenOn(false);
     applyOrientation('auto');

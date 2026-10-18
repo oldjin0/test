@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'archive_tar.dart';
+import 'color_learner.dart';
 import 'colorize_service.dart';
 import 'comic_loader.dart' show isComicFile;
 import 'colorizer.dart' show denoiserAsset;
@@ -42,10 +43,13 @@ Future<void> main(List<String> args) async {
 void keepAliveWhileColoring(
   ColorizeService service, {
   Future<void> Function(int left) keepAlive = AppPlatform.keepAlive,
+  ValueNotifier<int>? learning,
 }) {
+  final learner = learning ?? ColorLearner.instance.busy;
   var last = 0;
   void update() {
-    final left = service.backgroundLeft.value;
+    // scanning or learning a book counts as work too
+    final left = service.backgroundLeft.value + learner.value;
     // Start and stop at once; while running, refresh the count every 5 pages.
     if ((left == 0) != (last == 0) || (last - left).abs() >= 5) {
       last = left;
@@ -54,6 +58,7 @@ void keepAliveWhileColoring(
   }
 
   service.backgroundLeft.addListener(update);
+  learner.addListener(update);
 }
 
 /// The book named on the command line (Explorer's "open with"), if any.
