@@ -67,8 +67,13 @@ class _Job {
   /// Color e-ink processing level the job was asked with (0 = none).
   final int ink;
 
-  /// Queued by [ColorizeService.colorizeInBackground] (whole-book colorizing).
+  /// Waiting in the background queue (whole-book colorizing and the like).
   bool background = false;
+
+  /// Asked for by background colorizing, even if the reader now wants it
+  /// too: it is not dropped when the reader moves on (it goes back to the
+  /// background queue), and it counts in [ColorizeService.backgroundLeft].
+  bool wanted = false;
 
   /// Reads the page when the job reaches the front of the queue, so queued
   /// pages cost no memory.
@@ -185,11 +190,15 @@ class ColorizeService {
     return job.completer.future;
   }
 
-  /// Pages still to do in the background queue (running one included).
+  /// Pages background colorizing still has to do, wherever they wait (some
+  /// may have moved to the reader's queue; the running one included).
   final backgroundLeft = ValueNotifier<int>(0);
 
   void _updateBackgroundLeft() {
-    backgroundLeft.value = _background.length + ((_running?.background ?? false) ? 1 : 0);
+    backgroundLeft.value =
+        _background.length +
+        _queue.values.where((j) => j.wanted).length +
+        ((_running?.wanted ?? false) ? 1 : 0);
   }
 
   /// Queues a page for colorizing when nothing the reader is looking at is
@@ -205,8 +214,14 @@ class ColorizeService {
     int? ink,
   }) {
     final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
-    if (existing != null) return existing.completer.future;
-    final job = _Job(key, loadPage, hints, denoise, look, ink: ink)..background = true;
+    if (existing != null) {
+      existing.wanted = true;
+      _updateBackgroundLeft();
+      return existing.completer.future;
+    }
+    final job = _Job(key, loadPage, hints, denoise, look, ink: ink)
+      ..background = true
+      ..wanted = true;
     _background[key] = job;
     _updateBackgroundLeft();
     unawaited(_pump());
@@ -219,6 +234,11 @@ class ColorizeService {
       j.completer.completeError(const _Cancelled());
     }
     _background.clear();
+    // Pages the reader wants too stay, but are no longer counted.
+    for (final j in _queue.values) {
+      j.wanted = false;
+    }
+    _running?.wanted = false;
     _updateBackgroundLeft();
   }
 
@@ -231,11 +251,17 @@ class ColorizeService {
       if (j != null) keep[k] = j;
     }
     for (final j in _queue.values) {
-      j.completer.completeError(const _Cancelled());
+      if (j.wanted) {
+        // background colorizing still wants it: back to its queue
+        _background[j.key] = j..background = true;
+      } else {
+        j.completer.completeError(const _Cancelled());
+      }
     }
     _queue
       ..clear()
       ..addAll(keep);
+    _updateBackgroundLeft();
   }
 
   Future<void> _pump() async {

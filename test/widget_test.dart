@@ -438,7 +438,7 @@ void main() {
       // The reader turns to a page: it goes first; and b4 is wanted too.
       final f1 = s.colorize('f1', () => load('f1'));
       final b4 = s.colorize('b4', () => load('b4')); // promoted out of the background
-      expect(s.backgroundLeft.value, 3, reason: 'b4 left the background queue');
+      expect(s.backgroundLeft.value, 4, reason: 'b4 is still background work, now first in line');
       await Future.wait([f1, b4, ...done]);
       expect(order, ['b1', 'f1', 'b4', 'b2', 'b3']);
       expect(s.backgroundLeft.value, 0);
@@ -466,6 +466,36 @@ void main() {
       expect(results['c2'], true);
       expect(results['c3'], true);
       expect(s.backgroundLeft.value, 0);
+    });
+
+    test('whole-book pages the reader asked for too are not lost when it moves on', () async {
+      final s = await ColorizeService.start(cacheDir: cache);
+      final counts = <int>[];
+      final done = <String>[];
+      final all = [
+        for (var i = 0; i < 8; i++)
+          s
+              .colorizeInBackground('w$i', () async => grayPage())
+              .then<void>((_) => done.add('w$i'), onError: (Object e) => done.add('lost w$i')),
+      ];
+      // the reader reads ahead over some of them (promoting them), then moves on
+      for (var i = 2; i < 6; i++) {
+        s.colorize('w$i', () async => grayPage()).ignore();
+      }
+      expect(s.backgroundLeft.value, 8, reason: 'still counted while in the reader queue');
+      s.backgroundLeft.addListener(() => counts.add(s.backgroundLeft.value));
+      s.focus(const []);
+      await Future.wait(all);
+      expect(done.where((d) => d.startsWith('lost')), isEmpty);
+      expect(done, hasLength(8));
+      expect(s.backgroundLeft.value, 0);
+      for (var k = 1; k < counts.length; k++) {
+        expect(
+          counts[k],
+          lessThanOrEqualTo(counts[k - 1]),
+          reason: 'the count only goes down: $counts',
+        );
+      }
     });
 
     test('focus drops queued pages the reader moved away from', () async {
