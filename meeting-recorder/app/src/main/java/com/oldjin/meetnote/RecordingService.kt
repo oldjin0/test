@@ -141,6 +141,7 @@ class RecordingService : Service() {
             for (c in chunks) handleChunk(client, c)
         }
 
+        if (client == null) status("녹음 중 · API 키 없음 (녹음만 저장, 나중에 변환 가능)")
         val liveJob = if (client != null) scope.launch(Dispatchers.IO) { runLive(client) } else null
 
         var total = 0L
@@ -210,29 +211,16 @@ class RecordingService : Service() {
         val duration = (total / (SAMPLE_RATE * 2)).toInt()
         Store.writeMeta(this, s.copy(durationSec = duration))
 
-        var lines = Live.state.value.lines.filter { it.speaker != "!" }
+        // 실시간 초안을 먼저 저장해 둔다 (이후 분석이 실패해도 녹음·초안은 남는다)
+        val draft = Live.state.value.lines.filter { it.speaker != "!" }
+        Store.saveLines(this, s.id, draft)
         var warning: String? = null
         if (client == null) {
-            warning = "API 키가 없어 텍스트 변환을 하지 못했습니다"
+            warning = "API 키 없이 녹음만 저장했습니다. 목록에서 이 녹음을 열어 나중에 텍스트 변환·요약을 실행할 수 있어요."
         } else if (duration >= 2) {
-            status("최종 화자 분석 중…")
-            try {
-                val finalLines = client.transcribeFull(wav)
-                if (finalLines.isNotEmpty()) lines = finalLines
-            } catch (e: Exception) {
-                warning = "최종 분석 실패 — 실시간 초안을 저장했습니다 (${e.message})"
-            }
-            Live.update { it.copy(lines = lines) }
-            if (lines.isNotEmpty()) {
-                status("요약 작성 중…")
-                try {
-                    File(dir, "summary.txt").writeText(client.summarize(Store.toText(lines)))
-                } catch (e: Exception) {
-                    warning = (warning?.plus(" / ") ?: "") + "요약 실패 (${e.message})"
-                }
-            }
+            warning = Pipeline.analyze(this, s.id) { status(it) }
+            Live.update { it.copy(lines = Store.loadLines(this, s.id).ifEmpty { draft }) }
         }
-        Store.saveLines(this, s.id, lines)
 
         status("다운로드 폴더에 저장 중…")
         val saved = try {

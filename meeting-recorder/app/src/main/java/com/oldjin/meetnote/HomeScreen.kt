@@ -314,6 +314,10 @@ fun HomeScreen(
                                         SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA).format(Date(s.startedAt)) + "  ·  " + fmtTime(s.durationSec),
                                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    if (row.preview.isBlank() && row.hasAudio) Text(
+                                        "아직 텍스트로 변환되지 않았어요 (열어서 변환 가능)", fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp)
+                                    )
                                     if (row.preview.isNotBlank()) Text(
                                         row.preview, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(top = 4.dp)

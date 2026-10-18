@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,6 +43,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.unit.sp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,10 +65,16 @@ import androidx.compose.ui.unit.sp
 fun DetailScreen(id: String, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var session by remember(id) { mutableStateOf(Store.readMeta(ctx, id)) }
-    val lines = remember(id) { Store.loadLines(ctx, id) }
-    val summary = remember(id) { Store.loadSummary(ctx, id) }
+    val statusMap by Analysis.status.collectAsState()
+    val warnMap by Analysis.warnings.collectAsState()
+    val working = statusMap[id]
+    var ver by remember { mutableIntStateOf(0) }
+    LaunchedEffect(working) { if (working == null) ver++ } // 분석이 끝나면 결과를 다시 읽는다
+    val lines = remember(id, ver) { Store.loadLines(ctx, id) }
+    val summary = remember(id, ver) { Store.loadSummary(ctx, id) }
     val wav = remember(id) { Store.file(ctx, id, "audio.wav") }
     var tab by remember { mutableIntStateOf(if (summary != null) 0 else 1) }
+    LaunchedEffect(summary != null) { if (summary != null) tab = 0 }
     var confirmDelete by remember { mutableStateOf(false) }
 
     val ps by rememberPlayState()
@@ -135,6 +146,40 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
             }
 
+            if (working != null) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primaryContainer).padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Column {
+                        Text("텍스트 변환 · 요약 중", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text("$working (앱을 닫아도 계속됩니다)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            } else {
+                warnMap[id]?.let {
+                    Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(bottom = 8.dp))
+                }
+                if (wav.exists()) {
+                    val done = lines.isNotEmpty() && summary != null
+                    Button(
+                        onClick = {
+                            if (Prefs.apiKey(ctx).isNullOrBlank()) {
+                                Toast.makeText(ctx, "설정에서 Google API 키를 먼저 등록하세요", Toast.LENGTH_LONG).show()
+                            } else {
+                                ContextCompat.startForegroundService(
+                                    ctx, Intent(ctx, ProcessingService::class.java).putExtra(ProcessingService.EXTRA_ID, id)
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (done) "다시 분석 (텍스트 변환 · 요약)" else "텍스트 변환 · 요약 실행") }
+                    Spacer(Modifier.height(10.dp))
+                }
+            }
+
             TabRow(selectedTabIndex = tab, containerColor = MaterialTheme.colorScheme.background) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("요약") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("전사 (${lines.size})") })
@@ -144,10 +189,10 @@ fun DetailScreen(id: String, onBack: () -> Unit) {
                 if (tab == 0) {
                     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(4.dp)) {
                         if (summary != null) MarkdownText(summary)
-                        else Text("요약이 없습니다. (API 키가 없거나 변환에 실패했을 수 있어요)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        else Text("아직 요약이 없습니다. 위의 \"텍스트 변환 · 요약 실행\" 버튼으로 만들 수 있어요.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else if (lines.isEmpty()) {
-                    Text("전사 내용이 없습니다", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+                    Text("아직 텍스트로 변환되지 않았어요", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
                 } else {
                     LazyColumn(Modifier.fillMaxSize()) {
                         itemsIndexed(lines) { i, l ->

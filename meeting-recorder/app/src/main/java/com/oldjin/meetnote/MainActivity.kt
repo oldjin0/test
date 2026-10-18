@@ -76,15 +76,13 @@ fun App() {
             version = version,
             onRecord = {
                 if (Prefs.apiKey(ctx).isNullOrBlank()) {
-                    Toast.makeText(ctx, "먼저 Google API 키를 등록하세요", Toast.LENGTH_LONG).show()
-                    screen = Screen.Settings
-                } else {
-                    val perms = buildList {
-                        add(Manifest.permission.RECORD_AUDIO)
-                        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    permLauncher.launch(perms.toTypedArray())
+                    Toast.makeText(ctx, "API 키 없이 녹음합니다. 텍스트 변환·요약은 나중에 할 수 있어요", Toast.LENGTH_LONG).show()
                 }
+                val perms = buildList {
+                    add(Manifest.permission.RECORD_AUDIO)
+                    if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                permLauncher.launch(perms.toTypedArray())
             },
             onOpenLive = { screen = Screen.Recording },
             onOpen = { screen = Screen.Detail(it) },
