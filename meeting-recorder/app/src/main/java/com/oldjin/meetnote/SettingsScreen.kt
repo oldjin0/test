@@ -6,6 +6,7 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -114,6 +116,29 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
             ) { Text(if (checking) "확인 중…" else "확인 후 저장") }
+
+            Spacer(Modifier.height(8.dp))
+            Text("API 사용량 줄이기", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Text(
+                "무료 한도가 부족하면 아래를 끄세요. 모두 끄면 녹음만 하고, 필요할 때 녹음마다 변환을 눌러 1~2회만 사용합니다.",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            var optLive by remember { mutableStateOf(Prefs.captionLive(ctx)) }
+            var optAuto by remember { mutableStateOf(Prefs.autoAnalyze(ctx)) }
+            var optSummary by remember { mutableStateOf(Prefs.summaryOn(ctx)) }
+            @Composable
+            fun OptRow(title: String, desc: String, v: Boolean, key: String, set: (Boolean) -> Unit) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(title, fontSize = 15.sp)
+                        Text(desc, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = v, onCheckedChange = { set(it); Prefs.setOpt(ctx, key, it) })
+                }
+            }
+            OptRow("실시간 자막", "녹음 중 말하는 즉시 글자 표시 (Live 연결 사용)", optLive, "opt_live") { optLive = it }
+            OptRow("종료 후 자동 분석", "녹음이 끝나면 바로 화자 구분 변환 (요청 1회)", optAuto, "opt_auto") { optAuto = it }
+            OptRow("요약 만들기", "변환 뒤 요약 생성 (요청 1회)", optSummary, "opt_summary") { optSummary = it }
 
             Spacer(Modifier.height(8.dp))
             Text("앱 업데이트", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)

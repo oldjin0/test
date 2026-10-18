@@ -41,6 +41,7 @@ object Pipeline {
         if (lines.isEmpty()) return warning ?: "변환된 내용이 없습니다 (음성이 감지되지 않았을 수 있어요)."
         Store.saveLines(ctx, id, lines)
 
+        if (!Prefs.summaryOn(ctx)) return warning
         onStatus("요약 작성 중…")
         try {
             File(Store.dir(ctx, id), "summary.txt").writeText(client.summarize(Store.toText(lines)))

@@ -152,7 +152,9 @@ class RecordingService : Service() {
         }
 
         if (client == null) caption("API 키 없음 — 녹음만 저장하고 나중에 변환할 수 있어요")
-        val liveJob = if (client != null) scope.launch(Dispatchers.IO) { runLive(client) } else null
+        val liveOn = client != null && Prefs.captionLive(this)
+        if (client != null && !liveOn) caption("실시간 자막 꺼짐 (API 절약) — 녹음 후 변환")
+        val liveJob = if (liveOn && client != null) scope.launch(Dispatchers.IO) { runLive(client) } else null
 
         var total = 0L
         val rec = AudioRecord(
@@ -239,6 +241,8 @@ class RecordingService : Service() {
         var warning: String? = null
         if (client == null) {
             warning = "API 키 없이 녹음만 저장했습니다. 목록에서 이 녹음을 열어 나중에 텍스트 변환·요약을 실행할 수 있어요."
+        } else if (!Prefs.autoAnalyze(this)) {
+            warning = "자동 분석이 꺼져 있어요. 이 녹음을 열어 '텍스트 변환 · 요약 실행'을 누르면 그때 변환합니다."
         } else if (duration >= 2) {
             warning = Pipeline.analyze(this, s.id) { status(it) }
             Live.update { it.copy(lines = Store.loadLines(this, s.id).ifEmpty { draft }) }

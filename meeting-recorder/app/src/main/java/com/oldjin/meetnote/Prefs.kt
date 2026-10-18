@@ -58,6 +58,12 @@ object Prefs {
         (sp(ctx).getString("model", "") ?: "").takeIf { it != "gemini-2.5-flash" } ?: "" // 구버전 기본값은 무시
     fun setModel(ctx: Context, m: String) = sp(ctx).edit().putString("model", m.trim()).apply()
 
+    /** API 사용량 절약 옵션 (기본: 모두 켜짐) */
+    fun captionLive(ctx: Context) = sp(ctx).getBoolean("opt_live", true)
+    fun autoAnalyze(ctx: Context) = sp(ctx).getBoolean("opt_auto", true)
+    fun summaryOn(ctx: Context) = sp(ctx).getBoolean("opt_summary", true)
+    fun setOpt(ctx: Context, key: String, v: Boolean) = sp(ctx).edit().putBoolean(key, v).apply()
+
     fun lang(ctx: Context): String = sp(ctx).getString("lang", "ko-KR") ?: "ko-KR"
     fun setLang(ctx: Context, l: String) = sp(ctx).edit().putString("lang", l.trim()).apply()
 
