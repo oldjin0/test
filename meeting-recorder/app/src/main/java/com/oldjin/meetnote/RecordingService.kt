@@ -51,6 +51,7 @@ class RecordingService : Service() {
     private var job: Job? = null
     @Volatile private var stopRequested = false
     @Volatile private var live: LiveTranscriber? = null
+    @Volatile private var draftOpen = true
     private val cur = StringBuilder()
     private var curStartSec = 0
 
@@ -74,6 +75,7 @@ class RecordingService : Service() {
         wake = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "meetnote:recording").apply { acquire(6 * 60 * 60 * 1000L) }
         stopRequested = false
+        draftOpen = true
         val s = Store.create(this)
         Live.state.value = LiveState(phase = Phase.Recording, sessionId = s.id, status = "녹음 중")
         job = scope.launch(Dispatchers.IO) {
@@ -204,7 +206,11 @@ class RecordingService : Service() {
 
         Live.update { it.copy(phase = Phase.Processing, level = 0f, partial = "", status = "남은 구간 변환 중…") }
         notify("처리 중 — 앱을 닫아도 계속됩니다", false)
-        worker.join()
+        // 실시간 초안은 최대 20초만 기다린다. 못 끝낸 구간은 최종 분석이 처리한다.
+        kotlinx.coroutines.withTimeoutOrNull(20_000) { worker.join() }
+        draftOpen = false
+        worker.cancel()
+        Live.update { it.copy(pending = 0) }
 
         val wav = File(dir, "audio.wav")
         Wav.fromPcmFile(pcmFile, wav)
@@ -290,6 +296,7 @@ class RecordingService : Service() {
             if (stopRequested) break
             if (lt.everReady) fails = 0 else fails++
             live = null
+            if (!lt.everReady) Live.update { it.copy(warning = "Live 연결 실패: ${lt.lastError?.take(200)}") }
             if (Live.state.value.phase == Phase.Recording) {
                 status("녹음 중 · 구간 변환 모드 (Live 재연결 중${lt.lastError?.let { ": " + it.take(60) } ?: ""})")
             }
@@ -302,12 +309,14 @@ class RecordingService : Service() {
         try {
             if (client == null || rms(c.pcm) < SILENCE_RMS) return
             if (live?.healthy == true) return // Live 가 실시간 전사 중이면 구간 변환은 쉰다
+            if (!draftOpen) return
             val context = Live.state.value.lines.filter { it.speaker != "!" }.takeLast(8)
             val lines = client.transcribeChunk(Wav.wrap(c.pcm), c.offsetSec, context)
-            Live.update { it.copy(lines = it.lines + lines) }
+            if (draftOpen) Live.update { it.copy(lines = it.lines + lines, warning = null) }
         } catch (e: Exception) {
-            Live.update {
+            if (draftOpen) Live.update {
                 it.copy(
+                    warning = "실시간 변환 오류: ${e.message?.take(160)}",
                     failed = it.failed + 1,
                     lines = it.lines + Line(c.offsetSec, "!", "이 구간은 실시간 변환에 실패했습니다 (${e.message?.take(90)}). 종료 후 최종 분석에서 다시 시도합니다.")
                 )

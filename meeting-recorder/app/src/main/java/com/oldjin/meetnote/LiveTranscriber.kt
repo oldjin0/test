@@ -38,7 +38,7 @@ class LiveTranscriber(
     private var variant = 0
 
     val healthy: Boolean
-        get() = ready && !closed && !(lastSpeechAt - lastTextAt > 20_000)
+        get() = ready && !closed && !(lastSpeechAt - lastTextAt > 10_000)
 
     fun connect() {
         ready = false
@@ -53,7 +53,9 @@ class LiveTranscriber(
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) = handle(bytes.utf8())
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                lastError = response?.let { "HTTP ${it.code}" } ?: t.message
+                lastError = response?.let {
+                    "HTTP ${it.code} " + (try { it.body?.string()?.replace("\n", " ")?.take(160) } catch (_: Exception) { null } ?: it.message)
+                } ?: t.message
                 finish()
             }
 

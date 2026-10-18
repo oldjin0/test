@@ -27,6 +27,11 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
         .writeTimeout(10, TimeUnit.MINUTES)
         .callTimeout(0, TimeUnit.MILLISECONDS)
         .build()
+    /** 실시간 구간 변환용: 오래 걸리면 빨리 포기해 다음 구간이 밀리지 않게 한다. */
+    private val quickHttp by lazy {
+        http.newBuilder().callTimeout(45, TimeUnit.SECONDS).readTimeout(40, TimeUnit.SECONDS).build()
+    }
+    @Volatile private var thinkingUnsupported = false
     private val base = "https://generativelanguage.googleapis.com"
 
     private fun req(url: String) = Request.Builder().url(url).header("x-goog-api-key", apiKey)
@@ -52,7 +57,7 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
         throw last ?: IOException("알 수 없는 오류")
     }
 
-    private fun exec(r: Request): String = http.newCall(r).execute().use { resp ->
+    private fun exec(r: Request, c: OkHttpClient = http): String = c.newCall(r).execute().use { resp ->
         val body = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) {
             val msg = try {
@@ -128,26 +133,37 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
     fun liveIsTranscribeOnly(): Boolean = liveModelName.contains("transcribe")
     fun apiKeyForSocket() = apiKey
 
-    private fun generate(parts: JSONArray, json: Boolean, fast: Boolean): String {
-        val gen = JSONObject().put("temperature", 0.2)
-        if (json) gen.put("responseMimeType", "application/json").put("responseSchema", SCHEMA)
-        if (fast && model.contains("2.5-flash")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
-        val body = JSONObject()
-            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
-            .put("generationConfig", gen)
+    private fun generate(parts: JSONArray, json: Boolean, fast: Boolean, quick: Boolean = false): String {
+        fun body(): JSONObject {
+            val gen = JSONObject().put("temperature", 0.2)
+            if (json) gen.put("responseMimeType", "application/json").put("responseSchema", SCHEMA)
+            if (fast) {
+                if (model.contains("2.5-flash")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+                else if (!thinkingUnsupported && model.contains("gemini-3"))
+                    gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
+            }
+            return JSONObject()
+                .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
+                .put("generationConfig", gen)
+        }
         ensureModels()
-        fun call() = withRetry {
+        val client = if (quick) quickHttp else http
+        fun call() = withRetry(if (quick) 1 else 3) {
             exec(
                 req("$base/v1beta/models/$model:generateContent")
-                    .post(body.toString().toRequestBody("application/json".toMediaType())).build()
+                    .post(body().toString().toRequestBody("application/json".toMediaType())).build(),
+                client
             )
         }
         val resp = try {
             call()
         } catch (e: ApiException) {
-            // 모델이 내려갔거나 신규 사용자에게 막힌 경우: 목록을 다시 받아 최신 모델로 한 번 재시도
             if ((e.code == 404 || e.message.orEmpty().contains("no longer available"))) {
+                // 모델이 내려갔거나 신규 사용자에게 막힌 경우: 목록을 다시 받아 최신 모델로 한 번 재시도
                 ensureModels(force = true)
+                call()
+            } else if (e.code == 400 && e.message.orEmpty().contains("thinking", ignoreCase = true) && !thinkingUnsupported) {
+                thinkingUnsupported = true
                 call()
             } else throw e
         }
@@ -182,7 +198,7 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
         val parts = JSONArray().put(text(prompt)).put(
             JSONObject().put("inline_data", JSONObject().put("mime_type", "audio/wav").put("data", Base64.encodeToString(wav, Base64.NO_WRAP)))
         )
-        return parseLines(generate(parts, json = true, fast = true), offsetSec)
+        return parseLines(generate(parts, json = true, fast = true, quick = true), offsetSec)
     }
 
     /** 최종본: 전체 오디오를 Files API로 올려 한 번에 화자 구분 전사. */
