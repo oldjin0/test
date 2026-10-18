@@ -12,8 +12,11 @@ android {
         applicationId = "com.oldjin.meetnote"
         minSdk = 29
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // CI(GitHub Actions)가 빌드마다 번호를 올린다. 앱 내 업데이트 비교에 사용.
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "1.0.$build"
+        buildConfigField("String", "GIT_SHA", "\"${System.getenv("GITHUB_SHA")?.take(7) ?: "dev"}\"")
     }
 
     // 업데이트 설치가 가능하도록 항상 같은 키로 서명한다.
@@ -36,7 +39,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 }
 
 dependencies {

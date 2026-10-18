@@ -40,4 +40,4 @@ jobs:
           gh release delete meetnote-latest --cleanup-tag -y || true
           gh release create meetnote-latest MeetNote.apk --prerelease \
             --target "$GITHUB_SHA" --title "MeetNote (latest build)" \
-            --notes "Commit ${GITHUB_SHA::7}"
+            --notes "Commit ${GITHUB_SHA::7} · Build ${GITHUB_RUN_NUMBER}"

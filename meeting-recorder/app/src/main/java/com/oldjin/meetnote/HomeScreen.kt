@@ -46,6 +46,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -125,6 +126,7 @@ fun HomeScreen(
     var selected by remember { mutableStateOf(setOf<String>()) }
     var renaming by remember { mutableStateOf<Item?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { Updater.autoCheck(ctx) }
     val ps by rememberPlayState()
     val busy = live.phase == Phase.Recording || live.phase == Phase.Processing
     val selecting = selected.isNotEmpty()
@@ -252,6 +254,7 @@ fun HomeScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                item { UpdateBanner() }
                 if (busy) item {
                     Card(
                         Modifier.fillMaxWidth().clickable(onClick = onOpenLive),

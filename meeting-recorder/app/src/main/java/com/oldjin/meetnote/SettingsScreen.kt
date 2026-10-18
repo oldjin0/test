@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,6 +114,22 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
             ) { Text(if (checking) "확인 중…" else "확인 후 저장") }
+
+            Spacer(Modifier.height(8.dp))
+            Text("앱 업데이트", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            val checking by Updater.checking.collectAsState()
+            val upMsg by Updater.message.collectAsState()
+            val upInfo by Updater.available.collectAsState()
+            Text(
+                "현재 버전 ${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_SHA})" + if (upMsg.isNotBlank()) "\n$upMsg" else "",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(onClick = { Updater.check(ctx) }, enabled = !checking, modifier = Modifier.fillMaxWidth()) {
+                Text(if (checking) "확인 중…" else "업데이트 확인")
+            }
+            upInfo?.let { i ->
+                Button(onClick = { Updater.downloadAndInstall(ctx, i) }, modifier = Modifier.fillMaxWidth()) { Text("지금 업데이트") }
+            }
 
             Spacer(Modifier.height(8.dp))
             Text("안정적인 백그라운드 녹음", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
