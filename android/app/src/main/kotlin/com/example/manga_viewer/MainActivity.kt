@@ -28,6 +28,27 @@ class MainActivity : FlutterActivity() {
     private var readerKeys = false
     private var volumeKeys = false
 
+    /// Background colorizing has pages left (the keep-alive service runs).
+    private var keepingAlive = false
+
+    /// Back on the last screen would finish the activity, and with it the
+    /// Flutter engine and the colorizer: while background colorizing runs,
+    /// the app goes to the background instead (as Home does) and carries on.
+    override fun popSystemNavigator(): Boolean {
+        if (keepingAlive) {
+            moveTaskToBack(true)
+            return true
+        }
+        return false
+    }
+
+    override fun onDestroy() {
+        // Swiped away from recents: the colorizer ends with the engine, so the
+        // notification must not stay behind.
+        if (isFinishing && keepingAlive) ColorizeKeepAlive.hide(applicationContext)
+        super.onDestroy()
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (readerKeys) {
             val turn = when (event.keyCode) {
@@ -121,16 +142,18 @@ class MainActivity : FlutterActivity() {
                         }
                         "keepAlive" -> {
                             val left = call.argument<Int>("left") ?: 0
+                            keepingAlive = left > 0
                             if (left > 0) {
                                 ColorizeKeepAlive.onExit = { runOnUiThread { finishAndRemoveTask() } }
-                                ColorizeKeepAlive.show(this, left)
+                                ColorizeKeepAlive.show(applicationContext, left)
                             } else {
-                                ColorizeKeepAlive.hide(this)
+                                ColorizeKeepAlive.hide(applicationContext)
                             }
                             result.success(null)
                         }
                         "exitApp" -> {
-                            ColorizeKeepAlive.hide(this)
+                            keepingAlive = false
+                            ColorizeKeepAlive.hide(applicationContext)
                             result.success(null)
                             finishAndRemoveTask()
                             android.os.Handler(mainLooper).postDelayed({
