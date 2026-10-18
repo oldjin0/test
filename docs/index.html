@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APK 다운로드</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1c1e21; --muted: #65676b;
+    --border: #e3e5e8; --accent: #2e7d32; --accent-text: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121416; --card: #1c1f22; --text: #e8eaed; --muted: #9aa0a6;
+      --border: #2d3236; --accent: #4caf50; --accent-text: #0b1d0c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 16px/1.5 -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: .9rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px; margin-bottom: 14px;
+  }
+  .card h2 { font-size: 1.15rem; margin: 0; }
+  .meta { color: var(--muted); font-size: .8rem; margin: 2px 0 10px; }
+  .desc { margin: 0 0 14px; white-space: pre-line; word-break: break-word; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px;
+    background: var(--accent); color: var(--accent-text); border-radius: 10px;
+    text-decoration: none; font-weight: 600; font-size: .95rem;
+  }
+  .btn:hover { filter: brightness(1.1); }
+  .btn small { font-weight: 400; opacity: .8; }
+  .state { text-align: center; color: var(--muted); padding: 40px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>📱 APK 다운로드</h1>
+  <p class="sub">새 APK가 릴리스에 올라오면 이 목록에 자동으로 나타납니다.</p>
+  <div id="list"><div class="state">불러오는 중…</div></div>
+</main>
+
+<script>
+// 이 저장소의 GitHub Releases에서 .apk 파일을 읽어 목록을 만든다.
+// 저장소가 바뀌면 REPO만 수정하면 된다.
+const REPO = "oldjin0/test";
+
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const mb = n => (n / 1048576).toFixed(1) + " MB";
+
+// 릴리스 본문(마크다운)을 짧은 평문 설명으로 줄인다.
+function summary(body) {
+  const text = (body || "")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/[#>*_`]/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .trim();
+  return text.length > 300 ? text.slice(0, 300) + "…" : text;
+}
+
+function render(releases) {
+  const items = releases
+    .filter(r => !r.draft)
+    .map(r => ({ r, apks: r.assets.filter(a => /\.apk$/i.test(a.name)) }))
+    .filter(x => x.apks.length);
+
+  const list = document.getElementById("list");
+  if (!items.length) {
+    list.innerHTML = '<div class="state">아직 올라온 APK가 없습니다.</div>';
+    return;
+  }
+  list.innerHTML = items.map(({ r, apks }) => `
+    <section class="card">
+      <h2>${esc(r.name || r.tag_name)}</h2>
+      <div class="meta">${esc(r.tag_name)} · ${new Date(r.published_at).toLocaleDateString("ko-KR")}</div>
+      <p class="desc">${esc(summary(r.body) || "설명이 없습니다.")}</p>
+      <div class="btns">
+        ${apks.map(a => `<a class="btn" href="${esc(a.browser_download_url)}">⬇ ${esc(a.name)} <small>${mb(a.size)}</small></a>`).join("")}
+      </div>
+    </section>`).join("");
+}
+
+fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`)
+  .then(res => { if (!res.ok) throw new Error(res.status); return res.json(); })
+  .then(render)
+  .catch(() => {
+    document.getElementById("list").innerHTML =
+      '<div class="state">목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</div>';
+  });
+</script>
+</body>
+</html>
