@@ -3,6 +3,7 @@ package com.example.ytmp3
 import android.content.ContentValues
 import android.content.Intent
 import android.os.Bundle
+import android.os.Environment
 import android.provider.MediaStore
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -97,8 +98,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 val mp3 = workDir.listFiles { f -> f.extension == "mp3" }?.firstOrNull()
                     ?: throw IllegalStateException("mp3 파일이 생성되지 않았습니다")
-                saveToMusic(mp3)
-                ui { setBusy(false, "완료! 음악 > YTmp3 폴더에 저장됨\n${mp3.name}") }
+                saveToDownloads(mp3)
+                ui { setBusy(false, "완료! 다운로드(Download) 폴더에 저장됨\n${mp3.name}") }
             } catch (e: Exception) {
                 ui { setBusy(false, "실패: ${e.message}") }
             } finally {
@@ -107,13 +108,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveToMusic(file: File) {
+    private fun saveToDownloads(file: File) {
         val values = ContentValues().apply {
-            put(MediaStore.Audio.Media.DISPLAY_NAME, file.name)
-            put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
-            put(MediaStore.Audio.Media.RELATIVE_PATH, "Music/YTmp3")
+            put(MediaStore.Downloads.DISPLAY_NAME, file.name)
+            put(MediaStore.Downloads.MIME_TYPE, "audio/mpeg")
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
         }
-        val uri = contentResolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
             ?: throw IllegalStateException("저장 실패")
         contentResolver.openOutputStream(uri)!!.use { out ->
             file.inputStream().use { it.copyTo(out) }
