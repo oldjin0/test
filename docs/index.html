@@ -57,21 +57,23 @@ const esc = s => String(s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const mb = n => (n / 1048576).toFixed(1) + " MB";
 
-// 릴리스 본문(마크다운)을 짧은 평문 설명으로 줄인다.
+// 릴리스 본문(커밋 메시지)의 첫 줄만 간단한 설명으로 쓴다.
 function summary(body) {
-  const text = (body || "")
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/[#>*_`]/g, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .trim();
-  return text.length > 300 ? text.slice(0, 300) + "…" : text;
+  const first = (body || "").split("\n").map(l => l.replace(/[#>*_`]/g, "").trim()).find(Boolean);
+  return first || "";
 }
 
+// "Manga Viewer 1.0.59" -> "Manga Viewer": 같은 앱의 옛 빌드는 접고 최신만 보여준다.
+const appName = r => (r.name || r.tag_name).replace(/\s+v?\d+(\.\d+)+$/, "");
+
 function render(releases) {
+  const seen = new Set();
   const items = releases
     .filter(r => !r.draft)
+    .sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
     .map(r => ({ r, apks: r.assets.filter(a => /\.apk$/i.test(a.name)) }))
-    .filter(x => x.apks.length);
+    .filter(x => x.apks.length)
+    .filter(({ r }) => !seen.has(appName(r)) && seen.add(appName(r)));
 
   const list = document.getElementById("list");
   if (!items.length) {
@@ -80,8 +82,8 @@ function render(releases) {
   }
   list.innerHTML = items.map(({ r, apks }) => `
     <section class="card">
-      <h2>${esc(r.name || r.tag_name)}</h2>
-      <div class="meta">${esc(r.tag_name)} · ${new Date(r.published_at).toLocaleDateString("ko-KR")}</div>
+      <h2>${esc(appName(r))}</h2>
+      <div class="meta">${esc(r.name || r.tag_name)} · ${new Date(r.published_at).toLocaleDateString("ko-KR")}</div>
       <p class="desc">${esc(summary(r.body) || "설명이 없습니다.")}</p>
       <div class="btns">
         ${apks.map(a => `<a class="btn" href="${esc(a.browser_download_url)}">⬇ ${esc(a.name)} <small>${mb(a.size)}</small></a>`).join("")}
@@ -90,11 +92,12 @@ function render(releases) {
 }
 
 fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`)
-  .then(res => { if (!res.ok) throw new Error(res.status); return res.json(); })
+  .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
   .then(render)
-  .catch(() => {
+  .catch(e => {
     document.getElementById("list").innerHTML =
-      '<div class="state">목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</div>';
+      `<div class="state">목록을 불러오지 못했습니다 (${esc(e.message)}).<br>
+      <a href="https://github.com/${REPO}/releases">GitHub 릴리스 페이지에서 직접 받기</a></div>`;
   });
 </script>
 </body>
