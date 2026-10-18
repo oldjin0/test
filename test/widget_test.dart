@@ -943,19 +943,8 @@ void main() {
 
   test('background colorizing keeps the app alive until its pages are done', () async {
     final calls = <int>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
-      const MethodChannel('manga_viewer/app'),
-      (call) async {
-        if (call.method == 'keepAlive') calls.add(call.arguments['left'] as int);
-        return null;
-      },
-    );
-    addTearDown(
-      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(const MethodChannel('manga_viewer/app'), null),
-    );
     final service = await ColorizeService.start(); // no model: tone filter
-    keepAliveWhileColoring(service);
+    keepAliveWhileColoring(service, keepAlive: (left) async => calls.add(left));
     final dir = Directory.systemTemp.createTempSync('alive');
     addTearDown(() => dir.deleteSync(recursive: true));
     final page = img.encodePng(img.Image(width: 20, height: 20, numChannels: 3));
