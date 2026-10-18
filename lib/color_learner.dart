@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:path/path.dart' as p;
 
@@ -127,13 +128,8 @@ class ColorLearner {
       }.toList();
     } else {
       _say(path, '컬러 페이지 찾는 중 (페이지 형식 비교)');
-      final List<PageSignature> sigs;
-      final isDir = await FileSystemEntity.isDirectory(path);
-      if (isDir || !await needsNativeReader(path)) {
-        final names = book.names;
-        sigs = await _signaturesInBackground(path, names, isDir);
-      } else {
-        sigs = [];
+      Future<List<PageSignature>> onePerPage() async {
+        final sigs = <PageSignature>[];
         for (var i = 0; i < n; i++) {
           if (i % 20 == 0) _say(path, '컬러 페이지 찾는 중 ${i + 1}/$n');
           try {
@@ -142,7 +138,17 @@ class ColorLearner {
             sigs.add(const PageSignature('error', 0, gray: true));
           }
         }
+        return sigs;
       }
+
+      List<PageSignature>? sigs;
+      final isDir = await FileSystemEntity.isDirectory(path);
+      if (isDir || !await needsNativeReader(path)) {
+        try {
+          sigs = await _signaturesInBackground(path, book.names, isDir);
+        } catch (_) {} // not a plain zip: page by page
+      }
+      sigs ??= await onePerPage();
       candidates = colorCandidates(sigs);
     }
     final found = <int>[];
@@ -167,8 +173,10 @@ Future<bool> _isColor(Uint8List bytes) => Isolate.run(() => isColorImage(bytes))
 Future<List<PageSignature>> _signaturesInBackground(String path, List<String> names, bool isDir) =>
     Isolate.run(() => _signatures(path, names, isDir));
 
-/// Signatures of every page of a zip (one opening) or an image folder.
+/// Signatures of every page of a zip or an image folder, from the first
+/// bytes of each file only: nothing is unpacked whole or kept.
 List<PageSignature> _signatures(String path, List<String> names, bool isDir) {
+  const head = 128 * 1024;
   if (isDir) {
     return [
       for (final name in names)
@@ -176,9 +184,7 @@ List<PageSignature> _signatures(String path, List<String> names, bool isDir) {
           try {
             final f = File(p.join(path, name)).openSync();
             try {
-              // headers sit at the start; the size is the file's
-              final head = f.readSync(64 * 1024);
-              final sig = pageSignature(head);
+              final sig = pageSignature(f.readSync(head));
               return PageSignature(sig.key, f.lengthSync(), gray: sig.gray);
             } finally {
               f.closeSync();
@@ -189,22 +195,121 @@ List<PageSignature> _signatures(String path, List<String> names, bool isDir) {
         }(),
     ];
   }
-  final input = InputFileStream(path);
+  final f = File(path).openSync();
   try {
-    final archive = ZipDecoder().decodeStream(input);
+    final entries = zipEntries(f);
     return [
       for (final name in names)
         () {
+          final e = entries[name];
+          if (e == null) return const PageSignature('error', 0, gray: true);
           try {
-            final bytes = archive.find(name)?.readBytes();
-            if (bytes == null) return const PageSignature('error', 0, gray: true);
-            return pageSignature(Uint8List.fromList(bytes));
+            final sig = pageSignature(e.head(f, head));
+            return PageSignature(sig.key, e.size, gray: sig.gray);
           } catch (_) {
             return const PageSignature('error', 0, gray: true);
           }
         }(),
     ];
   } finally {
-    input.closeSync();
+    f.closeSync();
   }
+}
+
+/// One entry of a zip's central directory.
+class ZipEntry {
+  ZipEntry(this.method, this.compressed, this.size, this.offset);
+
+  final int method, compressed, size, offset;
+
+  /// About the first [max] bytes of the entry's content (stored or
+  /// deflated), read and unpacked from its start only.
+  Uint8List head(RandomAccessFile f, int max) {
+    f.setPositionSync(offset);
+    final local = f.readSync(30);
+    if (local.length < 30 || _u32(local, 0) != 0x04034b50) return Uint8List(0);
+    f.setPositionSync(offset + 30 + _u16(local, 26) + _u16(local, 28));
+    final raw = f.readSync(math.min(compressed, max));
+    if (method == 0) return raw;
+    if (method != 8) return Uint8List(0);
+    final filter = RawZLibFilter.inflateFilter(raw: true);
+    filter.process(raw, 0, raw.length);
+    final out = BytesBuilder(copy: false);
+    try {
+      for (List<int>? c; (c = filter.processed(flush: false)) != null && out.length < max;) {
+        out.add(c!);
+      }
+    } catch (_) {} // cut off mid-stream: what came out is enough
+    return out.takeBytes();
+  }
+}
+
+int _u16(Uint8List b, int i) => b[i] | (b[i + 1] << 8);
+int _u32(Uint8List b, int i) => _u16(b, i) | (_u16(b, i + 2) << 16);
+int _u64(Uint8List b, int i) => _u32(b, i) + _u32(b, i + 4) * 0x100000000;
+
+/// The entries of the zip open in [f], by name (decoded as the archive
+/// package does, so the names match the book's), from its central
+/// directory alone.
+Map<String, ZipEntry> zipEntries(RandomAccessFile f) {
+  final len = f.lengthSync();
+  final tailLen = math.min(len, 22 + 0xffff + 20);
+  f.setPositionSync(len - tailLen);
+  final tail = f.readSync(tailLen);
+  var eocd = -1;
+  for (var i = tail.length - 22; i >= 0; i--) {
+    if (_u32(tail, i) == 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw const FormatException('not a zip');
+  var count = _u16(tail, eocd + 10);
+  var cdSize = _u32(tail, eocd + 12);
+  var cdOffset = _u32(tail, eocd + 16);
+  if (eocd >= 20 && _u32(tail, eocd - 20) == 0x07064b50) {
+    // zip64: the real numbers are in the zip64 end record
+    f.setPositionSync(_u64(tail, eocd - 20 + 8));
+    final z = f.readSync(56);
+    if (z.length == 56 && _u32(z, 0) == 0x06064b50) {
+      count = _u64(z, 32);
+      cdSize = _u64(z, 40);
+      cdOffset = _u64(z, 48);
+    }
+  }
+  f.setPositionSync(cdOffset);
+  final cd = f.readSync(cdSize);
+  final entries = <String, ZipEntry>{};
+  var i = 0;
+  for (var k = 0; k < count && i + 46 <= cd.length; k++) {
+    if (_u32(cd, i) != 0x02014b50) break;
+    final method = _u16(cd, i + 10);
+    var compressed = _u32(cd, i + 20);
+    var size = _u32(cd, i + 24);
+    final nameLen = _u16(cd, i + 28), extraLen = _u16(cd, i + 30), commentLen = _u16(cd, i + 32);
+    var offset = _u32(cd, i + 42);
+    final nameBytes = cd.sublist(i + 46, i + 46 + nameLen);
+    // zip64 sizes and offset, for the fields that are full
+    var x = i + 46 + nameLen;
+    final xEnd = x + extraLen;
+    while (x + 4 <= xEnd) {
+      final id = _u16(cd, x), sz = _u16(cd, x + 2);
+      if (id == 1) {
+        var y = x + 4;
+        if (size == 0xffffffff) (size, y) = (_u64(cd, y), y + 8);
+        if (compressed == 0xffffffff) (compressed, y) = (_u64(cd, y), y + 8);
+        if (offset == 0xffffffff) offset = _u64(cd, y);
+      }
+      x += 4 + sz;
+    }
+    String name;
+    try {
+      name = const Utf8Decoder().convert(nameBytes);
+    } catch (_) {
+      name = String.fromCharCodes(nameBytes);
+    }
+    entries[name] = ZipEntry(method, compressed, size, offset);
+    i = xEnd + commentLen;
+  }
+  return entries;
 }

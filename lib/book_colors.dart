@@ -172,7 +172,8 @@ PageSignature pageSignature(Uint8List b) {
         final sampling = [
           for (var c = 0; c < comps && i + 11 + c * 3 < b.length; c++) b[i + 11 + c * 3],
         ].join('.');
-        sof = 'jpg ${w}x$h c$comps s$sampling';
+        // not the size: scanned pages differ by a few pixels
+        sof = 'jpg c$comps s$sampling${w > h ? ' wide' : ''}';
       } else if (marker == 0xDA) {
         break; // image data follows
       }
@@ -185,7 +186,11 @@ PageSignature pageSignature(Uint8List b) {
     final w = (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19];
     final h = (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23];
     final type = b[25];
-    return PageSignature('png ${w}x$h d${b[24]} t$type', b.length, gray: type == 0 || type == 4);
+    return PageSignature(
+      'png d${b[24]} t$type${w > h ? ' wide' : ''}',
+      b.length,
+      gray: type == 0 || type == 4,
+    );
   }
   return PageSignature(
     'other ${b.length > 12 ? String.fromCharCodes(b.sublist(8, 12)) : ''}',
@@ -197,8 +202,8 @@ PageSignature pageSignature(Uint8List b) {
 /// share a signature (the pattern), so the ones that do not - or that are
 /// much bigger than their pattern - are the candidates; the first and last
 /// pages (covers) always are. Pages known gray from their header never are.
-/// Without a clear pattern every page is a candidate.
-List<int> colorCandidates(List<PageSignature> sigs) {
+/// Without a clear pattern every page is a candidate. At most [maxPages].
+List<int> colorCandidates(List<PageSignature> sigs, {int maxPages = 24}) {
   final n = sigs.length;
   final counts = <String, int>{};
   for (final s in sigs) {
@@ -216,16 +221,33 @@ List<int> colorCandidates(List<PageSignature> sigs) {
     ]..sort();
     medians[key] = sizes[sizes.length ~/ 2];
   }
-  return [
+  bool cover(int i) => i < 3 || i >= n - 2;
+  final all = [
     for (var i = 0; i < n; i++)
       if (!sigs[i].gray &&
-          (i < 3 ||
-              i >= n - 2 ||
+          (cover(i) ||
               pattern.isEmpty ||
               !pattern.contains(sigs[i].key) ||
               sigs[i].size > medians[sigs[i].key]! * 1.8))
         i,
   ];
+  if (all.length <= maxPages) return all;
+  // Too many to check: the covers, then the pages furthest off the pattern
+  // (another format first, then the biggest for their kind).
+  final groupMedian = <String, int>{};
+  for (final key in {for (final i in all) sigs[i].key}) {
+    final sizes = [
+      for (final s in sigs)
+        if (s.key == key) s.size,
+    ]..sort();
+    groupMedian[key] = math.max(1, sizes[sizes.length ~/ 2]);
+  }
+  double score(int i) =>
+      (cover(i) ? 100.0 : 0) +
+      (pattern.isNotEmpty && !pattern.contains(sigs[i].key) ? 10 : 0) +
+      sigs[i].size / groupMedian[sigs[i].key]!;
+  final picked = (List.of(all)..sort((a, b) => score(b).compareTo(score(a)))).take(maxPages);
+  return picked.toList()..sort();
 }
 
 /// Learns a book's correction from (model output on the gray copy, real

@@ -1,10 +1,13 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:manga_viewer/book_colors.dart';
 import 'package:manga_viewer/book_palette.dart';
+import 'package:manga_viewer/color_learner.dart';
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/ink_color.dart';
 
@@ -157,7 +160,7 @@ void main() {
       0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 63, 0,
     ]);
     expect(pageSignature(oneChannel).gray, isTrue);
-    expect(pageSignature(oneChannel).key, startsWith('jpg 40x60 c1'));
+    expect(pageSignature(oneChannel).key, startsWith('jpg c1'));
     expect(pageSignature(img.encodeJpg(rgb)).gray, isFalse);
     expect(pageSignature(img.encodePng(gray)).gray, isTrue);
     expect(pageSignature(img.encodePng(rgb)).gray, isFalse);
@@ -168,15 +171,43 @@ void main() {
   });
 
   test('only pages off the black-and-white pattern are color candidates', () {
-    const page = PageSignature('jpg 800x1200 c3 q1', 100000);
+    const page = PageSignature('jpg c3 q1', 100000);
     final sigs = [for (var i = 0; i < 40; i++) page];
-    sigs[10] = const PageSignature('jpg 800x1200 c3 q2', 100000); // other encoder
-    sigs[20] = const PageSignature('jpg 800x1200 c3 q1', 250000); // much bigger
-    sigs[30] = const PageSignature('jpg 800x1200 c1 q1', 50000, gray: true);
-    sigs[0] = const PageSignature('jpg 800x1200 c1 q1', 50000, gray: true);
+    sigs[10] = const PageSignature('jpg c3 q2', 100000); // other encoder
+    sigs[20] = const PageSignature('jpg c3 q1', 250000); // much bigger
+    sigs[30] = const PageSignature('jpg c1 q1', 50000, gray: true);
+    sigs[0] = const PageSignature('jpg c1 q1', 50000, gray: true);
     expect(colorCandidates(sigs), [1, 2, 10, 20, 38, 39]);
     // no pattern: everything not known gray
     final mixed = [for (var i = 0; i < 6; i++) PageSignature('k$i', 10)];
     expect(colorCandidates(mixed), [0, 1, 2, 3, 4, 5]);
+    // too many to check: the covers and the furthest off
+    final noisy = [for (var i = 0; i < 100; i++) PageSignature('k${i % 10}', 10 + i % 7)];
+    noisy[50] = const PageSignature('k0', 500);
+    final picked = colorCandidates(noisy, maxPages: 8);
+    expect(picked.length, 8);
+    expect(picked, containsAll([0, 1, 2, 50, 98, 99]));
+  });
+
+  test('zip pages are read from their start only, stored or deflated', () {
+    final dir = Directory.systemTemp.createTempSync('zip');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final rnd = math.Random(1);
+    final big = Uint8List.fromList([for (var i = 0; i < 300000; i++) rnd.nextInt(4)]);
+    final archive = Archive()
+      ..addFile(ArchiveFile('a/페이지1.jpg', big.length, big))
+      ..addFile(ArchiveFile.noCompress('b.png', big.length, big));
+    final path = '${dir.path}/t.cbz';
+    File(path).writeAsBytesSync(ZipEncoder().encode(archive));
+    final f = File(path).openSync();
+    addTearDown(f.closeSync);
+    final entries = zipEntries(f);
+    expect(entries.keys, ['a/페이지1.jpg', 'b.png']);
+    for (final e in entries.values) {
+      expect(e.size, big.length);
+      final head = e.head(f, 1000);
+      expect(head.length, greaterThanOrEqualTo(1000));
+      expect(head.sublist(0, 1000), big.sublist(0, 1000));
+    }
   });
 }
