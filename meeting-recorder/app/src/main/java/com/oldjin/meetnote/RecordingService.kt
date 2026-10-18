@@ -52,6 +52,7 @@ class RecordingService : Service() {
     private var job: Job? = null
     @Volatile private var stopRequested = false
     @Volatile private var live: LiveTranscriber? = null
+    @Volatile private var offline: OfflineTranscriber? = null
     @Volatile private var draftOpen = true
     @Volatile private var liveGaveUp = false
     @Volatile private var chunkPausedUntil = 0L
@@ -152,8 +153,19 @@ class RecordingService : Service() {
         }
 
         if (client == null) caption("API 키 없음 — 녹음만 저장하고 나중에 변환할 수 있어요")
-        val liveOn = client != null && Prefs.captionLive(this)
-        if (client != null && !liveOn) caption("실시간 자막 꺼짐 (API 절약) — 녹음 후 변환")
+        val mode = Prefs.captionMode(this)
+        val liveOn = client != null && mode == "live"
+        if (mode == "device") {
+            offline = try {
+                if (!ModelInstaller.installed(this)) throw IllegalStateException("기기 내 인식 모델이 설치되지 않았어요 (설정에서 설치)")
+                OfflineTranscriber(this, { t, i -> onLiveText(t, i) }, { commitLive() }).also {
+                    caption("기기 내 자막 (API 사용 안 함 · 화자 구분은 종료 후)")
+                }
+            } catch (e: Throwable) {
+                caption("기기 내 자막 시작 실패: ${e.message?.take(100)}", error = true)
+                null
+            }
+        } else if (mode == "off" || (client != null && !liveOn)) caption("실시간 자막 꺼짐 — 녹음 후 변환")
         val liveJob = if (liveOn && client != null) scope.launch(Dispatchers.IO) { runLive(client) } else null
 
         var total = 0L
@@ -197,6 +209,7 @@ class RecordingService : Service() {
                     }
                     val r = rms(buf, n)
                     live?.let { if (r >= SPEECH_RMS) it.markSpeech(); it.send(buf, n) }
+                    offline?.feed(buf, n)
                     val nowMs = System.currentTimeMillis()
                     if (r < 1.0) {
                         if (zeroSince == 0L) zeroSince = nowMs
@@ -220,6 +233,8 @@ class RecordingService : Service() {
         chunks.close()
         live?.close()
         liveJob?.cancel()
+        offline?.close()
+        offline = null
         commitLive()
 
         Live.update { it.copy(phase = Phase.Processing, level = 0f, partial = "", status = "남은 구간 변환 중…") }
@@ -274,6 +289,7 @@ class RecordingService : Service() {
         if (interim) {
             Live.update { it.copy(partial = (cur.toString() + text).trim()) }
         } else {
+            if (cur.isNotEmpty() && !cur.endsWith(" ") && !text.startsWith(" ")) cur.append(' ')
             cur.append(text)
             if (cur.length > 100) commitLive() else Live.update { it.copy(partial = cur.toString().trim()) }
         }

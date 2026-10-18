@@ -123,7 +123,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 "무료 한도가 부족하면 아래를 끄세요. 모두 끄면 녹음만 하고, 필요할 때 녹음마다 변환을 눌러 1~2회만 사용합니다.",
                 fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            var optLive by remember { mutableStateOf(Prefs.captionLive(ctx)) }
+            var capMode by remember { mutableStateOf(Prefs.captionMode(ctx)) }
             var optAuto by remember { mutableStateOf(Prefs.autoAnalyze(ctx)) }
             var optSummary by remember { mutableStateOf(Prefs.summaryOn(ctx)) }
             @Composable
@@ -136,7 +136,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Switch(checked = v, onCheckedChange = { set(it); Prefs.setOpt(ctx, key, it) })
                 }
             }
-            OptRow("실시간 자막", "녹음 중 말하는 즉시 글자 표시 (Live 연결 사용)", optLive, "opt_live") { optLive = it }
+            Text("실시간 자막 방식", fontSize = 15.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("live" to "Gemini Live (API 사용)", "device" to "기기 내 (무료)", "off" to "끄기").forEach { (k, label) ->
+                    androidx.compose.material3.FilterChip(
+                        selected = capMode == k, onClick = { capMode = k; Prefs.setCaptionMode(ctx, k) }, label = { Text(label, fontSize = 12.sp) }
+                    )
+                }
+            }
+            Text(
+                when (capMode) {
+                    "live" -> "정확하고 빠르지만 API 한도를 씁니다."
+                    "device" -> "API·한도·네트워크 없이 기기에서 인식합니다. 정확도는 낮을 수 있고 화자 구분은 종료 후 분석에서 합니다. 한국어 모델(약 80MB)을 한 번 설치해야 합니다."
+                    else -> "녹음 중 자막을 만들지 않습니다. 녹음이 끝난 뒤에 변환할 수 있어요."
+                },
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (capMode == "device") {
+                val prog by ModelInstaller.progress.collectAsState()
+                val msg by ModelInstaller.message.collectAsState()
+                val installed = ModelInstaller.installed(ctx) || msg == "설치 완료"
+                OutlinedButton(
+                    onClick = { ModelInstaller.install(ctx) }, enabled = prog == null && !installed, modifier = Modifier.fillMaxWidth()
+                ) { Text(if (installed) "기기 내 인식 모델 설치됨" else if (prog != null) "$msg ${(prog!! * 100).toInt()}%" else "한국어 모델 설치 (약 80MB)") }
+                if (!installed && msg.startsWith("설치 실패")) Text(msg, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+            }
             OptRow("종료 후 자동 분석", "녹음이 끝나면 바로 화자 구분 변환 (요청 1회)", optAuto, "opt_auto") { optAuto = it }
             OptRow("요약 만들기", "변환 뒤 요약 생성 (요청 1회)", optSummary, "opt_summary") { optSummary = it }
 

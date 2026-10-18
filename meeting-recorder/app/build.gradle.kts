@@ -56,4 +56,5 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("com.alphacephei:vosk-android:0.3.47") // 기기 내 오프라인 음성인식 (API 불필요)
 }

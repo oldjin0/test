@@ -59,7 +59,10 @@ object Prefs {
     fun setModel(ctx: Context, m: String) = sp(ctx).edit().putString("model", m.trim()).apply()
 
     /** API 사용량 절약 옵션 (기본: 모두 켜짐) */
-    fun captionLive(ctx: Context) = sp(ctx).getBoolean("opt_live", true)
+    /** 실시간 자막 방식: live(Gemini Live, API 사용) / device(기기 내 인식, API 안 씀) / off */
+    fun captionMode(ctx: Context): String =
+        sp(ctx).getString("caption_mode", null) ?: if (sp(ctx).getBoolean("opt_live", true)) "live" else "off"
+    fun setCaptionMode(ctx: Context, m: String) = sp(ctx).edit().putString("caption_mode", m).apply()
     fun autoAnalyze(ctx: Context) = sp(ctx).getBoolean("opt_auto", true)
     fun summaryOn(ctx: Context) = sp(ctx).getBoolean("opt_summary", true)
     fun setOpt(ctx: Context, key: String, v: Boolean) = sp(ctx).edit().putBoolean(key, v).apply()
