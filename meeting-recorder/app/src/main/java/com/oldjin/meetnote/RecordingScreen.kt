@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,7 +78,21 @@ fun RecordingScreen(live: LiveState, onBack: () -> Unit, onStop: () -> Unit, onR
                     )
                     Spacer(Modifier.height(10.dp))
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (recording) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.size(8.dp).background(if (live.micOk) Color(0xFF2F9E44) else MaterialTheme.colorScheme.error, CircleShape))
+                        Text(
+                            if (live.micOk) "녹음 정상 저장 중" else "마이크 입력이 끊겼어요 (다른 앱이 마이크를 쓰는지 확인)",
+                            fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            color = if (live.micOk) Color(0xFF2F9E44) else MaterialTheme.colorScheme.error
+                        )
+                    }
+                    if (live.captionStatus.isNotBlank()) Text(
+                        "자막: ${live.captionStatus}", fontSize = 12.sp, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 4.dp, start = 12.dp, end = 12.dp),
+                        color = if (live.captionError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (processing) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                     Text(
                         live.status + if (live.pending > 0) " · 변환 대기 ${live.pending}" else "",

@@ -64,6 +64,8 @@ object Prefs {
     fun resolvedText(ctx: Context): String = sp(ctx).getString("res_text", "") ?: ""
     fun resolvedLive(ctx: Context): String = sp(ctx).getString("res_live", "") ?: ""
     fun resolvedAt(ctx: Context): Long = sp(ctx).getLong("res_at", 0)
-    fun setResolved(ctx: Context, text: String, live: String) =
-        sp(ctx).edit().putString("res_text", text).putString("res_live", live).putLong("res_at", System.currentTimeMillis()).apply()
+    fun resolvedLite(ctx: Context): String = sp(ctx).getString("res_lite", "") ?: ""
+    fun setResolved(ctx: Context, text: String, live: String, lite: String) =
+        sp(ctx).edit().putString("res_text", text).putString("res_live", live).putString("res_lite", lite)
+            .putLong("res_at", System.currentTimeMillis()).apply()
 }

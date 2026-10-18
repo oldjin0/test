@@ -18,6 +18,9 @@ data class LiveState(
     val failed: Int = 0,
     val status: String = "",
     val warning: String? = null,
+    val captionStatus: String = "",
+    val captionError: Boolean = false,
+    val micOk: Boolean = true,
 )
 
 /** 서비스와 UI가 공유하는 실시간 상태. */

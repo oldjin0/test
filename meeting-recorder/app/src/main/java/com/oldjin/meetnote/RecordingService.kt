@@ -44,6 +44,7 @@ class RecordingService : Service() {
         private const val DONE_ID = 2
         private const val CHUNK_SEC = 10
         private const val SILENCE_RMS = 120.0
+        private const val SPEECH_RMS = 250.0
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -52,6 +53,9 @@ class RecordingService : Service() {
     @Volatile private var stopRequested = false
     @Volatile private var live: LiveTranscriber? = null
     @Volatile private var draftOpen = true
+    @Volatile private var liveGaveUp = false
+    @Volatile private var chunkPausedUntil = 0L
+    private var zeroSince = 0L
     private val cur = StringBuilder()
     private var curStartSec = 0
 
@@ -76,6 +80,9 @@ class RecordingService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "meetnote:recording").apply { acquire(6 * 60 * 60 * 1000L) }
         stopRequested = false
         draftOpen = true
+        liveGaveUp = false
+        chunkPausedUntil = 0L
+        zeroSince = 0L
         val s = Store.create(this)
         Live.state.value = LiveState(phase = Phase.Recording, sessionId = s.id, status = "녹음 중")
         job = scope.launch(Dispatchers.IO) {
@@ -120,6 +127,7 @@ class RecordingService : Service() {
     }
 
     private fun status(s: String) = Live.update { it.copy(status = s) }
+    private fun caption(s: String, error: Boolean = false) = Live.update { it.copy(captionStatus = s, captionError = error) }
 
     private fun rms(b: ByteArray, len: Int = b.size): Double {
         val sb = ByteBuffer.wrap(b, 0, len).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
@@ -143,7 +151,7 @@ class RecordingService : Service() {
             for (c in chunks) handleChunk(client, c)
         }
 
-        if (client == null) status("녹음 중 · API 키 없음 (녹음만 저장, 나중에 변환 가능)")
+        if (client == null) caption("API 키 없음 — 녹음만 저장하고 나중에 변환할 수 있어요")
         val liveJob = if (client != null) scope.launch(Dispatchers.IO) { runLive(client) } else null
 
         var total = 0L
@@ -186,7 +194,15 @@ class RecordingService : Service() {
                         out.flush(); flushed = total
                     }
                     val r = rms(buf, n)
-                    live?.let { if (r >= SILENCE_RMS) it.markSpeech(); it.send(buf, n) }
+                    live?.let { if (r >= SPEECH_RMS) it.markSpeech(); it.send(buf, n) }
+                    val nowMs = System.currentTimeMillis()
+                    if (r < 1.0) {
+                        if (zeroSince == 0L) zeroSince = nowMs
+                        if (nowMs - zeroSince > 5000 && Live.state.value.micOk) Live.update { it.copy(micOk = false) }
+                    } else {
+                        zeroSince = 0L
+                        if (!Live.state.value.micOk) Live.update { it.copy(micOk = true) }
+                    }
                     val level = (r / 6000.0).coerceIn(0.0, 1.0).toFloat()
                     Live.update { it.copy(elapsedSec = (total / (SAMPLE_RATE * 2)).toInt(), level = level) }
                     if (chunkBuf.size() >= chunkBytes) sendChunk()
@@ -267,15 +283,29 @@ class RecordingService : Service() {
         else Live.update { it.copy(partial = "") }
     }
 
-    /** Live API 연결을 유지한다. 끊기면 재연결하고, 계속 실패하면 구간 변환 모드로만 동작한다. */
+    /**
+     * Live API 연결을 유지한다. 응답이 멈추거나 세션(약 10분 제한)이 끝나면 재연결하고,
+     * 계속 실패할 때만 잠시 구간 변환 모드로 대신한다.
+     */
     private suspend fun runLive(client: GeminiClient) {
         val model = try { client.liveModel() } catch (e: Exception) { null }
         if (model == null) {
-            status("녹음 중 · 구간 변환 모드 (Live 모델 없음)")
+            liveGaveUp = true
+            caption("구간 변환 모드 (Live 모델 없음)")
             return
         }
         var fails = 0
-        while (!stopRequested && fails < 4) {
+        var lastWhy = ""
+        while (!stopRequested) {
+            if (fails >= 4) {
+                liveGaveUp = true
+                caption("Live 사용 불가 ($lastWhy) → 구간 변환 모드, 1분 뒤 Live 재시도", error = true)
+                var waited = 0
+                while (waited < 60_000 && !stopRequested) { kotlinx.coroutines.delay(500); waited += 500 }
+                fails = 2
+                liveGaveUp = false
+                continue
+            }
             val lt = LiveTranscriber(
                 client.http, client.apiKeyForSocket(), model, client.liveIsTranscribeOnly(), Prefs.lang(this),
                 onText = { t, i -> onLiveText(t, i) },
@@ -283,42 +313,53 @@ class RecordingService : Service() {
             )
             live = lt
             lt.connect()
-            var wasHealthy = false
+            val startedAt = System.currentTimeMillis()
+            var lastDiag = 0L
+            var reason: String? = null
             while (!lt.closed && !stopRequested) {
-                if (lt.ready && !wasHealthy) {
-                    wasHealthy = true
-                    if (Live.state.value.phase == Phase.Recording) status("녹음 중 · 실시간 변환 (Live)")
-                }
-                if (lt.ready && System.currentTimeMillis() - lt.lastTextAt > 2500 && cur.isNotEmpty()) commitLive()
-                kotlinx.coroutines.delay(400)
+                val now = System.currentTimeMillis()
+                if (lt.ready) {
+                    if (now - lastDiag > 1500) {
+                        lastDiag = now
+                        caption("실시간 변환 연결됨 · 수신 ${lt.msgCount} · 자막 ${lt.textCount}")
+                    }
+                    if (cur.isNotEmpty() && now - lt.lastTextAt > 2500) commitLive()
+                    if (lt.lastSpeechAt - lt.lastTextAt > 8000 && now - lt.readyAt > 8000) { reason = "자막 응답 없음"; break }
+                    if (now - startedAt > 9 * 60_000L) { reason = "세션 갱신"; break }
+                } else if (now - startedAt > 15_000) { reason = "연결 시간 초과"; break }
+                kotlinx.coroutines.delay(300)
             }
+            val gotText = lt.textCount > 0
+            lastWhy = reason ?: lt.lastError?.take(100) ?: "연결 끊김"
+            if (lt.lastRaw.isNotBlank() && !gotText) lastWhy += " [응답 예: ${lt.lastRaw.take(80)}]"
             lt.close()
-            if (stopRequested) break
-            if (lt.everReady) fails = 0 else fails++
             live = null
-            if (!lt.everReady) Live.update { it.copy(warning = "Live 연결 실패: ${lt.lastError?.take(200)}") }
-            if (Live.state.value.phase == Phase.Recording) {
-                status("녹음 중 · 구간 변환 모드 (Live 재연결 중${lt.lastError?.let { ": " + it.take(60) } ?: ""})")
-            }
-            kotlinx.coroutines.delay(1500)
+            commitLive()
+            if (stopRequested) break
+            if (reason == "세션 갱신" || gotText) fails = 0 else fails++
+            caption("Live 재연결 중 ($lastWhy · 수신 ${lt.msgCount}/자막 ${lt.textCount}${if (fails > 0) " · 실패 $fails/4" else ""})", error = fails > 0)
+            kotlinx.coroutines.delay(1000)
         }
-        if (!stopRequested && Live.state.value.phase == Phase.Recording) status("녹음 중 · 구간 변환 모드")
     }
 
     private fun handleChunk(client: GeminiClient?, c: Chunk) {
         try {
             if (client == null || rms(c.pcm) < SILENCE_RMS) return
-            if (live?.healthy == true) return // Live 가 실시간 전사 중이면 구간 변환은 쉰다
-            if (!draftOpen) return
+            if (!liveGaveUp) return // Live 가 시도 중이면 구간 변환은 쉰다 (무료 한도 보호)
+            if (!draftOpen || System.currentTimeMillis() < chunkPausedUntil) return
             val context = Live.state.value.lines.filter { it.speaker != "!" }.takeLast(8)
             val lines = client.transcribeChunk(Wav.wrap(c.pcm), c.offsetSec, context)
-            if (draftOpen) Live.update { it.copy(lines = it.lines + lines, warning = null) }
+            if (draftOpen) Live.update { it.copy(lines = it.lines + lines) }
+            caption("구간 변환 모드 (Live 대체 중)")
         } catch (e: Exception) {
-            if (draftOpen) Live.update {
-                it.copy(
-                    warning = "실시간 변환 오류: ${e.message?.take(160)}",
-                    failed = it.failed + 1,
-                    lines = it.lines + Line(c.offsetSec, "!", "이 구간은 실시간 변환에 실패했습니다 (${e.message?.take(90)}). 종료 후 최종 분석에서 다시 시도합니다.")
+            val quota = (e as? ApiException)?.code == 429
+            if (quota) chunkPausedUntil = System.currentTimeMillis() + 90_000
+            if (draftOpen) {
+                Live.update { it.copy(failed = it.failed + 1) }
+                caption(
+                    if (quota) "무료 사용 한도 초과 — 자막을 잠시 멈춥니다 (녹음은 정상 저장 중)"
+                    else "구간 변환 오류: ${e.message?.take(120)} (녹음은 정상)",
+                    error = true
                 )
             }
         } finally {

@@ -20,6 +20,7 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
     private val overridden = modelOverride.isNotBlank()
     @Volatile private var model = modelOverride.ifBlank { Prefs.resolvedText(ctx) }
     @Volatile private var liveModelName = Prefs.resolvedLive(ctx)
+    @Volatile private var liteName = Prefs.resolvedLite(ctx)
 
     val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -82,13 +83,14 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
         val found = discover()
         if (!overridden || force) model = found.first ?: model.ifBlank { "gemini-flash-latest" }
         liveModelName = found.second ?: ""
-        Prefs.setResolved(ctx, model, liveModelName)
+        liteName = found.third ?: ""
+        Prefs.setResolved(ctx, model, liveModelName, liteName)
     }
 
     fun textModel(): String { ensureModels(); return model }
     fun liveModel(): String? { ensureModels(); return liveModelName.ifBlank { null } }
 
-    private fun discover(): Pair<String?, String?> {
+    private fun discover(): Triple<String?, String?, String?> {
         val all = mutableListOf<Pair<String, List<String>>>()
         var token: String? = null
         do {
@@ -110,7 +112,9 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
             ?: all.firstOrNull { it.first == "gemini-flash-latest" }?.first
         val live = all.filter { (_, m) -> "bidiGenerateContent" in m }
             .maxByOrNull { (n, _) -> liveScore(n) }?.first
-        return text to live
+        val lite = all.filter { (n, m) -> "generateContent" in m && n.contains("flash-lite") && bad.none { n.contains(it) } }
+            .mapNotNull { (n, _) -> flashScore(n)?.let { n to it } }.maxByOrNull { it.second }?.first
+        return Triple(text, live, lite)
     }
 
     private val verRe = Regex("""gemini-(\d+)(?:\.(\d+))?""")
@@ -134,12 +138,13 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
     fun apiKeyForSocket() = apiKey
 
     private fun generate(parts: JSONArray, json: Boolean, fast: Boolean, quick: Boolean = false): String {
+        val m = if (quick && liteName.isNotBlank()) liteName else model
         fun body(): JSONObject {
             val gen = JSONObject().put("temperature", 0.2)
             if (json) gen.put("responseMimeType", "application/json").put("responseSchema", SCHEMA)
             if (fast) {
-                if (model.contains("2.5-flash")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
-                else if (!thinkingUnsupported && model.contains("gemini-3"))
+                if (m.contains("2.5-flash")) gen.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+                else if (!thinkingUnsupported && m.contains("gemini-3"))
                     gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "minimal"))
             }
             return JSONObject()
@@ -150,7 +155,7 @@ class GeminiClient(private val ctx: Context, private val apiKey: String, modelOv
         val client = if (quick) quickHttp else http
         fun call() = withRetry(if (quick) 1 else 3) {
             exec(
-                req("$base/v1beta/models/$model:generateContent")
+                req("$base/v1beta/models/$m:generateContent")
                     .post(body().toString().toRequestBody("application/json".toMediaType())).build(),
                 client
             )

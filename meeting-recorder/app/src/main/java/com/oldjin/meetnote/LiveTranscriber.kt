@@ -33,6 +33,10 @@ class LiveTranscriber(
     @Volatile var lastSpeechAt = 0L; private set
     @Volatile var lastTextAt = 0L; private set
     @Volatile var lastError: String? = null; private set
+    @Volatile var readyAt = 0L; private set
+    @Volatile var msgCount = 0; private set
+    @Volatile var textCount = 0; private set
+    @Volatile var lastRaw: String = ""; private set
 
     // 0: languageCodes 포함, 1: 빈 설정(구버전 형식)
     private var variant = 0
@@ -88,22 +92,32 @@ class LiveTranscriber(
         return JSONObject().put("setup", setup).toString()
     }
 
+    private fun txt(o: JSONObject, a: String, b: String): String {
+        return when (val v = o.opt(a) ?: o.opt(b)) {
+            is JSONObject -> v.optString("text")
+            is String -> v
+            else -> ""
+        }
+    }
+
     private fun handle(raw: String) {
         val j = try { JSONObject(raw) } catch (e: Exception) { return }
+        msgCount++
         if (j.has("setupComplete") || j.has("setup_complete")) {
             ready = true
             everReady = true
-            lastTextAt = System.currentTimeMillis()
-            lastSpeechAt = lastTextAt
+            readyAt = System.currentTimeMillis()
+            lastTextAt = readyAt
+            lastSpeechAt = readyAt
             return
         }
-        val sc = j.optJSONObject("serverContent") ?: j.optJSONObject("server_content") ?: return
-        val interim = (sc.optJSONObject("interimInputTranscription") ?: sc.optJSONObject("interim_input_transcription"))
-            ?.optString("text").orEmpty()
-        val fin = (sc.optJSONObject("inputTranscription") ?: sc.optJSONObject("input_transcription"))
-            ?.optString("text").orEmpty()
-        if (interim.isNotEmpty()) { lastTextAt = System.currentTimeMillis(); onText(interim, true) }
-        if (fin.isNotEmpty()) { lastTextAt = System.currentTimeMillis(); onText(fin, false) }
+        val sc = j.optJSONObject("serverContent") ?: j.optJSONObject("server_content")
+        if (sc == null) { lastRaw = raw.take(200); return }
+        val interim = txt(sc, "interimInputTranscription", "interim_input_transcription")
+        val fin = txt(sc, "inputTranscription", "input_transcription")
+        if (interim.isEmpty() && fin.isEmpty() && !sc.has("turnComplete") && !sc.has("turn_complete")) lastRaw = raw.take(200)
+        if (interim.isNotEmpty()) { lastTextAt = System.currentTimeMillis(); textCount++; onText(interim, true) }
+        if (fin.isNotEmpty()) { lastTextAt = System.currentTimeMillis(); textCount++; onText(fin, false) }
         if (sc.optBoolean("turnComplete") || sc.optBoolean("turn_complete")) onTurnComplete()
     }
 
