@@ -135,21 +135,80 @@ object Updater {
         }
     }
 
+    private fun toast(ctx: Context, msg: String) {
+        CoroutineScope(Dispatchers.Main).launch { Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show() }
+    }
+
+    /** PackageInstaller 세션으로 설치한다. 결과(성공/실패 사유)는 [InstallReceiver]가 받아 화면에 알린다. */
     private fun install(ctx: Context, apk: File) {
         if (!ctx.packageManager.canRequestPackageInstalls()) {
-            CoroutineScope(Dispatchers.Main).launch {
-                Toast.makeText(ctx, "'이 출처 허용'을 켠 뒤 업데이트를 다시 눌러주세요", Toast.LENGTH_LONG).show()
-            }
+            message.value = "설치 허용이 꺼져 있어요. 설정에서 'MeetNote의 앱 설치 허용'을 켠 뒤 다시 눌러주세요"
+            toast(ctx, message.value)
             ctx.startActivity(
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}"))
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
             return
         }
-        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", apk)
-        ctx.startActivity(
-            Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
+        try {
+            val pi = ctx.packageManager.packageInstaller
+            val params = android.content.pm.PackageInstaller.SessionParams(
+                android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL
+            )
+            params.setSize(apk.length())
+            val sid = pi.createSession(params)
+            pi.openSession(sid).use { session ->
+                apk.inputStream().use { input ->
+                    session.openWrite("MeetNote.apk", 0, apk.length()).use { out ->
+                        input.copyTo(out)
+                        session.fsync(out)
+                    }
+                }
+                val pending = android.app.PendingIntent.getBroadcast(
+                    ctx, sid, Intent(ctx, InstallReceiver::class.java),
+                    android.app.PendingIntent.FLAG_MUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                message.value = "설치 확인 창을 띄우는 중…"
+                session.commit(pending.intentSender)
+            }
+        } catch (e: Exception) {
+            message.value = "설치 시작 실패: ${e.message?.take(120)}"
+            toast(ctx, message.value)
+        }
+    }
+}
+
+/** 설치 진행 결과를 받는다. 사용자 확인이 필요하면 확인 창을 띄운다. */
+class InstallReceiver : android.content.BroadcastReceiver() {
+    @Suppress("DEPRECATION")
+    override fun onReceive(ctx: Context, intent: Intent) {
+        val st = intent.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999)
+        val detail = intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()
+        when (st) {
+            android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                if (confirm != null) {
+                    confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    try { ctx.startActivity(confirm) } catch (e: Exception) {
+                        Updater.message.value = "설치 확인 창을 열지 못했어요: ${e.message?.take(100)}"
+                    }
+                }
+            }
+            android.content.pm.PackageInstaller.STATUS_SUCCESS -> Updater.message.value = "설치 완료"
+            else -> {
+                val why = when (st) {
+                    android.content.pm.PackageInstaller.STATUS_FAILURE_CONFLICT ->
+                        "기존 앱과 충돌(서명이 달라 업데이트 불가일 수 있음). 기존 앱을 지우고 다시 설치해야 해요 (기록은 삭제됨)"
+                    android.content.pm.PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "이 기기와 호환되지 않는 앱이에요"
+                    android.content.pm.PackageInstaller.STATUS_FAILURE_STORAGE -> "저장 공간이 부족해요"
+                    android.content.pm.PackageInstaller.STATUS_FAILURE_BLOCKED -> "기기 정책이나 Play 보호가 설치를 막았어요"
+                    android.content.pm.PackageInstaller.STATUS_FAILURE_ABORTED -> "설치를 취소했어요"
+                    android.content.pm.PackageInstaller.STATUS_FAILURE_INVALID -> "설치 파일이 올바르지 않아요"
+                    else -> "알 수 없는 오류"
+                }
+                Updater.message.value = "설치 실패($st): $why${if (detail.isNotBlank()) " [$detail]" else ""}"
+                Toast.makeText(ctx, Updater.message.value, Toast.LENGTH_LONG).show()
+            }
+        }
     }
 }

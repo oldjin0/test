@@ -51,6 +51,10 @@ fun UpdateBanner() {
                 }
             }
             progress?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth()) }
+            val msg by Updater.message.collectAsState()
+            if (msg.startsWith("설치") || msg.startsWith("다운로드")) {
+                Text(msg, fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
         }
     }
 }
