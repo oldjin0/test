@@ -374,12 +374,7 @@ ColorizeResult colorizePage(
   if (model != null) {
     // The manga model is already vivid; the photo-trained Lab model is not.
     final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
-    // colors the reader asked for with hints are kept as they are
-    out = _composeChroma(
-      src,
-      _predictChroma(src, model, sat, hints, denoiser),
-      damp: hints.isEmpty,
-    );
+    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser));
     mode = ColorizeMode.ai;
   } else {
     out = _toneFilter(src);
@@ -489,9 +484,116 @@ img.Image _predictChroma(
       chroma.setPixelRgb(x, y, (128 + cb).clamp(0, 255), (128 + cr).clamp(0, 255), 0);
     }
   }
+  fillPlainAreas(chroma, gray, iw, pw, ph);
   if (hints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, hints);
   return chroma;
 }
+
+/// Colors each closed area of plain paper (bounded by line art, little or
+/// no screentone) evenly. The model colors screentone well, as it gives it
+/// texture to go by, but leaves such areas faint and blotchy: an area gets
+/// the model's own average color there, raised when faint, mixed in more
+/// the plainer the area. Areas the model left gray stay as they are (white
+/// things), and so do tiny ones and the open background. [gray] is the
+/// model input (stride [iw]) with the page in its top-left [pw] x [ph].
+void fillPlainAreas(img.Image chroma, Float32List gray, int iw, int pw, int ph) {
+  final cw = chroma.width, ch = chroma.height;
+  final n = pw * ph;
+  final label = Int32List(n)..fillRange(0, n, -1);
+  bool open(int i) => gray[(i ~/ pw) * iw + i % pw] >= _lineGray;
+  // per area: pixels, sum of Cb, Cr (centered), plain-paper pixels
+  final areas = <List<double>>[];
+  final queue = <int>[];
+  for (var start = 0; start < n; start++) {
+    if (label[start] >= 0 || !open(start)) continue;
+    final id = areas.length;
+    label[start] = id;
+    queue
+      ..clear()
+      ..add(start);
+    var sumCb = 0.0, sumCr = 0.0, plain = 0;
+    for (var q = 0; q < queue.length; q++) {
+      final i = queue[q], x = i % pw, y = i ~/ pw;
+      final p = chroma.getPixel(math.min(cw - 1, x * cw ~/ pw), math.min(ch - 1, y * ch ~/ ph));
+      sumCb += p.r - 128;
+      sumCr += p.g - 128;
+      if (gray[y * iw + x] > 0.86) plain++;
+      if (x > 0 && label[i - 1] < 0 && open(i - 1)) {
+        label[i - 1] = id;
+        queue.add(i - 1);
+      }
+      if (x + 1 < pw && label[i + 1] < 0 && open(i + 1)) {
+        label[i + 1] = id;
+        queue.add(i + 1);
+      }
+      if (y > 0 && label[i - pw] < 0 && open(i - pw)) {
+        label[i - pw] = id;
+        queue.add(i - pw);
+      }
+      if (y + 1 < ph && label[i + pw] < 0 && open(i + pw)) {
+        label[i + pw] = id;
+        queue.add(i + pw);
+      }
+    }
+    final a = queue.length.toDouble();
+    areas.add([a, sumCb / a, sumCr / a, plain / a]);
+  }
+  double smooth(double e0, double e1, double v) {
+    final t = ((v - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    return t * t * (3 - 2 * t);
+  }
+
+  // what each area is filled with, and how much (0: left to the model)
+  final fillCb = Float32List(areas.length), fillCr = Float32List(areas.length);
+  final weight = Float32List(areas.length);
+  for (var id = 0; id < areas.length; id++) {
+    final [a, mcb, mcr, plainFrac] = areas[id];
+    if (a < n * 0.0004 || a > n * 0.12) continue;
+    final c = math.sqrt(mcb * mcb + mcr * mcr);
+    if (c < 2.5) continue; // the model sees it as white or gray
+    final scale = math.min(2.2, math.max(1.0, plainAreaChroma / c));
+    fillCb[id] = mcb * scale;
+    fillCr[id] = mcr * scale;
+    weight[id] = 0.8 * smooth(0.45, 0.85, plainFrac) * smooth(2.5, 5, c);
+  }
+  // Paint at the chroma image's size; line art next to an area takes half
+  // of its color, so no faint seam is left along the lines.
+  for (var y = 0; y < ch; y++) {
+    final py = math.min(ph - 1, y * ph ~/ ch);
+    for (var x = 0; x < cw; x++) {
+      final px = math.min(pw - 1, x * pw ~/ cw);
+      var id = label[py * pw + px];
+      var w = 1.0;
+      if (id < 0) {
+        w = 0.5;
+        for (final (dx, dy) in const [(-1, 0), (1, 0), (0, -1), (0, 1)]) {
+          final nx = px + dx, ny = py + dy;
+          if (nx < 0 || ny < 0 || nx >= pw || ny >= ph) continue;
+          final j = label[ny * pw + nx];
+          if (j >= 0 && weight[j] > 0) {
+            id = j;
+            break;
+          }
+        }
+        if (id < 0) continue;
+      }
+      final k = weight[id] * w;
+      if (k <= 0) continue;
+      final p = chroma.getPixel(x, y);
+      chroma.setPixelRgb(
+        x,
+        y,
+        p.r + (128 + fillCb[id] - p.r) * k,
+        p.g + (128 + fillCr[id] - p.g) * k,
+        0,
+      );
+    }
+  }
+}
+
+/// Chroma (YCbCr units) a faint plain area is raised to: clearly colored,
+/// short of loud.
+const plainAreaChroma = 16.0;
 
 /// Gray (0..1) below which a pixel counts as line art when filling.
 const _lineGray = 0.45;
@@ -608,7 +710,7 @@ Float32List hintInput(Float32List gray, int iw, int ih, int pw, int ph, List<Col
 }
 
 /// Merges low-resolution chroma with the page's own luminance.
-img.Image _composeChroma(img.Image src, img.Image chroma, {bool damp = true}) {
+img.Image _composeChroma(img.Image src, img.Image chroma) {
   final up = img.copyResize(
     chroma,
     width: src.width,
@@ -617,120 +719,15 @@ img.Image _composeChroma(img.Image src, img.Image chroma, {bool damp = true}) {
   );
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);
-  final tone = damp ? screentoneMask(s, src.width, src.height) : null;
   final o = Uint8List(s.length);
-  for (var i = 0, px = 0; i < s.length; i += 3, px++) {
+  for (var i = 0; i < s.length; i += 3) {
     final y = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
-    // the model makes much of screentone: its color there is toned down
-    final k = tone == null ? 1.0 : 1 - screentoneDamping * tone.at(px % src.width, px ~/ src.width);
-    final cb = (c[i] - 128) * k, cr = (c[i + 1] - 128) * k;
+    final cb = c[i] - 128, cr = c[i + 1] - 128;
     o[i] = (y + 1.402 * cr).round().clamp(0, 255);
     o[i + 1] = (y - 0.344136 * cb - 0.714136 * cr).round().clamp(0, 255);
     o[i + 2] = (y + 1.772 * cb).round().clamp(0, 255);
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
-}
-
-/// How much of the model's color is taken out on screentone (0..1).
-const screentoneDamping = 0.55;
-
-/// Where a page is screentone, 0..1, on a half-size grid ([at] looks up a
-/// full-size pixel). Screentone is fine dot or line texture spread evenly
-/// over an area of middle gray; line art is just as busy, but only along
-/// its strokes, on white, so over a wider window its texture is sparse.
-class ToneMask {
-  ToneMask(this.values, this.width, this.height);
-
-  final Float32List values;
-  final int width, height;
-
-  double at(int x, int y) =>
-      values[math.min(height - 1, y >> 1) * width + math.min(width - 1, x >> 1)];
-}
-
-ToneMask screentoneMask(Uint8List rgb, int width, int height) {
-  final w = math.max(1, width ~/ 2), h = math.max(1, height ~/ 2);
-  // half-size luminance (dots of common tones stay a few pixels apart)
-  final lum = Int32List(w * h);
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      var sum = 0, n = 0;
-      for (var dy = 0; dy < 2; dy++) {
-        final yy = y * 2 + dy;
-        if (yy >= height) continue;
-        for (var dx = 0; dx < 2; dx++) {
-          final xx = x * 2 + dx;
-          if (xx >= width) continue;
-          final i = (yy * width + xx) * 3;
-          sum += (299 * rgb[i] + 587 * rgb[i + 1] + 114 * rgb[i + 2]) ~/ 1000;
-          n++;
-        }
-      }
-      lum[y * w + x] = n == 0 ? 255 : sum ~/ n;
-    }
-  }
-  final lumSum = _integral(lum, w, h);
-  // texture: how far each pixel is from its 3x3 mean
-  final detail = Int32List(w * h);
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      detail[y * w + x] = (lum[y * w + x] - _boxMean(lumSum, w, h, x, y, 1)).abs().round();
-    }
-  }
-  final detailSum = _integral(detail, w, h);
-  // bare paper: plenty between the strokes of line art, hardly any where
-  // tone dots cover an area
-  final paper = Int32List(w * h);
-  for (var i = 0; i < w * h; i++) {
-    paper[i] = lum[i] > 228 && detail[i] < 6 ? 1 : 0;
-  }
-  final paperSum = _integral(paper, w, h);
-  double smooth(double e0, double e1, double v) {
-    final t = ((v - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    return t * t * (3 - 2 * t);
-  }
-
-  const r = 6; // ~12 pixels of the page: a patch, not a stroke
-  final out = Float32List(w * h);
-  for (var y = 0; y < h; y++) {
-    for (var x = 0; x < w; x++) {
-      // texture in each quarter of the window, the weakest counting: tone
-      // fills all four, the edge of a stroke or a fill only some
-      var busy = double.infinity;
-      for (final (dx, dy) in const [(-1, -1), (1, -1), (-1, 1), (1, 1)]) {
-        busy = math.min(busy, _boxMean(detailSum, w, h, x + dx * 3, y + dy * 3, 3));
-      }
-      final mean = _boxMean(lumSum, w, h, x, y, r);
-      final bare = _boxMean(paperSum, w, h, x, y, r);
-      out[y * w + x] =
-          smooth(7, 16, busy) *
-          (1 - smooth(0.2, 0.45, bare)) *
-          smooth(40, 80, mean) *
-          (1 - smooth(200, 235, mean));
-    }
-  }
-  return ToneMask(out, w, h);
-}
-
-/// Summed-area table, one row and column larger than the image.
-Int32List _integral(Int32List v, int w, int h) {
-  final s = Int32List((w + 1) * (h + 1));
-  for (var y = 0; y < h; y++) {
-    var row = 0;
-    for (var x = 0; x < w; x++) {
-      row += v[y * w + x];
-      s[(y + 1) * (w + 1) + x + 1] = s[y * (w + 1) + x + 1] + row;
-    }
-  }
-  return s;
-}
-
-double _boxMean(Int32List s, int w, int h, int x, int y, int r) {
-  final x0 = math.max(0, x - r), y0 = math.max(0, y - r);
-  final x1 = math.min(w, x + r + 1), y1 = math.min(h, y + r + 1);
-  final sum =
-      s[y1 * (w + 1) + x1] - s[y0 * (w + 1) + x1] - s[y1 * (w + 1) + x0] + s[y0 * (w + 1) + x0];
-  return sum / ((x1 - x0) * (y1 - y0));
 }
 
 /// Fallback when no model is available: warm highlights / cool shadows.
