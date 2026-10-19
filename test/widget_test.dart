@@ -993,6 +993,31 @@ void main() {
     expect(calls.last, 0, reason: 'let go when they are done');
   });
 
+  test('a page asked for first goes ahead of the queued background pages', () async {
+    final service = await ColorizeService.start();
+    final page = img.encodePng(img.Image(width: 20, height: 20, numChannels: 3));
+    final order = <String>[];
+    Future<void> ask(String name, {bool first = false}) => service
+        .colorizeInBackground(name, () async {
+          order.add(name);
+          return page;
+        }, first: first)
+        .then((_) {}, onError: (Object _) {});
+    final all = [
+      ask('a'),
+      ask('b'),
+      ask('c'),
+      ask('d'),
+      ask('learn1', first: true),
+      ask('learn2', first: true),
+    ];
+    await Future.wait(all);
+    // 'a' was already running; the learning pages come next, in their order
+    expect(order.first, 'a');
+    expect(order.indexOf('learn1'), lessThan(order.indexOf('b')));
+    expect(order.indexOf('learn2'), lessThan(order.indexOf('b')));
+  });
+
   test('scanning or learning a book keeps the app alive too', () async {
     final calls = <int>[];
     final service = await ColorizeService.start();

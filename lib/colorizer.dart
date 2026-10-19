@@ -550,11 +550,11 @@ void fillPlainAreas(img.Image chroma, Float32List gray, int iw, int pw, int ph) 
     final [a, mcb, mcr, plainFrac] = areas[id];
     if (a < n * 0.0004 || a > n * 0.12) continue;
     final c = math.sqrt(mcb * mcb + mcr * mcr);
-    if (c < 2.5) continue; // the model sees it as white or gray
-    final scale = math.min(2.2, math.max(1.0, plainAreaChroma / c));
+    if (c < 1.8) continue; // the model sees it as white or gray
+    final scale = math.min(3.2, math.max(1.0, plainAreaChroma / c));
     fillCb[id] = mcb * scale;
     fillCr[id] = mcr * scale;
-    weight[id] = 0.8 * smooth(0.45, 0.85, plainFrac) * smooth(2.5, 5, c);
+    weight[id] = 0.85 * smooth(0.4, 0.8, plainFrac) * smooth(1.8, 4, c);
   }
   // Paint at the chroma image's size; line art next to an area takes half
   // of its color, so no faint seam is left along the lines.
@@ -593,7 +593,7 @@ void fillPlainAreas(img.Image chroma, Float32List gray, int iw, int pw, int ph) 
 
 /// Chroma (YCbCr units) a faint plain area is raised to: clearly colored,
 /// short of loud.
-const plainAreaChroma = 16.0;
+const plainAreaChroma = 19.0;
 
 /// Gray (0..1) below which a pixel counts as line art when filling.
 const _lineGray = 0.45;

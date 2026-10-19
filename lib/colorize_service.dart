@@ -111,7 +111,7 @@ class ColorizeService {
 
   /// Names how the model's colors are put on the page (see
   /// `_composeChroma`); part of the cache keys.
-  static const composeTag = '-t2';
+  static const composeTag = '-t3';
 
   /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.
@@ -213,6 +213,10 @@ class ColorizeService {
   /// waiting: a whole book can be prepared while reading goes on. The result
   /// lands in the disk cache, so the page is instant when it is reached. A
   /// later [colorize] of the same page moves it to the front.
+  ///
+  /// With [first] the page goes to the front of the background queue: what
+  /// the app itself needs to go on (a book's learning) must not wait behind
+  /// the pages of a whole book.
   Future<ColorizeResult> colorizeInBackground(
     String key,
     Future<Uint8List> Function() loadPage, {
@@ -220,20 +224,30 @@ class ColorizeService {
     bool denoise = false,
     BookLook look = BookLook.none,
     int? ink,
+    bool first = false,
   }) {
     final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) {
       existing.wanted = true;
+      if (first && _background.containsKey(key)) _toFront(key, _background[key]!);
       _updateBackgroundLeft();
       return existing.completer.future;
     }
     final job = _Job(key, loadPage, hints, denoise, look, ink: ink)
       ..background = true
       ..wanted = true;
-    _background[key] = job;
+    first ? _toFront(key, job) : _background[key] = job;
     _updateBackgroundLeft();
     unawaited(_pump());
     return job.completer.future;
+  }
+
+  void _toFront(String key, _Job job) {
+    final rest = Map.of(_background)..remove(key);
+    _background
+      ..clear()
+      ..[key] = job
+      ..addAll(rest);
   }
 
   /// Drops the queued whole-book jobs (the page being worked on finishes).
