@@ -109,6 +109,10 @@ class ColorizeService {
   /// sets it to include the input size, since that changes the colors.
   static String cacheTag = modelVersion;
 
+  /// Names how the model's colors are put on the page (see
+  /// `_composeChroma`); part of the cache keys.
+  static const composeTag = '-t1';
+
   /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.
   static int ink = 0;
@@ -157,7 +161,7 @@ class ColorizeService {
     bool denoise = false,
     BookLook look = BookLook.none,
   }) {
-    var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag';
+    var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag$composeTag';
     if (denoise) key += '_dn';
     if (hints.isNotEmpty) {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
