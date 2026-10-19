@@ -20,13 +20,18 @@
     margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
     font: 16px/1.5 -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
   }
-  main { max-width: 720px; margin: 0 auto; }
+  main { max-width: 1000px; margin: 0 auto; }
   h1 { font-size: 1.6rem; margin: 0 0 4px; }
   .sub { color: var(--muted); margin: 0 0 24px; font-size: .9rem; }
+  #q {
+    width: 100%; padding: 11px 14px; margin-bottom: 16px; font: inherit; color: var(--text);
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  }
+  #list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+  .state { grid-column: 1 / -1; }
   .card {
     background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-    padding: 18px; margin-bottom: 14px;
-  }
+    padding: 18px; }
   .card h2 { font-size: 1.15rem; margin: 0; }
   .meta { color: var(--muted); font-size: .8rem; margin: 2px 0 10px; }
   .desc { margin: 0 0 14px; white-space: pre-line; word-break: break-word; }
@@ -45,13 +50,15 @@
 <main>
   <h1>📱 APK 다운로드</h1>
   <p class="sub">새 APK가 릴리스에 올라오면 이 목록에 자동으로 나타납니다.</p>
+  <input id="q" type="search" placeholder="앱 검색…" autocomplete="off">
   <div id="list"><div class="state">불러오는 중…</div></div>
 </main>
 
 <script>
-// 이 저장소의 GitHub Releases에서 .apk 파일을 읽어 목록을 만든다.
-// 저장소가 바뀌면 REPO만 수정하면 된다.
-const REPO = "oldjin0/test";
+// 아래 저장소들의 GitHub Releases에서 .apk 파일을 읽어 목록을 만든다.
+// APK를 올리는 저장소가 늘면 여기에 추가하면 된다.
+const REPOS = ["oldjin0/test", "oldjin0/negotiation"];
+let ALL = [];
 
 const esc = s => String(s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -74,10 +81,16 @@ function render(releases) {
     .map(r => ({ r, apks: r.assets.filter(a => /\.apk$/i.test(a.name)) }))
     .filter(x => x.apks.length)
     .filter(({ r }) => !seen.has(appName(r)) && seen.add(appName(r)));
+  ALL = items;
+  show();
+}
 
+function show() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const items = ALL.filter(({ r }) => !q || (appName(r) + " " + summary(r.body)).toLowerCase().includes(q));
   const list = document.getElementById("list");
   if (!items.length) {
-    list.innerHTML = '<div class="state">아직 올라온 APK가 없습니다.</div>';
+    list.innerHTML = '<div class="state">표시할 APK가 없습니다.</div>';
     return;
   }
   list.innerHTML = items.map(({ r, apks }) => `
@@ -91,14 +104,20 @@ function render(releases) {
     </section>`).join("");
 }
 
-fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`)
-  .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
-  .then(render)
-  .catch(e => {
-    document.getElementById("list").innerHTML =
-      `<div class="state">목록을 불러오지 못했습니다 (${esc(e.message)}).<br>
-      <a href="https://github.com/${REPO}/releases">GitHub 릴리스 페이지에서 직접 받기</a></div>`;
-  });
+document.getElementById("q").addEventListener("input", show);
+
+Promise.allSettled(REPOS.map(repo =>
+  fetch(`https://api.github.com/repos/${repo}/releases?per_page=100`)
+    .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+)).then(results => {
+  const ok = results.filter(x => x.status === "fulfilled");
+  if (!ok.length) throw new Error(results[0].reason.message);
+  render(ok.flatMap(x => x.value));
+}).catch(e => {
+  document.getElementById("list").innerHTML =
+    `<div class="state">목록을 불러오지 못했습니다 (${esc(e.message)}).<br>
+    ${REPOS.map(r => `<a href="https://github.com/${esc(r)}/releases">${esc(r)} 릴리스</a>`).join(" · ")}</div>`;
+});
 </script>
 </body>
 </html>
