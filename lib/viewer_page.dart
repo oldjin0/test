@@ -187,6 +187,9 @@ class _ViewerPageState extends State<ViewerPage> {
 
   Future<void> _load() async {
     try {
+      // the book's learned colors are part of every page's cache key
+      await _store.loadLook(widget.path);
+      _lookKey = _store.lookOf(widget.path).tag;
       final book = await ComicBook.open(widget.path);
       final start = (widget.initialPage ?? _store.progressOf(widget.path)?.page ?? 0).clamp(
         0,

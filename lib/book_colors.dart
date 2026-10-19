@@ -41,6 +41,15 @@ class BookColorMap {
     return h.toRadixString(36);
   }
 
+  /// What [this] and [other] learned together: the evidence adds up.
+  BookColorMap plus(BookColorMap other) {
+    final sum = Float32List(cells.length);
+    for (var i = 0; i < sum.length; i++) {
+      sum[i] = cells[i] + other.cells[i];
+    }
+    return BookColorMap(sum);
+  }
+
   String toJson() => base64Encode(cells.buffer.asUint8List());
 
   static BookColorMap? fromJson(String s) {

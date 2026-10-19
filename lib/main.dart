@@ -74,7 +74,17 @@ String? bookFromArguments(List<String> args) {
 
 /// Starts the background colorizer with the bundled model and a disk cache.
 Future<ColorizeService> startColorizer([LibraryStore? store]) async {
-  final cache = Directory(p.join((await getApplicationCacheDirectory()).path, 'colorized'));
+  // The phone keeps its colored pages with the app's files, not in the
+  // cache folder: Android empties that one when storage runs low, and a
+  // colored book would be done again.
+  final cacheRoot = isPc ? getApplicationCacheDirectory() : getApplicationSupportDirectory();
+  final cache = Directory(p.join((await cacheRoot).path, 'colorized'));
+  if (!isPc && !cache.existsSync()) {
+    final old = Directory(p.join((await getApplicationCacheDirectory()).path, 'colorized'));
+    try {
+      if (old.existsSync()) await old.rename(cache.path);
+    } catch (_) {}
+  }
   await cache.create(recursive: true);
   if (isPc) {
     // The PC version: ONNX Runtime (DirectML graphics, or the processor).

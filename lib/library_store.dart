@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -88,7 +89,11 @@ class LibraryStore extends ChangeNotifier {
   /// Per book: the reference pages its learned colors came from ('' when
   /// learning found too little color), and the learned map itself (in a file
   /// of its own; loaded by [loadLook]).
-  final Map<String, String> _learnedFrom = {};
+  final Map<String, Set<int>> _learnedPages = {};
+  final Map<String, BookColorMap?> _published = {}; // what colorizing uses
+  final Map<String, int> _publishedCount = {};
+  final Map<String, List<int>> _candidates = {};
+  final Map<String, int> _checked = {};
   final Map<String, BookColorMap?> _maps = {};
   bool rtl = true;
   bool dual = false;
@@ -260,7 +265,17 @@ class LibraryStore extends ChangeNotifier {
           if (m['found'] != null) _foundRefs['$key'] = ints(m['found']);
           _markedRefs['$key'] = ints(m['marked']).toSet();
           _unmarkedRefs['$key'] = ints(m['unmarked']).toSet();
-          if (m['learnedFrom'] != null) _learnedFrom['$key'] = m['learnedFrom'] as String;
+          if (m['cand'] != null) _candidates['$key'] = ints(m['cand']);
+          _checked['$key'] = (m['checked'] as num?)?.toInt() ?? 0;
+          if (m['learned'] != null) {
+            _learnedPages['$key'] = ints(m['learned']).toSet();
+          } else if (m['learnedFrom'] is String) {
+            // before learning accumulated: the reference set it came from
+            _learnedPages['$key'] = {
+              for (final v in (m['learnedFrom'] as String).split(','))
+                if (int.tryParse(v) != null) int.parse(v),
+            };
+          }
         }
       }
     } catch (_) {}
@@ -352,12 +367,19 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setString(
       'bookRefs',
       jsonEncode({
-        for (final path in {..._foundRefs.keys, ..._markedRefs.keys, ..._learnedFrom.keys})
+        for (final path in {
+          ..._foundRefs.keys,
+          ..._markedRefs.keys,
+          ..._learnedPages.keys,
+          ..._candidates.keys,
+        })
           path: {
             'found': _foundRefs[path],
             'marked': [...?_markedRefs[path]],
             'unmarked': [...?_unmarkedRefs[path]],
-            'learnedFrom': _learnedFrom[path],
+            'learned': [...?_learnedPages[path]],
+            'cand': _candidates[path],
+            'checked': _checked[path],
           },
       }),
     );
@@ -514,7 +536,9 @@ class LibraryStore extends ChangeNotifier {
   /// setting is off).
   BookLook lookOf(String path) {
     if (!bookPalette) return BookLook.none;
-    final map = _learnedFrom[path] == referenceKey(path) ? _maps[path] : null;
+    // what was learned so far serves while more is being learned; it changes
+    // in steps, not with every page, since every change colors the pages again
+    final map = _published[path];
     if (map != null) return BookLook(map: map);
     return BookLook(palette: _palettes[path] ?? const []);
   }
@@ -529,6 +553,29 @@ class LibraryStore extends ChangeNotifier {
     _foundRefs[path] = pages;
     _changed();
   }
+
+  /// The pages of [path] worth checking for color (see `colorCandidates`),
+  /// or null when not looked through yet. They are checked in order, a few
+  /// at a time: [checkedCount] of them are done.
+  List<int>? candidatesOf(String path) => _candidates[path];
+
+  int checkedCount(String path) => _checked[path] ?? 0;
+
+  void setCandidates(String path, List<int> pages) {
+    _candidates[path] = pages;
+    _checked[path] = 0;
+    _changed();
+  }
+
+  /// [count] candidates of [path] are checked; [found] are color pages.
+  void markChecked(String path, int count, List<int> found) {
+    _checked[path] = count;
+    if (found.isNotEmpty) _foundRefs[path] = {...?_foundRefs[path], ...found}.toList()..sort();
+    _changed();
+  }
+
+  /// The pages the reader marked as references of [path].
+  Set<int> markedRefsOf(String path) => _markedRefs[path] ?? const {};
 
   /// The reference pages of [path]: found ones the reader kept, and the ones
   /// they marked.
@@ -553,13 +600,42 @@ class LibraryStore extends ChangeNotifier {
     _changed();
   }
 
-  /// Names the current reference set of [path] (learning is redone when it
-  /// changes).
-  String referenceKey(String path) => referencesOf(path).join(',');
+  /// The reference pages whose colors are in [path]'s learned map.
+  Set<int> learnedPagesOf(String path) => _learnedPages[path] ?? const {};
 
-  /// Whether colors were learned (or found unlearnable) for the current
-  /// references of [path].
-  bool learnedCurrent(String path) => _learnedFrom[path] == referenceKey(path);
+  /// What was learned from [path]'s reference pages so far, or null.
+  BookColorMap? learnedMap(String path) => _maps[path];
+
+  /// Reference pages of [path] still to learn (those the reader marked
+  /// first), at most [limit] counting [learned] (default: what is learned).
+  List<int> pendingReferences(String path, Set<int> learned, int limit) {
+    final marked = markedRefsOf(path);
+    final todo = [
+      for (final i in referencesOf(path))
+        if (!learned.contains(i)) i,
+    ]..sort((a, b) => (marked.contains(a) ? 0 : 1).compareTo(marked.contains(b) ? 0 : 1));
+    return todo.take(math.max(0, limit - learned.length)).toList();
+  }
+
+  /// Whether anything was kept about what was learned for [path] yet.
+  bool learnedRecorded(String path) => _learnedPages.containsKey(path);
+
+  /// Whether nothing more is to be learned for [path] (up to [limit] pages):
+  /// every reference is in, and no learned page has been unmarked.
+  bool learningDone(String path, int limit) {
+    final learned = learnedPagesOf(path);
+    return learnedRecorded(path) &&
+        learned.every(referencesOf(path).contains) &&
+        pendingReferences(path, learned, limit).isEmpty;
+  }
+
+  /// Whether colors were learned (or found unlearnable) for every current
+  /// reference of [path], and for no page that is not one any more.
+  bool learnedCurrent(String path) {
+    final learned = _learnedPages[path];
+    final refs = referencesOf(path).toSet();
+    return learned != null && learned.length == refs.length && learned.containsAll(refs);
+  }
 
   static Future<File?> _mapFile(String path) async {
     try {
@@ -582,13 +658,39 @@ class LibraryStore extends ChangeNotifier {
     } catch (_) {
       _maps[path] = null;
     }
+    _published[path] = _maps[path];
+    _publishedCount[path] = _learnedPages[path]?.length ?? 0;
   }
 
-  /// Keeps what was learned from [refsKey] (the reference set it came from);
-  /// [map] null: too little color to learn from.
-  Future<void> setLearned(String path, String refsKey, BookColorMap? map) async {
+  /// How many reference pages are in the colors [lookOf] gives now.
+  int publishedCount(String path) => _publishedCount[path] ?? 0;
+
+  /// Lets colorizing use everything learned so far.
+  void publishLearned(String path) {
+    if (identical(_published[path], _maps[path])) return;
+    _published[path] = _maps[path];
+    _publishedCount[path] = _learnedPages[path]?.length ?? 0;
+    _changed();
+  }
+
+  /// Keeps [map], what was learned from the reference [pages] together
+  /// (null: nothing to keep, too little color in them). Pages added later
+  /// are learned on top of it, see [BookColorMap.plus].
+  ///
+  /// With [publish] false the colors in use stay as they were until
+  /// [publishLearned].
+  Future<void> setLearned(
+    String path,
+    Set<int> pages,
+    BookColorMap? map, {
+    bool publish = true,
+  }) async {
     _maps[path] = map;
-    _learnedFrom[path] = refsKey;
+    _learnedPages[path] = Set.of(pages);
+    if (publish) {
+      _published[path] = map;
+      _publishedCount[path] = pages.length;
+    }
     try {
       final f = await _mapFile(path);
       if (f != null) {

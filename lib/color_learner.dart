@@ -30,6 +30,20 @@ class ColorLearner {
 
   final _running = <String, Future<String?>>{};
 
+  /// Reference pages learned per round (each runs the model once).
+  static const batchPages = 6;
+
+  /// Pages checked for color per round.
+  static const checkPages = 30;
+
+  /// The most pages looked at for color in one book, and the most learned
+  /// from (the marked ones first): beyond that a book hardly learns more.
+  static const maxCandidates = 600;
+  static const maxLearned = 80;
+
+  /// Learned pages that must add up before the colors in use change.
+  static const publishEvery = 18;
+
   void _say(String path, String? text) {
     final m = Map.of(status.value);
     text == null ? m.remove(path) : m[path] = text;
@@ -61,38 +75,108 @@ class ColorLearner {
     store.notifyLook();
     ComicBook? book;
     Future<ComicBook> open() async => book ??= await ComicBook.open(path, window: 2);
-    if (store.foundRefs(path) == null) {
-      store.setFoundRefs(path, await _scan(path, await open()));
+    if (store.candidatesOf(path) == null) {
+      store.setCandidates(path, await _candidates(path, await open()));
     }
-    if (store.learnedCurrent(path)) return null;
+    try {
+      return await _learnRounds(path, store, colorizer, open);
+    } finally {
+      store.publishLearned(path); // whatever was learned, used from now on
+    }
+  }
+
+  Future<String?> _learnRounds(
+    String path,
+    LibraryStore store,
+    Future<ColorizeService> colorizer,
+    Future<ComicBook> Function() open,
+  ) async {
+    var added = 0;
+    var canLearn = true;
+    // Round after round: a few more pages are checked for color, then what
+    // was found (and what the reader marked) is learned, on top of what was
+    // learned before. The longer it goes on the more of the book it knows.
+    while (true) {
+      final cands = store.candidatesOf(path)!;
+      final from = store.checkedCount(path);
+      if (from < cands.length) {
+        final batch = cands.sublist(from, math.min(cands.length, from + checkPages));
+        final b = await open();
+        final found = <int>[];
+        for (final (k, i) in batch.indexed) {
+          _say(path, '컬러 페이지 찾는 중 ${from + k + 1}/${cands.length}');
+          try {
+            if (await _isColor(await b.page(i))) found.add(i);
+          } catch (_) {}
+        }
+        store.markChecked(path, from + batch.length, found);
+      }
+      if (canLearn) {
+        final learnedNow = await _learnRound(path, store, colorizer, open);
+        if (learnedNow == null) {
+          canLearn = false; // no model: the search goes on, the learning waits
+        } else {
+          added += learnedNow;
+        }
+      }
+      if (store.checkedCount(path) >= cands.length &&
+          (!canLearn || store.learningDone(path, maxLearned))) {
+        break;
+      }
+    }
+    final total = store.learnedPagesOf(path).length;
+    if (added == 0 || store.learnedMap(path) == null) {
+      return store.learnedMap(path) == null && total > 0
+          ? '컬러 페이지에서 배울 색이 충분하지 않아, 그 페이지들의 색감만 따릅니다.'
+          : null;
+    }
+    return '컬러 페이지 $added장을 더 배웠습니다 (이 책에서 모두 $total장). 채색이 그 색으로 바뀝니다.';
+  }
+
+  /// Learns the next [batchPages] pending references on top of what is
+  /// learned. Returns how many pages added color, null without a model.
+  Future<int?> _learnRound(
+    String path,
+    LibraryStore store,
+    Future<ColorizeService> colorizer,
+    Future<ComicBook> Function() open,
+  ) async {
     final refs = store.referencesOf(path);
-    final refsKey = store.referenceKey(path);
-    if (refs.isEmpty) {
-      await store.setLearned(path, refsKey, null);
-      return null;
+    var learned = store.learnedPagesOf(path);
+    var map = store.learnedMap(path);
+    if (!learned.every(refs.contains)) {
+      // a page is not a reference any more: its share cannot be taken out
+      // of the sum, so start over from the references that are left
+      learned = {};
+      map = null;
     }
+    final pending = store.pendingReferences(path, learned, maxLearned);
+    if (pending.isEmpty) {
+      // nothing to learn: keep the restart, or note that there are no references
+      if (learned.length != store.learnedPagesOf(path).length || !store.learnedRecorded(path)) {
+        await store.setLearned(path, learned, map);
+      }
+      return 0;
+    }
+    final batch = pending.take(batchPages).toList();
     final b = await open();
-    // Spread over the book, at most 8 pages.
-    final picked = refs.length <= 8
-        ? refs
-        : [for (var k = 0; k < 8; k++) refs[k * refs.length ~/ 8]];
-    final real = <Uint8List>[];
-    for (final i in picked) {
+    final real = <int, Uint8List>{};
+    for (final i in batch) {
       try {
-        real.add(await b.page(i));
+        real[i] = await b.page(i);
       } catch (_) {}
     }
-    // the palette of those pages serves until the learning is done
-    store.setPalette(path, await _palette(real));
+    // the palette of those pages serves until there is a learned map
+    if (map == null) store.setPalette(path, await _palette(real.values.toList()));
     final service = await colorizer;
     if (!service.modelLoaded) return null;
     final pairs = <(Uint8List, Uint8List)>[];
-    for (final (k, bytes) in real.indexed) {
-      _say(path, '색 참고 페이지 학습 중 ${k + 1}/${real.length}');
+    for (final (k, MapEntry(key: i, value: bytes)) in real.entries.indexed) {
+      _say(path, '색 참고 페이지 학습 중 ${learned.length + k + 1}/${refs.length}');
       final gray = await _gray(bytes);
       // the model on a black-and-white copy, as it sees the other pages
       final key = ColorizeService.plainKey(
-        ColorizeService.keyFor('ref:$path', picked[k], denoise: store.denoise),
+        ColorizeService.keyFor('ref:$path', i, denoise: store.denoise),
       );
       try {
         final r = await service.colorizeInBackground(
@@ -105,18 +189,24 @@ class ColorLearner {
         pairs.add((r.bytes, bytes));
       } catch (_) {}
     }
-    final map = await _learnMap(pairs);
-    if (store.referenceKey(path) != refsKey) return null; // changed meanwhile: next run
-    await store.setLearned(path, refsKey, map);
-    return map == null
-        ? '컬러 페이지에서 배울 색이 충분하지 않아, 그 페이지들의 색감만 따릅니다.'
-        : '컬러 페이지 ${real.length}장에서 이 책의 색을 배웠습니다. 채색이 그 색으로 바뀝니다.';
+    final more = await _learnMap(pairs);
+    if (more != null) map = map == null ? more : map.plus(more);
+    // pages that could not be read are not retried: counted as done
+    // The colors in use change in steps: each change colors the pages again.
+    final done = {...learned, ...batch};
+    final publish =
+        map != null &&
+        (store.publishedCount(path) == 0 ||
+            done.length - store.publishedCount(path) >= publishEvery ||
+            store.pendingReferences(path, done, maxLearned).isEmpty);
+    await store.setLearned(path, done, map, publish: publish);
+    return more == null ? 0 : pairs.length;
   }
 
-  /// The color pages of [book]: page signatures first (file headers only,
-  /// in one pass), then only the pages that break the black-and-white
-  /// pattern are decoded and checked.
-  Future<List<int>> _scan(String path, ComicBook book) async {
+  /// The pages of [book] worth checking for color: page signatures (file
+  /// headers only, in one pass) show which pages break the black-and-white
+  /// pattern; only those are decoded and checked later.
+  Future<List<int>> _candidates(String path, ComicBook book) async {
     final n = book.length;
     final lower = path.toLowerCase();
     List<int> candidates;
@@ -150,17 +240,9 @@ class ColorLearner {
         } catch (_) {} // not a plain zip: page by page
       }
       sigs ??= await onePerPage();
-      candidates = colorCandidates(sigs);
+      candidates = colorCandidates(sigs, maxPages: maxCandidates);
     }
-    final found = <int>[];
-    for (final (k, i) in candidates.indexed) {
-      _say(path, '컬러 페이지 확인 중 ${k + 1}/${candidates.length}');
-      try {
-        final bytes = await book.page(i);
-        if (await _isColor(bytes)) found.add(i);
-      } catch (_) {}
-    }
-    return found;
+    return candidates;
   }
 }
 
