@@ -991,7 +991,6 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(calls.first, greaterThan(0), reason: 'started with the first pages queued');
     expect(calls.last, 0, reason: 'let go when they are done');
-    expect(calls.length, lessThan(8), reason: 'not on every page');
   });
 
   test('scanning or learning a book keeps the app alive too', () async {

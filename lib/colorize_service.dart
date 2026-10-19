@@ -93,6 +93,11 @@ class ColorizeService {
   final _queue = <String, _Job>{}; // insertion-ordered
   final _background = <String, _Job>{}; // whole-book jobs: run when _queue is empty
   final _replies = <int, _Job>{};
+
+  /// Disk cache budget: whole books colored ahead must fit (a colorized
+  /// page and its plain copy take about 1.5 MB).
+  static int cacheBytes = isPc ? 4 << 30 : 2 << 30;
+  int _writes = 0;
   _Job? _running;
   int _nextId = 0;
 
@@ -139,8 +144,7 @@ class ColorizeService {
         : '$basis.xnnpack-guard';
     await Isolate.spawn(_workerMain, [port.sendPort, modelPath, guard, denoiserPath, onnx]);
     await s._ready.future;
-    // The PC colors whole books ahead and has the disk for it.
-    if (cacheDir != null) unawaited(_pruneCache(cacheDir, maxBytes: isPc ? 3 << 30 : 300 << 20));
+    if (cacheDir != null) unawaited(s._prune());
     return s;
   }
 
@@ -346,7 +350,10 @@ class ColorizeService {
   Future<Uint8List?> _readJpg(String key) async {
     try {
       final jpg = _file(key, 'jpg');
-      if (jpg != null && await jpg.exists()) return await jpg.readAsBytes();
+      if (jpg != null && await jpg.exists()) {
+        unawaited(_touch(jpg));
+        return await jpg.readAsBytes();
+      }
     } catch (_) {}
     return null;
   }
@@ -355,6 +362,7 @@ class ColorizeService {
     try {
       final jpg = _file(key, 'jpg');
       if (jpg != null && await jpg.exists()) {
+        unawaited(_touch(jpg));
         return ColorizeResult(await jpg.readAsBytes(), ColorizeMode.ai, 0);
       }
       final skip = _file(key, 'color');
@@ -365,7 +373,21 @@ class ColorizeService {
     return null;
   }
 
+  /// Marks a cached page as used now, so pruning keeps it.
+  static Future<void> _touch(File f) async {
+    try {
+      await f.setLastModified(DateTime.now());
+    } catch (_) {}
+  }
+
+  Future<void> _prune() async {
+    final dir = _cacheDir;
+    if (dir != null) await pruneCache(dir, maxBytes: cacheBytes);
+  }
+
   Future<void> _writeCache(String key, ColorizeResult r) async {
+    // keep within the budget while whole books are colored, not only at start
+    if (++_writes % 40 == 0) unawaited(_prune());
     try {
       switch (r.mode) {
         case ColorizeMode.ai:
@@ -378,14 +400,27 @@ class ColorizeService {
     } catch (_) {}
   }
 
-  /// Keeps the disk cache under [maxBytes] by deleting the oldest files.
-  static Future<void> _pruneCache(Directory dir, {required int maxBytes}) async {
+  /// Keeps the disk cache under [maxBytes]. The pages after the cheap
+  /// steps (book colors, color e-ink: remade from their plain copy in a
+  /// moment) go first, oldest first; then the least recently used of the
+  /// rest, whose model run is what takes time.
+  static Future<void> pruneCache(Directory dir, {required int maxBytes}) async {
     try {
       final files = await dir.list().where((e) => e is File).cast<File>().toList();
       final stats = {for (final f in files) f: await f.stat()};
       var total = stats.values.fold<int>(0, (s, st) => s + st.size);
-      final oldest = files..sort((a, b) => stats[a]!.modified.compareTo(stats[b]!.modified));
-      for (final f in oldest) {
+      if (total <= maxBytes) return;
+      bool cheap(File f) {
+        final name = p.basenameWithoutExtension(f.path);
+        return plainKey(name) != name;
+      }
+
+      final order = files
+        ..sort((a, b) {
+          final c = (cheap(a) ? 0 : 1).compareTo(cheap(b) ? 0 : 1);
+          return c != 0 ? c : stats[a]!.modified.compareTo(stats[b]!.modified);
+        });
+      for (final f in order) {
         if (total <= maxBytes) break;
         total -= stats[f]!.size;
         await f.delete();

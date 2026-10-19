@@ -292,14 +292,49 @@ BookColorMap? learnBookColors(List<(Uint8List predicted, Uint8List real)> pairs)
     }
   }
   if (total < 400) return null;
-  return BookColorMap(cells);
+  return BookColorMap(_spread(cells));
+}
+
+/// Lets what was learned in a cell reach the cells around it, weaker with
+/// distance: the other pages' colors seldom fall in exactly the cells a
+/// cover filled. A cell's own evidence still outweighs its neighbors'.
+Float32List _spread(Float32List cells) {
+  const nl = BookColorMap.nl, na = BookColorMap.na, nb = BookColorMap.nb;
+  var cur = cells;
+  // a, b twice (about two cells, ~25 units), lightness once
+  for (final (axis, passes) in [(1, 2), (2, 2), (0, 1)]) {
+    for (var pass = 0; pass < passes; pass++) {
+      final next = Float32List.fromList(cur);
+      for (var l = 0; l < nl; l++) {
+        for (var a = 0; a < na; a++) {
+          for (var b = 0; b < nb; b++) {
+            final k = BookColorMap._cell(l, a, b);
+            for (final d in const [-1, 1]) {
+              final (ll, aa, bb) = switch (axis) {
+                0 => (l + d, a, b),
+                1 => (l, a + d, b),
+                _ => (l, a, b + d),
+              };
+              if (ll < 0 || ll >= nl || aa < 0 || aa >= na || bb < 0 || bb >= nb) continue;
+              final j = BookColorMap._cell(ll, aa, bb);
+              for (var c = 0; c < 4; c++) {
+                next[k + c] += cur[j + c] * 0.35;
+              }
+            }
+          }
+        }
+      }
+      cur = next;
+    }
+  }
+  return cur;
 }
 
 final _tables = <String, Uint8List>{};
 
 /// Applies a book's learned correction to a colorized page (tightly packed
 /// RGB, in place). Cells with little evidence change little.
-void applyBookColors(Uint8List rgb, BookColorMap map, {double strength = 0.85}) {
+void applyBookColors(Uint8List rgb, BookColorMap map, {double strength = 0.95}) {
   final table = _tables['${map.tag}/$strength'] ??= InkColor.buildTable((r, g, b) {
     final lab = InkColor.rgbToLab(r, g, b);
     final c = math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);

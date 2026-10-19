@@ -50,8 +50,8 @@ void keepAliveWhileColoring(
   void update() {
     // scanning or learning a book counts as work too
     final left = service.backgroundLeft.value + learner.value;
-    // Start and stop at once; while running, refresh the count every 5 pages.
-    if ((left == 0) != (last == 0) || (last - left).abs() >= 5) {
+    // every page: the count going down shows it is working
+    if (left != last) {
       last = left;
       unawaited(keepAlive(left));
     }
