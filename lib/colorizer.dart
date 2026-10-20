@@ -374,7 +374,7 @@ ColorizeResult colorizePage(
   if (model != null) {
     // The manga model is already vivid; the photo-trained Lab model is not.
     final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
-    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser));
+    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
     mode = ColorizeMode.ai;
   } else {
     out = _toneFilter(src);
@@ -430,8 +430,9 @@ img.Image _predictChroma(
   ColorModel model,
   double saturation,
   List<ColorHint> hints,
-  PageDenoiser? denoiser,
-) {
+  PageDenoiser? denoiser, {
+  BookLook look = BookLook.none,
+}) {
   final iw = model.inWidth, ih = model.inHeight;
   final s = math.min(iw / src.width, ih / src.height);
   final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
@@ -449,7 +450,12 @@ img.Image _predictChroma(
   if (denoiser != null && !lab && denoiser.width == iw && denoiser.height == ih) {
     gray = denoiser.denoise(gray);
   }
-  final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, hints) : gray);
+  final effectiveHints = hints.isNotEmpty
+      ? hints
+      : (look.palette.isNotEmpty && model.inChannels == 5
+          ? autoHintsFromPalette(gray, iw, ih, pw, ph, look.palette)
+          : const <ColorHint>[]);
+  final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, effectiveHints) : gray);
 
   // Crop the page area out of the (possibly smaller) prediction.
   final ow = model.outWidth;
@@ -485,7 +491,7 @@ img.Image _predictChroma(
     }
   }
   fillPlainAreas(chroma, gray, iw, pw, ph);
-  if (hints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, hints);
+  if (effectiveHints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, effectiveHints);
   return chroma;
 }
 
@@ -629,6 +635,89 @@ void _fillHints(img.Image chroma, Float32List gray, int iw, int pw, int ph, List
   }
 }
 
+/// Automatically generates sparse hints across closed drawing regions using
+/// colors learned from the book's palette, avoiding speech bubbles and line art.
+List<ColorHint> autoHintsFromPalette(
+  Float32List gray,
+  int iw,
+  int ih,
+  int pw,
+  int ph,
+  List<int> palette,
+) {
+  if (palette.isEmpty) return const [];
+  int lumaOf(int c) =>
+      ((c >> 16) & 0xff) * 299 + ((c >> 8) & 0xff) * 587 + (c & 0xff) * 114;
+  final sortedPal = List<int>.from(palette)..sort((a, b) => lumaOf(b).compareTo(lumaOf(a)));
+
+  final n = pw * ph;
+  final label = Int32List(n)..fillRange(0, n, -1);
+  bool open(int x, int y) => gray[y * iw + x] >= _lineGray;
+
+  final queue = <int>[];
+  final hints = <ColorHint>[];
+
+  for (var start = 0; start < n; start++) {
+    final sx = start % pw, sy = start ~/ pw;
+    if (label[start] >= 0 || !open(sx, sy)) continue;
+
+    label[start] = 1;
+    queue
+      ..clear()
+      ..add(start);
+
+    var sumX = 0, sumY = 0;
+    var sumG = 0.0;
+    var touchesEdge = false;
+
+    for (var q = 0; q < queue.length; q++) {
+      final i = queue[q], x = i % pw, y = i ~/ pw;
+      sumX += x;
+      sumY += y;
+      sumG += gray[y * iw + x];
+      if (x == 0 || y == 0 || x == pw - 1 || y == ph - 1) touchesEdge = true;
+
+      for (final (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]) {
+        if (nx < 0 || ny < 0 || nx >= pw || ny >= ph) continue;
+        final j = ny * pw + nx;
+        if (label[j] >= 0) continue;
+        label[j] = 1;
+        if (open(nx, ny)) queue.add(j);
+      }
+    }
+
+    final count = queue.length;
+    if (count < n * 0.0006 || count > n * 0.20) continue;
+
+    final meanG = sumG / count;
+    if (meanG > 0.88 && (touchesEdge || count > n * 0.015)) continue;
+    if (meanG > 0.90 || meanG < 0.15) continue;
+
+    var cx = sumX ~/ count, cy = sumY ~/ count;
+    if (!open(cx, cy)) {
+      final pick = queue[count ~/ 2];
+      cx = pick % pw;
+      cy = pick ~/ pw;
+    }
+
+    final int color;
+    if (meanG > 0.68) {
+      color = sortedPal[0];
+    } else if (meanG > 0.50 && sortedPal.length > 1) {
+      color = sortedPal[1];
+    } else if (meanG > 0.32 && sortedPal.length > 2) {
+      color = sortedPal[2];
+    } else {
+      color = sortedPal.last;
+    }
+
+    hints.add(ColorHint(cx / pw, cy / ph, color));
+    if (hints.length >= 40) break;
+  }
+
+  return hints;
+}
+
 /// Weights (pw*ph, 0..1) of the area a hint at ([fx], [fy]) of the page
 /// fills: pixels reachable from it without crossing line art, softened at
 /// the border. When that area is open (over 40% of the page), a disc
@@ -730,7 +819,17 @@ img.Image _composeChroma(img.Image src, img.Image chroma) {
   final o = Uint8List(s.length);
   for (var i = 0; i < s.length; i += 3) {
     final y = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
-    final cb = c[i] - 128, cr = c[i + 1] - 128;
+    final double chromaFade;
+    if (y >= 242) {
+      chromaFade = 0.0;
+    } else if (y >= 225) {
+      chromaFade = (242 - y) / 17.0;
+    } else if (y <= 40) {
+      chromaFade = y / 40.0;
+    } else {
+      chromaFade = 1.0;
+    }
+    final cb = (c[i] - 128) * chromaFade, cr = (c[i + 1] - 128) * chromaFade;
     o[i] = (y + 1.402 * cr).round().clamp(0, 255);
     o[i + 1] = (y - 0.344136 * cb - 0.714136 * cr).round().clamp(0, 255);
     o[i + 2] = (y + 1.772 * cb).round().clamp(0, 255);

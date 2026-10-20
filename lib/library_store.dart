@@ -542,10 +542,11 @@ class LibraryStore extends ChangeNotifier {
     // what was learned so far serves while more is being learned; it changes
     // in steps, not with every page, since every change colors the pages again
     final map = _published[path], bank = _publishedBanks[path];
-    if (map != null || (useFormBank && bank != null)) {
-      return BookLook(map: map, bank: useFormBank ? bank : null);
-    }
-    return BookLook(palette: _palettes[path] ?? const []);
+    return BookLook(
+      palette: _palettes[path] ?? const [],
+      map: map,
+      bank: useFormBank ? bank : null,
+    );
   }
 
   /// Tells listeners that a look was loaded (cache keys may change).
