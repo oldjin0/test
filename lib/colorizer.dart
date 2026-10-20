@@ -372,8 +372,8 @@ ColorizeResult colorizePage(
   final ColorizeMode mode;
   final img.Image out;
   if (model != null) {
-    // The manga model is already vivid; the photo-trained Lab model is not.
-    final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
+    // The manga model is already vivid; boost saturation slightly for authentic comic print look.
+    final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.35 : 1.25);
     out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
     mode = ColorizeMode.ai;
   } else {
@@ -450,10 +450,11 @@ img.Image _predictChroma(
   if (denoiser != null && !lab && denoiser.width == iw && denoiser.height == ih) {
     gray = denoiser.denoise(gray);
   }
+  final pal = look.palette.isNotEmpty ? look.palette : defaultMangaPalette;
   final effectiveHints = hints.isNotEmpty
       ? hints
-      : (look.palette.isNotEmpty && model.inChannels == 5
-          ? autoHintsFromPalette(gray, iw, ih, pw, ph, look.palette)
+      : (model.inChannels == 5
+          ? autoHintsFromPalette(gray, iw, ih, pw, ph, pal)
           : const <ColorHint>[]);
   final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, effectiveHints) : gray);
 
@@ -491,7 +492,7 @@ img.Image _predictChroma(
     }
   }
   fillPlainAreas(chroma, gray, iw, pw, ph);
-  if (effectiveHints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, effectiveHints);
+  if (hints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, hints);
   return chroma;
 }
 
@@ -635,6 +636,15 @@ void _fillHints(img.Image chroma, Float32List gray, int iw, int pw, int ph, List
   }
 }
 
+/// Standard vivid manga palette (warm skin, golden/brown hair, soft blue clothing, slate shadow, crimson accent).
+const defaultMangaPalette = [
+  0xF5DBC5, // warm anime skin tone (245, 219, 197)
+  0xD2B98C, // golden / warm hair (210, 185, 140)
+  0x8C96C8, // soft denim / clothing blue (140, 150, 200)
+  0x6E78AA, // shadow slate (110, 120, 170)
+  0xD84030, // crimson accent (216, 64, 48)
+];
+
 /// Automatically generates sparse hints across closed drawing regions using
 /// colors learned from the book's palette, avoiding speech bubbles and line art.
 List<ColorHint> autoHintsFromPalette(
@@ -645,10 +655,16 @@ List<ColorHint> autoHintsFromPalette(
   int ph,
   List<int> palette,
 ) {
-  if (palette.isEmpty) return const [];
+  final pal = List<int>.from(palette.isNotEmpty ? palette : defaultMangaPalette);
+  if (pal.length < 4) {
+    for (final def in defaultMangaPalette) {
+      if (!pal.contains(def)) pal.add(def);
+      if (pal.length >= 4) break;
+    }
+  }
   int lumaOf(int c) =>
       ((c >> 16) & 0xff) * 299 + ((c >> 8) & 0xff) * 587 + (c & 0xff) * 114;
-  final sortedPal = List<int>.from(palette)..sort((a, b) => lumaOf(b).compareTo(lumaOf(a)));
+  final sortedPal = pal..sort((a, b) => lumaOf(b).compareTo(lumaOf(a)));
 
   final n = pw * ph;
   final label = Int32List(n)..fillRange(0, n, -1);
@@ -687,10 +703,10 @@ List<ColorHint> autoHintsFromPalette(
     }
 
     final count = queue.length;
-    if (count < n * 0.0006 || count > n * 0.20) continue;
+    if (count < n * 0.0005 || count > n * 0.25) continue;
 
     final meanG = sumG / count;
-    if (meanG > 0.88 && (touchesEdge || count > n * 0.015)) continue;
+    if (meanG > 0.88 && (touchesEdge || count > n * 0.012)) continue;
     if (meanG > 0.90 || meanG < 0.15) continue;
 
     var cx = sumX ~/ count, cy = sumY ~/ count;
@@ -712,7 +728,7 @@ List<ColorHint> autoHintsFromPalette(
     }
 
     hints.add(ColorHint(cx / pw, cy / ph, color));
-    if (hints.length >= 40) break;
+    if (hints.length >= 120) break;
   }
 
   return hints;
@@ -788,7 +804,7 @@ Float32List hintInput(Float32List gray, int iw, int ih, int pw, int ph, List<Col
   for (var i = 0; i < iw * ih; i++) {
     input[i * 5] = gray[i];
   }
-  final r = math.max(2, (iw * hintRadius).round());
+  final r = math.max(2, (iw * 0.010).round());
   for (final h in hints) {
     final cx = (h.x.clamp(0.0, 1.0) * pw).round(), cy = (h.y.clamp(0.0, 1.0) * ph).round();
     final rgb = [(h.color >> 16) & 0xff, (h.color >> 8) & 0xff, h.color & 0xff];

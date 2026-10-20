@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'book_colors.dart';
+import 'book_palette.dart';
 import 'color_learner.dart';
 import 'colorize_service.dart';
 import 'colorizer.dart';
@@ -189,8 +190,17 @@ class _ViewerPageState extends State<ViewerPage> {
     try {
       // the book's learned colors are part of every page's cache key
       await _store.loadLook(widget.path);
-      _lookKey = _store.lookOf(widget.path).tag;
       final book = await ComicBook.open(widget.path);
+      if ((_store.paletteOf(widget.path) == null || _store.paletteOf(widget.path)!.isEmpty) && book.length > 0) {
+        try {
+          final firstBytes = await book.page(0);
+          final pal = await Isolate.run(() => extractBookPalette([firstBytes]));
+          if (pal.isNotEmpty) {
+            _store.setPalette(widget.path, pal);
+          }
+        } catch (_) {}
+      }
+      _lookKey = _store.lookOf(widget.path).tag;
       final start = (widget.initialPage ?? _store.progressOf(widget.path)?.page ?? 0).clamp(
         0,
         book.length - 1,

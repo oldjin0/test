@@ -169,8 +169,9 @@ class ColorLearner {
         real[i] = await b.page(i);
       } catch (_) {}
     }
-    // the palette of those pages serves until there is a learned map
-    if (map == null) store.setPalette(path, await _palette(real.values.toList()));
+    // the palette of those pages serves for sparse hints and color matching
+    final pal = await _palette(real.values.toList());
+    if (pal.isNotEmpty) store.setPalette(path, pal);
     final service = await colorizer;
     if (!service.modelLoaded) return null;
     final pairs = <(Uint8List, Uint8List)>[];
