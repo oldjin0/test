@@ -12,6 +12,7 @@ import 'book_colors.dart';
 import 'book_palette.dart';
 import 'colorize_service.dart';
 import 'comic_loader.dart';
+import 'form_colors.dart';
 import 'library_store.dart';
 
 /// Learns books' colors from their own color pages (see [BookColorMap]),
@@ -125,10 +126,9 @@ class ColorLearner {
       }
     }
     final total = store.learnedPagesOf(path).length;
-    if (added == 0 || store.learnedMap(path) == null) {
-      return store.learnedMap(path) == null && total > 0
-          ? '컬러 페이지에서 배울 색이 충분하지 않아, 그 페이지들의 색감만 따릅니다.'
-          : null;
+    final nothing = store.learnedMap(path) == null && store.learnedBank(path) == null;
+    if (added == 0 || nothing) {
+      return nothing && total > 0 ? '컬러 페이지에서 배울 색이 충분하지 않아, 그 페이지들의 색감만 따릅니다.' : null;
     }
     return '컬러 페이지 $added장을 더 배웠습니다 (이 책에서 모두 $total장). 채색이 그 색으로 바뀝니다.';
   }
@@ -144,17 +144,19 @@ class ColorLearner {
     final refs = store.referencesOf(path);
     var learned = store.learnedPagesOf(path);
     var map = store.learnedMap(path);
+    var bank = store.learnedBank(path);
     if (!learned.every(refs.contains)) {
       // a page is not a reference any more: its share cannot be taken out
       // of the sum, so start over from the references that are left
       learned = {};
       map = null;
+      bank = null;
     }
     final pending = store.pendingReferences(path, learned, maxLearned);
     if (pending.isEmpty) {
       // nothing to learn: keep the restart, or note that there are no references
       if (learned.length != store.learnedPagesOf(path).length || !store.learnedRecorded(path)) {
-        await store.setLearned(path, learned, map);
+        await store.setLearned(path, learned, map, bank: bank);
       }
       return 0;
     }
@@ -191,16 +193,19 @@ class ColorLearner {
     }
     final more = await _learnMap(pairs);
     if (more != null) map = map == null ? more : map.plus(more);
+    // colors by form need only the real pages, not the model
+    final moreBank = await _learnBank(real.values.toList());
+    if (moreBank != null) bank = bank == null ? moreBank : bank.plus(moreBank);
     // pages that could not be read are not retried: counted as done
     // The colors in use change in steps: each change colors the pages again.
     final done = {...learned, ...batch};
     final publish =
-        map != null &&
+        (map != null || bank != null) &&
         (store.publishedCount(path) == 0 ||
             done.length - store.publishedCount(path) >= publishEvery ||
             store.pendingReferences(path, done, maxLearned).isEmpty);
-    await store.setLearned(path, done, map, publish: publish);
-    return more == null ? 0 : pairs.length;
+    await store.setLearned(path, done, map, bank: bank, publish: publish);
+    return more == null && moreBank == null ? 0 : real.length;
   }
 
   /// The pages of [book] worth checking for color: page signatures (file
@@ -252,6 +257,7 @@ Future<List<int>> _palette(List<Uint8List> pages) => Isolate.run(() => extractBo
 Future<Uint8List> _gray(Uint8List bytes) => Isolate.run(() => toGrayJpeg(bytes));
 Future<BookColorMap?> _learnMap(List<(Uint8List, Uint8List)> pairs) =>
     Isolate.run(() => learnBookColors(pairs));
+Future<FormBank?> _learnBank(List<Uint8List> pages) => Isolate.run(() => learnFormBank(pages));
 Future<bool> _isColor(Uint8List bytes) => Isolate.run(() => isColorImage(bytes));
 Future<List<PageSignature>> _signaturesInBackground(String path, List<String> names, bool isDir) =>
     Isolate.run(() => _signatures(path, names, isDir));

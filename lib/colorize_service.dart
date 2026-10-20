@@ -117,7 +117,7 @@ class ColorizeService {
   /// cache keys; the library settings set it from the E-ink mode.
   static int ink = 0;
 
-  static final _postSuffix = RegExp(r'(_pal[0-9a-z]+|_bc[0-9a-z]+)?(_ink[0-9]+)?$');
+  static final _postSuffix = RegExp(r'(_pal[0-9a-z]+|_bc[0-9a-z]+)?(_fb[0-9a-z]+)?(_ink[0-9]+)?$');
 
   /// The cache key of the same page before the steps after the model (the
   /// book's palette, color e-ink processing).

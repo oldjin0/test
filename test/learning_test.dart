@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:manga_viewer/book_colors.dart';
 import 'package:manga_viewer/color_learner.dart';
+import 'package:manga_viewer/form_colors.dart';
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/library_store.dart';
 import 'package:path/path.dart' as p;
@@ -116,5 +117,30 @@ void main() {
     store.publishLearned(book);
     expect(store.lookOf(book).map, same(b));
     expect(store.publishedCount(book), 2);
+  });
+
+  test('colors by form are kept with the learned colors and used in the look', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await LibraryStore.load();
+    const book = '/books/c.cbz';
+    final im = img.Image(width: 200, height: 280, numChannels: 3);
+    img.fill(im, color: img.ColorRgb8(255, 255, 255));
+    img.fillRect(im, x1: 10, y1: 10, x2: 190, y2: 130, color: img.ColorRgb8(0, 0, 0));
+    img.fillRect(im, x1: 13, y1: 13, x2: 187, y2: 127, color: img.ColorRgb8(170, 210, 240));
+    img.fillRect(im, x1: 10, y1: 150, x2: 190, y2: 270, color: img.ColorRgb8(0, 0, 0));
+    img.fillRect(im, x1: 13, y1: 153, x2: 187, y2: 267, color: img.ColorRgb8(230, 120, 160));
+    final bank = learnFormBank([Uint8List.fromList(img.encodePng(im))])!;
+    expect(store.lookOf(book).bank, isNull);
+
+    await store.setLearned(book, {1}, null, bank: bank);
+    expect(store.lookOf(book).bank, same(bank), reason: 'a bank alone is a look');
+    expect(store.lookOf(book).isEmpty, isFalse);
+    expect(store.learnedBank(book), same(bank));
+
+    final more = bank.plus(bank);
+    await store.setLearned(book, {1, 2}, null, bank: more, publish: false);
+    expect(store.lookOf(book).bank, same(bank), reason: 'in steps');
+    store.publishLearned(book);
+    expect(store.lookOf(book).bank, same(more));
   });
 }

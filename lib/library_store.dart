@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'book_colors.dart';
+import 'form_colors.dart';
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
 
@@ -92,6 +93,8 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, Set<int>> _learnedPages = {};
   final Map<String, BookColorMap?> _published = {}; // what colorizing uses
   final Map<String, int> _publishedCount = {};
+  final Map<String, FormBank?> _banks = {};
+  final Map<String, FormBank?> _publishedBanks = {};
   final Map<String, List<int>> _candidates = {};
   final Map<String, int> _checked = {};
   final Map<String, BookColorMap?> _maps = {};
@@ -538,8 +541,8 @@ class LibraryStore extends ChangeNotifier {
     if (!bookPalette) return BookLook.none;
     // what was learned so far serves while more is being learned; it changes
     // in steps, not with every page, since every change colors the pages again
-    final map = _published[path];
-    if (map != null) return BookLook(map: map);
+    final map = _published[path], bank = _publishedBanks[path];
+    if (map != null || bank != null) return BookLook(map: map, bank: bank);
     return BookLook(palette: _palettes[path] ?? const []);
   }
 
@@ -647,6 +650,11 @@ class LibraryStore extends ChangeNotifier {
     }
   }
 
+  static Future<File?> _bankFile(String path) async {
+    final f = await _mapFile(path);
+    return f == null ? null : File('${f.path.substring(0, f.path.length - 4)}.fb');
+  }
+
   /// Reads [path]'s learned colors into memory (once).
   Future<void> loadLook(String path) async {
     if (_maps.containsKey(path)) return;
@@ -658,17 +666,33 @@ class LibraryStore extends ChangeNotifier {
     } catch (_) {
       _maps[path] = null;
     }
+    try {
+      final f = await _bankFile(path);
+      _banks[path] = f != null && await f.exists()
+          ? FormBank.fromJson(await f.readAsString())
+          : null;
+    } catch (_) {
+      _banks[path] = null;
+    }
     _published[path] = _maps[path];
+    _publishedBanks[path] = _banks[path];
     _publishedCount[path] = _learnedPages[path]?.length ?? 0;
   }
+
+  /// What [path]'s reference pages taught about colors by form, or null.
+  FormBank? learnedBank(String path) => _banks[path];
 
   /// How many reference pages are in the colors [lookOf] gives now.
   int publishedCount(String path) => _publishedCount[path] ?? 0;
 
   /// Lets colorizing use everything learned so far.
   void publishLearned(String path) {
-    if (identical(_published[path], _maps[path])) return;
+    if (identical(_published[path], _maps[path]) &&
+        identical(_publishedBanks[path], _banks[path])) {
+      return;
+    }
     _published[path] = _maps[path];
+    _publishedBanks[path] = _banks[path];
     _publishedCount[path] = _learnedPages[path]?.length ?? 0;
     _changed();
   }
@@ -683,12 +707,15 @@ class LibraryStore extends ChangeNotifier {
     String path,
     Set<int> pages,
     BookColorMap? map, {
+    FormBank? bank,
     bool publish = true,
   }) async {
     _maps[path] = map;
+    _banks[path] = bank;
     _learnedPages[path] = Set.of(pages);
     if (publish) {
       _published[path] = map;
+      _publishedBanks[path] = bank;
       _publishedCount[path] = pages.length;
     }
     try {
@@ -698,6 +725,14 @@ class LibraryStore extends ChangeNotifier {
           if (await f.exists()) await f.delete();
         } else {
           await f.writeAsString(map.toJson());
+        }
+      }
+      final bf = await _bankFile(path);
+      if (bf != null) {
+        if (bank == null) {
+          if (await bf.exists()) await bf.delete();
+        } else {
+          await bf.writeAsString(bank.toJson());
         }
       }
     } catch (_) {}

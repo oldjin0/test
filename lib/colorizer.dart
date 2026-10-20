@@ -406,7 +406,7 @@ ColorizeResult colorizePage(
 /// page when their settings change: the book's own colors ([look]), then the
 /// color e-ink processing (level [ink]).
 void _postProcess(Uint8List rgb, int width, int height, BookLook look, int ink) {
-  look.apply(rgb);
+  look.apply(rgb, width, height);
   if (ink > 0) InkColor.adapt(rgb, ink, width: width, height: height);
 }
 

@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 
 import 'book_palette.dart';
 import 'colorizer.dart' show isColorPage;
+import 'form_colors.dart';
 import 'ink_color.dart';
 
 /// What a book's own color pages (cover, color inserts; found in the
@@ -364,39 +365,52 @@ void applyBookColors(Uint8List rgb, BookColorMap map, {double strength = 0.95}) 
 }
 
 /// The steps a book's own colors add after the model: the learned
-/// correction when there is one, the palette otherwise.
+/// correction when there is one (the palette otherwise), then the colors of
+/// areas of the same form ([bank]).
 class BookLook {
-  const BookLook({this.palette = const [], this.map});
+  const BookLook({this.palette = const [], this.map, this.bank});
 
   static const none = BookLook();
 
   final List<int> palette;
   final BookColorMap? map;
+  final FormBank? bank;
 
-  bool get isEmpty => map == null && palette.isEmpty;
+  bool get isEmpty => map == null && palette.isEmpty && bank == null;
 
   /// Names the look in cache keys ('' for none).
   String get tag {
     final m = map;
-    if (m != null) return '_bc${m.tag}';
-    if (palette.isNotEmpty) return '_pal${paletteTag(palette)}';
-    return '';
+    var t = '';
+    if (m != null) {
+      t = '_bc${m.tag}';
+    } else if (palette.isNotEmpty) {
+      t = '_pal${paletteTag(palette)}';
+    }
+    final b = bank;
+    if (b != null) t += '_fb${b.tag}';
+    return t;
   }
 
-  void apply(Uint8List rgb) {
+  /// [rgb] is [width] x [height], tightly packed; changed in place.
+  void apply(Uint8List rgb, int width, int height) {
     final m = map;
     if (m != null) {
       applyBookColors(rgb, m);
     } else if (palette.isNotEmpty) {
       applyBookPalette(rgb, palette);
     }
+    bank?.apply(rgb, width, height);
   }
 
-  /// For the worker isolate: [palette, map cells or null].
-  List<Object?> toMessage() => [palette, map?.cells];
+  /// For the worker isolate: [palette, map cells or null, bank parts or null].
+  List<Object?> toMessage() => [palette, map?.cells, bank?.features, bank?.colors, bank?.weights];
 
   static BookLook fromMessage(List m) => BookLook(
     palette: (m[0] as List).cast<int>(),
     map: m[1] == null ? null : BookColorMap(m[1] as Float32List),
+    bank: m.length > 4 && m[2] != null
+        ? FormBank(m[2] as Float32List, m[3] as Float32List, m[4] as Float32List)
+        : null,
   );
 }
