@@ -30,25 +30,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze
-      - name: Test
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          flutter test > /tmp/test.log 2>&1
-          RET=$?
-          cat /tmp/test.log
-          if [ $RET -ne 0 ]; then
-            python3 -c "
-import urllib.request, json, os
-lines = open('/tmp/test.log').read()
-body = '```\n' + lines[-3500:] + '\n```'
-url = f'https://api.github.com/repos/{os.environ[\"GITHUB_REPOSITORY\"]}/commits/{os.environ[\"GITHUB_SHA\"]}/comments'
-req = urllib.request.Request(url, data=json.dumps({'body': body}).encode(), headers={'Authorization': f'token {os.environ[\"GH_TOKEN\"]}', 'Content-Type': 'application/json', 'User-Agent': 'curl'})
-urllib.request.urlopen(req)
-" || true
-            exit $RET
-          fi
+      - run: flutter test
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
