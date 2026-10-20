@@ -979,6 +979,7 @@ void main() {
       service,
       keepAlive: (left) async => calls.add(left),
       learning: ValueNotifier(0),
+      startDelay: const Duration(milliseconds: 1),
     );
     final dir = Directory.systemTemp.createTempSync('alive');
     addTearDown(() => dir.deleteSync(recursive: true));
@@ -1022,9 +1023,21 @@ void main() {
     final calls = <int>[];
     final service = await ColorizeService.start();
     final learning = ValueNotifier<int>(0);
-    keepAliveWhileColoring(service, keepAlive: (left) async => calls.add(left), learning: learning);
+    keepAliveWhileColoring(
+      service,
+      keepAlive: (left) async => calls.add(left),
+      learning: learning,
+      startDelay: const Duration(milliseconds: 30),
+    );
+    learning.value = 1;
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(calls, [1]);
+    learning.value = 0;
+    expect(calls, [1, 0]);
+    // work over before the delay: the service is never started
     learning.value = 1;
     learning.value = 0;
+    await Future<void>.delayed(const Duration(milliseconds: 80));
     expect(calls, [1, 0]);
   });
 

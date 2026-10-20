@@ -27,7 +27,24 @@ class ColorizeKeepAlive : Service() {
         /// Set by the activity: what quitting from the notification does.
         var onExit: (() -> Unit)? = null
 
+        // All on the main thread (method calls and service callbacks).
+        private var instance: ColorizeKeepAlive? = null
+        private var starting = false // started, startForeground not run yet
+        private var stopWanted = false
+        private var latestLeft = 0
+
         fun show(context: Context, left: Int) {
+            latestLeft = left
+            stopWanted = false
+            // Running: only the notification changes. Starting the service
+            // again for every page is wasted, and one started and stopped
+            // before it calls startForeground takes the app down.
+            instance?.let {
+                it.refresh(left)
+                return
+            }
+            if (starting) return
+            starting = true
             val intent = Intent(context, ColorizeKeepAlive::class.java).putExtra(EXTRA_LEFT, left)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -37,6 +54,10 @@ class ColorizeKeepAlive : Service() {
         }
 
         fun hide(context: Context) {
+            if (starting && instance == null) {
+                stopWanted = true // stopped once it has called startForeground
+                return
+            }
             context.stopService(Intent(context, ColorizeKeepAlive::class.java))
         }
     }
@@ -52,7 +73,26 @@ class ColorizeKeepAlive : Service() {
             android.os.Process.killProcess(android.os.Process.myPid())
             return START_NOT_STICKY
         }
-        val left = intent?.getIntExtra(EXTRA_LEFT, 0) ?: 0
+        instance = this
+        starting = false
+        refresh(latestLeft.takeIf { it > 0 } ?: (intent?.getIntExtra(EXTRA_LEFT, 0) ?: 0))
+        if (wake == null) {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "manga_viewer:colorize").apply {
+                setReferenceCounted(false)
+                acquire(12 * 60 * 60 * 1000L) // a safety limit; released when done
+            }
+        }
+        if (stopWanted) {
+            stopWanted = false
+            stopSelf()
+        }
+        return START_NOT_STICKY
+    }
+
+    /// Shows [left] in the notification (and keeps the service in the
+    /// foreground: calling startForeground again only updates it).
+    fun refresh(left: Int) {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
@@ -84,17 +124,11 @@ class ColorizeKeepAlive : Service() {
         } else {
             startForeground(NOTIFICATION, notification)
         }
-        if (wake == null) {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "manga_viewer:colorize").apply {
-                setReferenceCounted(false)
-                acquire(12 * 60 * 60 * 1000L) // a safety limit; released when done
-            }
-        }
-        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        instance = null
+        starting = false
         wake?.let { if (it.isHeld) it.release() }
         wake = null
         super.onDestroy()

@@ -39,17 +39,43 @@ Future<void> main(List<String> args) async {
 }
 
 /// Keeps the app alive (screen off, other apps in front) while background
-/// colorizing has pages left, and lets it go when they are done.
+/// colorizing has pages left, and lets it go when they are done. Work that
+/// ends within [startDelay] (a book opened, nothing to learn) never starts
+/// the service: starting and stopping it at once is not safe on Android.
 void keepAliveWhileColoring(
   ColorizeService service, {
   Future<void> Function(int left) keepAlive = AppPlatform.keepAlive,
   ValueNotifier<int>? learning,
+  Duration startDelay = const Duration(seconds: 2),
 }) {
   final learner = learning ?? ColorLearner.instance.busy;
-  var last = 0;
+  var last = 0; // the count given to keepAlive
+  var running = false;
+  Timer? waiting;
+  int pagesLeft() => service.backgroundLeft.value + learner.value; // scanning and learning count
   void update() {
-    // scanning or learning a book counts as work too
-    final left = service.backgroundLeft.value + learner.value;
+    final left = pagesLeft();
+    if (left == 0) {
+      waiting?.cancel();
+      waiting = null;
+      if (running) {
+        running = false;
+        last = 0;
+        unawaited(keepAlive(0));
+      }
+      return;
+    }
+    if (!running) {
+      waiting ??= Timer(startDelay, () {
+        waiting = null;
+        final now = pagesLeft();
+        if (now == 0) return;
+        running = true;
+        last = now;
+        unawaited(keepAlive(now));
+      });
+      return;
+    }
     // every page: the count going down shows it is working
     if (left != last) {
       last = left;

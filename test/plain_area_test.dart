@@ -6,7 +6,7 @@ import 'package:image/image.dart' as img;
 import 'package:manga_viewer/colorizer.dart';
 
 void main() {
-  test('plain areas get an even, clear color; toned and white ones do not', () {
+  test('plain areas get a clearer color, differences kept; toned and white ones do not', () {
     const w = 200, h = 200;
     final gray = Float32List(w * h)..fillRange(0, w * h, 1.0);
     void frame(int x0, int y0, int x1, int y1) {
@@ -44,9 +44,33 @@ void main() {
         for (var x = 20; x < 50; x += 5) chroma.getPixel(x, y).g - 128,
     ];
     expect(plain.reduce(math.min), greaterThan(10), reason: 'raised');
-    expect(plain.reduce(math.max) - plain.reduce(math.min), lessThan(3), reason: 'even');
+    final spread = plain.reduce(math.max) - plain.reduce(math.min);
+    expect(spread, lessThan(9), reason: 'blotches calmed, not blown up with the gain');
     expect(chroma.getPixel(100, 30).r - 128, 30, reason: 'tone keeps the model color');
     expect(chroma.getPixel(30, 100).g, 128, reason: 'white stays white');
     expect(chroma.getPixel(150, 150).g, 128, reason: 'background untouched');
+  });
+
+  test('hair and skin in one closed area stay different colors', () {
+    const w = 200, h = 200;
+    final gray = Float32List(w * h)..fillRange(0, w * h, 1.0);
+    for (var y = 10; y <= 70; y++) {
+      for (var x = 10; x <= 70; x++) {
+        if (x - 10 < 2 || 70 - x < 2 || y - 10 < 2 || 70 - y < 2) gray[y * w + x] = 0;
+      }
+    }
+    final chroma = img.Image(width: w, height: h, numChannels: 3);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        // the upper half warm (skin), the lower half a little yellower (hair)
+        final upper = y < 40;
+        chroma.setPixelRgb(x, y, 128 - (upper ? 2 : 6), 128 + (upper ? 8 : 5), 0);
+      }
+    }
+    fillPlainAreas(chroma, gray, w, w, h);
+    final skin = chroma.getPixel(40, 25), hair = chroma.getPixel(40, 58);
+    final apart = (skin.r - hair.r).abs() + (skin.g - hair.g).abs();
+    expect(apart, greaterThan(6), reason: 'not flattened to one color');
+    expect(skin.g - 128, greaterThan(8), reason: 'and clearer than the model gave');
   });
 }

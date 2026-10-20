@@ -545,6 +545,7 @@ void fillPlainAreas(img.Image chroma, Float32List gray, int iw, int pw, int ph) 
 
   // what each area is filled with, and how much (0: left to the model)
   final fillCb = Float32List(areas.length), fillCr = Float32List(areas.length);
+  final gain = Float32List(areas.length)..fillRange(0, areas.length, 1.0);
   final weight = Float32List(areas.length);
   for (var id = 0; id < areas.length; id++) {
     final [a, mcb, mcr, plainFrac] = areas[id];
@@ -554,6 +555,7 @@ void fillPlainAreas(img.Image chroma, Float32List gray, int iw, int pw, int ph) 
     final scale = math.min(3.2, math.max(1.0, plainAreaChroma / c));
     fillCb[id] = mcb * scale;
     fillCr[id] = mcr * scale;
+    gain[id] = scale;
     weight[id] = 0.85 * smooth(0.4, 0.8, plainFrac) * smooth(1.8, 4, c);
   }
   // Paint at the chroma image's size; line art next to an area takes half
@@ -579,12 +581,15 @@ void fillPlainAreas(img.Image chroma, Float32List gray, int iw, int pw, int ph) 
       }
       final k = weight[id] * w;
       if (k <= 0) continue;
+      // The model's own colors, raised; evened out only a little towards
+      // the area's average, so hair and skin of one figure stay apart.
       final p = chroma.getPixel(x, y);
+      final bCb = 128 + (p.r - 128) * gain[id], bCr = 128 + (p.g - 128) * gain[id];
       chroma.setPixelRgb(
         x,
         y,
-        p.r + (128 + fillCb[id] - p.r) * k,
-        p.g + (128 + fillCr[id] - p.g) * k,
+        p.r + (bCb - p.r) * k + (128 + fillCb[id] - bCb) * k * plainAreaEvening,
+        p.g + (bCr - p.g) * k + (128 + fillCr[id] - bCr) * k * plainAreaEvening,
         0,
       );
     }
@@ -594,6 +599,9 @@ void fillPlainAreas(img.Image chroma, Float32List gray, int iw, int pw, int ph) 
 /// Chroma (YCbCr units) a faint plain area is raised to: clearly colored,
 /// short of loud.
 const plainAreaChroma = 19.0;
+
+/// How much of the way a plain area's colors go to the area's average.
+const plainAreaEvening = 0.35;
 
 /// Gray (0..1) below which a pixel counts as line art when filling.
 const _lineGray = 0.45;
