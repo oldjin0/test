@@ -908,11 +908,11 @@ img.Image _predictRgb(
   return color;
 }
 
-/// Precomputed gamma 0.55 line factor: keeps lineart dark, lifts shadows from black mud.
+/// Precomputed gamma 0.70 line factor: keeps lineart dark, lifts shadows from black mud.
 final Uint16List _lutLineFactor = () {
   final list = Uint16List(256);
   for (var y = 0; y < 256; y++) {
-    final f = math.pow((y / 235.0).clamp(0.0, 1.0), 0.55).toDouble();
+    final f = math.pow((y / 235.0).clamp(0.0, 1.0), 0.70).toDouble();
     list[y] = (f * 1024.0).round().clamp(0, 1024);
   }
   return list;
