@@ -373,7 +373,7 @@ ColorizeResult colorizePage(
   final img.Image out;
   if (model != null) {
     if (model.output == ModelOutput.rgb) {
-      out = _composeRgbMultiply(src, _predictRgb(src, model, hints, denoiser));
+      out = _composeRgbMultiply(src, _predictRgb(src, model, hints, denoiser, look: look));
     } else {
       final sat = saturation ?? 1.25;
       out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
@@ -866,8 +866,9 @@ img.Image _predictRgb(
   img.Image src,
   ColorModel model,
   List<ColorHint> hints,
-  PageDenoiser? denoiser,
-) {
+  PageDenoiser? denoiser, {
+  BookLook look = BookLook.none,
+}) {
   final iw = model.inWidth, ih = model.inHeight;
   final s = math.min(iw / src.width, ih / src.height);
   final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
@@ -884,7 +885,13 @@ img.Image _predictRgb(
   if (denoiser != null && denoiser.width == iw && denoiser.height == ih) {
     gray = denoiser.denoise(gray);
   }
-  final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, hints) : gray);
+  final pal = look.palette.isNotEmpty ? look.palette : defaultMangaPalette;
+  final effectiveHints = hints.isNotEmpty
+      ? hints
+      : (model.inChannels == 5
+          ? autoHintsFromPalette(gray, iw, ih, pw, ph, pal)
+          : const <ColorHint>[]);
+  final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, effectiveHints) : gray);
 
   final ow = model.outWidth;
   final color = img.Image(width: pw, height: ph, numChannels: 3);
@@ -901,7 +908,33 @@ img.Image _predictRgb(
   return color;
 }
 
-/// Multiplies the model's full RGB color with the original high-resolution ink lineart.
+/// Precomputed lookup tables for shadow-lifting and speech bubble white cleaning.
+/// out[c] = c * _lutA[y] + _lutB[y], where y is the original scan luminance (0..255).
+final Uint16List _lutA = () {
+  final list = Uint16List(256);
+  for (var y = 0; y < 256; y++) {
+    final w = ((y - 225.0) / 25.0).clamp(0.0, 1.0);
+    final f = math.pow((y / 235.0).clamp(0.0, 1.0), 0.55).toDouble();
+    final a = (1.0 - w) * f;
+    list[y] = (a * 1024.0).round().clamp(0, 1024);
+  }
+  return list;
+}();
+
+final Uint32List _lutB = () {
+  final list = Uint32List(256);
+  for (var y = 0; y < 256; y++) {
+    final w = ((y - 225.0) / 25.0).clamp(0.0, 1.0);
+    final f = math.pow((y / 235.0).clamp(0.0, 1.0), 0.55).toDouble();
+    final b = 255.0 * w * f;
+    list[y] = (b * 1024.0).round().clamp(0, 255 * 1024);
+  }
+  return list;
+}();
+
+/// Composites the model's full RGB color with the high-resolution original scan
+/// using shadow lifting (gamma 0.55) to prevent crushed darks and clean paper
+/// protection (y > 225) to keep speech bubbles and gutters pure white.
 img.Image _composeRgbMultiply(img.Image src, img.Image color) {
   final up = img.copyResize(
     color,
@@ -913,10 +946,12 @@ img.Image _composeRgbMultiply(img.Image src, img.Image color) {
   final c = up.getBytes(order: img.ChannelOrder.rgb);
   final o = Uint8List(s.length);
   for (var i = 0; i < s.length; i += 3) {
-    final y = (0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2]).round();
-    o[i] = (c[i] * y) ~/ 255;
-    o[i + 1] = (c[i + 1] * y) ~/ 255;
-    o[i + 2] = (c[i + 2] * y) ~/ 255;
+    final y = _luma(s[i], s[i + 1], s[i + 2]);
+    final a = _lutA[y];
+    final b = _lutB[y];
+    o[i] = ((c[i] * a + b + 512) >> 10).clamp(0, 255);
+    o[i + 1] = ((c[i + 1] * a + b + 512) >> 10).clamp(0, 255);
+    o[i + 2] = ((c[i + 2] * a + b + 512) >> 10).clamp(0, 255);
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
 }
