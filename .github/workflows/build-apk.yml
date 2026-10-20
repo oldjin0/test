@@ -29,7 +29,19 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter analyze --no-fatal-infos
+      - name: Analyze
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          flutter analyze > /tmp/analyze.log 2>&1
+          RET=$?
+          cat /tmp/analyze.log
+          if [ $RET -ne 0 ]; then
+            gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
+              -f body="$(head -40 /tmp/analyze.log)" || true
+            exit $RET
+          fi
       - run: flutter test
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
