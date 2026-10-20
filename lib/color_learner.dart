@@ -130,7 +130,8 @@ class ColorLearner {
     if (added == 0 || nothing) {
       return nothing && total > 0 ? '컬러 페이지에서 배울 색이 충분하지 않아, 그 페이지들의 색감만 따릅니다.' : null;
     }
-    return '컬러 페이지 $added장을 더 배웠습니다 (이 책에서 모두 $total장). 채색이 그 색으로 바뀝니다.';
+    final forms = store.learnedBank(path)?.length ?? 0;
+    return '컬러 페이지 $added장을 더 배웠습니다 (이 책에서 모두 $total장, 영역 $forms개). 채색이 그 색으로 바뀝니다.';
   }
 
   /// Learns the next [batchPages] pending references on top of what is

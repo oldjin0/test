@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -151,5 +152,61 @@ void main() {
     expect(back.bank!.length, bank.length);
     expect(back.tag, look.tag);
     expect(math.max(1, 1), 1);
+  });
+
+  test('holes and dark masses tell faces and speech bubbles from plain areas', () {
+    const w = 400, h = 560;
+    final im = img.Image(width: w, height: h, numChannels: 3);
+    img.fill(im, color: img.ColorRgb8(255, 255, 255));
+    final black = img.ColorRgb8(0, 0, 0);
+    final light = img.ColorRgb8(235, 235, 235);
+    // a plain area, a "face" with two eyes and a mouth, a "bubble" with letters,
+    // and an area next to a big black mass
+    void box(int x0, int y0, int x1, int y1) {
+      img.fillRect(im, x1: x0, y1: y0, x2: x1, y2: y1, color: black);
+      img.fillRect(im, x1: x0 + 3, y1: y0 + 3, x2: x1 - 3, y2: y1 - 3, color: light);
+    }
+
+    box(20, 20, 150, 150); // plain
+    box(180, 20, 310, 150); // face
+    for (final (x, y, r) in [(220, 70, 5), (270, 70, 5)]) {
+      img.fillCircle(im, x: x, y: y, radius: r, color: black);
+    }
+    img.fillRect(im, x1: 230, y1: 110, x2: 260, y2: 114, color: black);
+    box(20, 200, 150, 330); // bubble: letters
+    for (var i = 0; i < 4; i++) {
+      for (var j = 0; j < 5; j++) {
+        img.fillRect(
+          im,
+          x1: 35 + i * 26,
+          y1: 215 + j * 22,
+          x2: 45 + i * 26,
+          y2: 225 + j * 22,
+          color: black,
+        );
+      }
+    }
+    img.fillRect(im, x1: 180, y1: 200, x2: 310, y2: 330, color: light); // beside a mass
+    img.fillRect(im, x1: 180, y1: 200, x2: 310, y2: 250, color: black); // hair on top
+    final rgb = im.getBytes(order: img.ChannelOrder.rgb);
+    final gray = Uint8List(w * h);
+    for (var i = 0; i < gray.length; i++) {
+      gray[i] = rgb[i * 3];
+    }
+    final forms = segmentPage(gray, w, h);
+    FormRegion at(int x, int y) => forms.regions[forms.labels[y * w + x]];
+    final plain = at(80, 100), face = at(245, 90), bubble = at(30, 300), hairy = at(245, 300);
+    expect(plain.features[9], 0);
+    expect(face.features[9], greaterThan(plain.features[9]), reason: 'eyes and mouth: holes');
+    expect(bubble.features[9], greaterThan(face.features[9]), reason: 'letters: many holes');
+    expect(hairy.features[11], greaterThan(plain.features[11]), reason: 'next to the black mass');
+  });
+
+  test('a bank made with other numbers per area is not read', () {
+    final bank = learnFormBank([Uint8List.fromList(img.encodePng(page()))])!;
+    expect(FormBank.fromJson(bank.toJson()), isNotNull);
+    final other = Float32List(2 + 4 * (formFeatures + 3))..[0] = 4;
+    other[1] = (formFeatures - 3).toDouble();
+    expect(FormBank.fromJson(base64Encode(other.buffer.asUint8List())), isNull);
   });
 }

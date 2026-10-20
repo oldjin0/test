@@ -486,7 +486,7 @@ class LibraryStore extends ChangeNotifier {
     change(this);
     contrast = contrast.clamp(0.5, 2.5);
     saturation = saturation.clamp(0.0, 3.0);
-    inkColor = inkColor.clamp(0, 4);
+    inkColor = inkColor.clamp(0, 5);
     prefetchPages = prefetchPages.clamp(1, 1000);
     textSize = textSize.clamp(10.0, 48.0);
     textLineHeight = textLineHeight.clamp(1.0, 3.0);
@@ -668,9 +668,20 @@ class LibraryStore extends ChangeNotifier {
     }
     try {
       final f = await _bankFile(path);
-      _banks[path] = f != null && await f.exists()
-          ? FormBank.fromJson(await f.readAsString())
-          : null;
+      if (f != null && await f.exists()) {
+        final bank = FormBank.fromJson(await f.readAsString());
+        _banks[path] = bank;
+        if (bank == null) {
+          // made with other numbers per area: everything is learned again
+          await f.delete();
+          _maps[path] = null;
+          _learnedPages.remove(path);
+          final mf = await _mapFile(path);
+          if (mf != null && await mf.exists()) await mf.delete();
+        }
+      } else {
+        _banks[path] = null;
+      }
     } catch (_) {
       _banks[path] = null;
     }

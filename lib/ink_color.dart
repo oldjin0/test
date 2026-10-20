@@ -39,13 +39,13 @@ class InkColor {
   final Uint8List _table; // _n^3 RGB triples, red slowest
 
   /// Strength for the reader's level (0 off, 1 light, 2 medium, 3 strong,
-  /// 4 maximum).
-  static double strengthOf(int level) => const [0.0, 0.6, 1.0, 1.6, 2.2][level.clamp(0, 4)];
+  /// 4 maximum, 5 beyond).
+  static double strengthOf(int level) => const [0.0, 0.6, 1.0, 1.6, 2.2, 2.8][level.clamp(0, 5)];
 
   /// CIE chroma the strong colors of a page are brought to at [level]; the
   /// reference is a color image shown on the panel, whose colors look
   /// muted but clearly present at about 55.
-  static double targetChroma(int level) => const [0.0, 32.0, 44.0, 56.0, 68.0][level.clamp(0, 4)];
+  static double targetChroma(int level) => const [0.0, 32.0, 44.0, 56.0, 68.0, 82.0][level.clamp(0, 5)];
 
   /// Gathers the color of a page into areas: the panel's color layer has
   /// about half the resolution of its black and white, so color that sits in

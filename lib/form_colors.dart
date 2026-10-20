@@ -14,10 +14,13 @@ import 'package:image/image.dart' as img;
 /// area's color towards them, as far as they agree and as many as there
 /// are. It grows with every color page learned.
 
-/// Numbers per area.
-const formFeatures = 9;
+/// Numbers per area: size, brightness, texture, roundness, how long, how much
+/// of its box it fills, page edge, y, x, holes (eyes and mouth, letters),
+/// hole share, and how much of its outline lies on big dark masses (hair,
+/// black clothes).
+const formFeatures = 12;
 
-const _featureWeights = <double>[1.2, 0.7, 0.3, 0.6, 0.8, 0.4, 0.6, 0.5, 0.3];
+const _featureWeights = <double>[1.2, 0.7, 0.3, 0.6, 0.8, 0.4, 0.6, 0.5, 0.3, 0.8, 0.5, 0.5];
 
 /// Gray (0..255) below which a pixel is line art, not paper or tone.
 const _lineBelow = 115;
@@ -94,6 +97,7 @@ PageForms segmentPage(Uint8List gray, int w, int h) {
   final labels = Int32List(n)..fillRange(0, n, -2); // -2: not seen yet
   final queue = Int32List(n);
   final regions = <FormRegion>[];
+  final perims = <int>[];
   final minArea = math.max(12, (n * 0.0003).round());
   bool line(int i) => gray[i] < _lineBelow;
   for (var start = 0; start < n; start++) {
@@ -172,8 +176,104 @@ PageForms segmentPage(Uint8List gray, int w, int h) {
     f[7] = sumY / area / h;
     f[8] = sumX / area / w;
     regions.add(FormRegion(id, area, f));
+    perims.add(perim);
   }
+  _addHoleFeatures(gray, w, h, labels, queue, regions, perims);
   return PageForms(w, h, labels, regions);
+}
+
+/// The dark pieces of line art as the areas see them: those closed in by
+/// one area (not at the page edge, and small next to it) are its holes -
+/// eyes and mouths in a face, letters in a speech bubble - and the big
+/// ones (hair, black clothes) are masses its outline may lie against.
+void _addHoleFeatures(
+  Uint8List gray,
+  int w,
+  int h,
+  Int32List labels,
+  Int32List queue,
+  List<FormRegion> regions,
+  List<int> perims,
+) {
+  final n = w * h;
+  final nr = regions.length;
+  final holes = Int32List(nr), holeArea = Int32List(nr), nextToBig = Int32List(nr);
+  final seen = Uint8List(n);
+  final bigMin = math.max(40, (n * 0.008).round());
+  bool line(int i) => gray[i] < _lineBelow;
+  for (var start = 0; start < n; start++) {
+    if (seen[start] != 0 || !line(start)) continue;
+    var head = 0, tail = 0;
+    queue[tail++] = start;
+    seen[start] = 1;
+    var adj = -1; // the one area around it, -2: several
+    var edge = false;
+    while (head < tail) {
+      final i = queue[head++];
+      final x = i % w, y = i ~/ w;
+      for (var d = 0; d < 4; d++) {
+        final inside = switch (d) {
+          0 => x > 0,
+          1 => x < w - 1,
+          2 => y > 0,
+          _ => y < h - 1,
+        };
+        if (!inside) {
+          edge = true;
+          continue;
+        }
+        final j = switch (d) {
+          0 => i - 1,
+          1 => i + 1,
+          2 => i - w,
+          _ => i + w,
+        };
+        if (line(j)) {
+          if (seen[j] == 0) {
+            seen[j] = 1;
+            queue[tail++] = j;
+          }
+        } else if (labels[j] >= 0) {
+          if (adj == -1) {
+            adj = labels[j];
+          } else if (adj != labels[j]) {
+            adj = -2;
+          }
+        }
+      }
+    }
+    if (adj >= 0 && !edge && tail >= 3 && tail <= regions[adj].area * 0.15) {
+      holes[adj]++;
+      holeArea[adj] += tail;
+    }
+    if (tail >= bigMin) {
+      for (var q = 0; q < tail; q++) {
+        final i = queue[q];
+        final x = i % w, y = i ~/ w;
+        for (var d = 0; d < 4; d++) {
+          final inside = switch (d) {
+            0 => x > 0,
+            1 => x < w - 1,
+            2 => y > 0,
+            _ => y < h - 1,
+          };
+          if (!inside) continue;
+          final j = switch (d) {
+            0 => i - 1,
+            1 => i + 1,
+            2 => i - w,
+            _ => i + w,
+          };
+          if (!line(j) && labels[j] >= 0) nextToBig[labels[j]]++;
+        }
+      }
+    }
+  }
+  for (final r in regions) {
+    r.features[9] = math.min(1.0, holes[r.id] / 12);
+    r.features[10] = math.min(1.0, holeArea[r.id] / r.area * 6);
+    r.features[11] = math.min(1.0, nextToBig[r.id] / math.max(1, perims[r.id]));
+  }
 }
 
 double _smooth(double e0, double e1, double v) {
@@ -235,11 +335,12 @@ class FormBank {
   }
 
   String toJson() {
-    final all = Float32List(1 + features.length + colors.length + weights.length);
+    final all = Float32List(2 + features.length + colors.length + weights.length);
     all[0] = length.toDouble();
-    all.setAll(1, features);
-    all.setAll(1 + features.length, colors);
-    all.setAll(1 + features.length + colors.length, weights);
+    all[1] = formFeatures.toDouble();
+    all.setAll(2, features);
+    all.setAll(2 + features.length, colors);
+    all.setAll(2 + features.length + colors.length, weights);
     return base64Encode(all.buffer.asUint8List());
   }
 
@@ -247,11 +348,14 @@ class FormBank {
     try {
       final all = Float32List.view(Uint8List.fromList(base64Decode(s)).buffer);
       final n = all[0].toInt();
-      if (n <= 0 || all.length != 1 + n * (formFeatures + 3)) return null;
+      // a bank made with other numbers per area cannot be used
+      if (n <= 0 || all[1].toInt() != formFeatures || all.length != 2 + n * (formFeatures + 3)) {
+        return null;
+      }
       return FormBank(
-        Float32List.fromList(all.sublist(1, 1 + n * formFeatures)),
-        Float32List.fromList(all.sublist(1 + n * formFeatures, 1 + n * (formFeatures + 2))),
-        Float32List.fromList(all.sublist(1 + n * (formFeatures + 2))),
+        Float32List.fromList(all.sublist(2, 2 + n * formFeatures)),
+        Float32List.fromList(all.sublist(2 + n * formFeatures, 2 + n * (formFeatures + 2))),
+        Float32List.fromList(all.sublist(2 + n * (formFeatures + 2))),
       );
     } catch (_) {
       return null;
