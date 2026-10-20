@@ -372,9 +372,12 @@ ColorizeResult colorizePage(
   final ColorizeMode mode;
   final img.Image out;
   if (model != null) {
-    // The manga model is already vivid; the photo-trained Lab model is not.
-    final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
-    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
+    if (model.output == ModelOutput.rgb) {
+      out = _composeRgbMultiply(src, _predictRgb(src, model, hints, denoiser));
+    } else {
+      final sat = saturation ?? 1.25;
+      out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
+    }
     mode = ColorizeMode.ai;
   } else {
     out = _toneFilter(src);
@@ -856,4 +859,87 @@ img.Image _toneFilter(img.Image src) {
     o[i + 2] = (s[i + 2] * (1 - a) + (l * 0.9 + 10 * (1 - t)) * a).round().clamp(0, 255);
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
+}
+
+/// Predicts full RGB directly from the manga model and crops to the page area.
+img.Image _predictRgb(
+  img.Image src,
+  ColorModel model,
+  List<ColorHint> hints,
+  PageDenoiser? denoiser,
+) {
+  final iw = model.inWidth, ih = model.inHeight;
+  final s = math.min(iw / src.width, ih / src.height);
+  final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
+  final small = img.copyResize(src, width: pw, height: ph, interpolation: img.Interpolation.linear);
+  final sb = small.getBytes(order: img.ChannelOrder.rgb);
+  var gray = Float32List(iw * ih)..fillRange(0, iw * ih, 1.0); // white padding
+  for (var y = 0; y < ph; y++) {
+    for (var x = 0; x < pw; x++) {
+      final j = (y * pw + x) * 3;
+      final v = _luma(sb[j], sb[j + 1], sb[j + 2]);
+      gray[y * iw + x] = v / 255.0;
+    }
+  }
+  if (denoiser != null && denoiser.width == iw && denoiser.height == ih) {
+    gray = denoiser.denoise(gray);
+  }
+  final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, hints) : gray);
+
+  final ow = model.outWidth;
+  final color = img.Image(width: pw, height: ph, numChannels: 3);
+  for (var y = 0; y < ph; y++) {
+    for (var x = 0; x < pw; x++) {
+      final k = y * ow + x;
+      final r = (pred[k * 3] * 255).round().clamp(0, 255);
+      final g = (pred[k * 3 + 1] * 255).round().clamp(0, 255);
+      final b = (pred[k * 3 + 2] * 255).round().clamp(0, 255);
+      color.setPixelRgb(x, y, r, g, b);
+    }
+  }
+  if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints);
+  return color;
+}
+
+/// Multiplies the model's full RGB color with the original high-resolution ink lineart.
+img.Image _composeRgbMultiply(img.Image src, img.Image color) {
+  final up = img.copyResize(
+    color,
+    width: src.width,
+    height: src.height,
+    interpolation: img.Interpolation.linear,
+  );
+  final s = src.getBytes(order: img.ChannelOrder.rgb);
+  final c = up.getBytes(order: img.ChannelOrder.rgb);
+  final o = Uint8List(s.length);
+  for (var i = 0; i < s.length; i += 3) {
+    final y = (0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2]).round();
+    o[i] = (c[i] * y) ~/ 255;
+    o[i + 1] = (c[i + 1] * y) ~/ 255;
+    o[i + 2] = (c[i + 2] * y) ~/ 255;
+  }
+  return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
+}
+
+void _fillRgbHints(img.Image color, Float32List gray, int iw, int pw, int ph, List<ColorHint> hints) {
+  final cw = color.width, ch = color.height;
+  for (final h in hints) {
+    final mask = hintFillMask(gray, iw, pw, ph, h.x, h.y);
+    final hr = (h.color >> 16) & 0xff, hg = (h.color >> 8) & 0xff, hb = h.color & 0xff;
+    for (var y = 0; y < ch; y++) {
+      final my = math.min(ph - 1, y * ph ~/ ch);
+      for (var x = 0; x < cw; x++) {
+        final w = mask[my * pw + math.min(pw - 1, x * pw ~/ cw)];
+        if (w == 0) continue;
+        final p = color.getPixel(x, y);
+        color.setPixelRgb(
+          x,
+          y,
+          (p.r + (hr - p.r) * w).round(),
+          (p.g + (hg - p.g) * w).round(),
+          (p.b + (hb - p.b) * w).round(),
+        );
+      }
+    }
+  }
 }
