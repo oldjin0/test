@@ -819,17 +819,7 @@ img.Image _composeChroma(img.Image src, img.Image chroma) {
   final o = Uint8List(s.length);
   for (var i = 0; i < s.length; i += 3) {
     final y = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
-    final double chromaFade;
-    if (y >= 242) {
-      chromaFade = 0.0;
-    } else if (y >= 225) {
-      chromaFade = (242 - y) / 17.0;
-    } else if (y <= 40) {
-      chromaFade = y / 40.0;
-    } else {
-      chromaFade = 1.0;
-    }
-    final cb = (c[i] - 128) * chromaFade, cr = (c[i + 1] - 128) * chromaFade;
+    final cb = c[i] - 128, cr = c[i + 1] - 128;
     o[i] = (y + 1.402 * cr).round().clamp(0, 255);
     o[i + 1] = (y - 0.344136 * cb - 0.714136 * cr).round().clamp(0, 255);
     o[i + 2] = (y + 1.772 * cb).round().clamp(0, 255);

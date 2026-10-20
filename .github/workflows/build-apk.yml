@@ -30,19 +30,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze
-      - name: Test
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          flutter test > /tmp/test.log 2>&1
-          RET=$?
-          cat /tmp/test.log
-          if [ $RET -ne 0 ]; then
-            gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
-              -f body="$(tail -50 /tmp/test.log)" || true
-            exit $RET
-          fi
+      - run: flutter test
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
