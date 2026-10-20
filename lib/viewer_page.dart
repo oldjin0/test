@@ -17,6 +17,7 @@ import 'curl_page_view.dart';
 import 'exporter.dart';
 import 'hint_editor.dart';
 import 'library_store.dart';
+import 'pc_platform.dart';
 import 'pc_window.dart';
 import 'reader_controls.dart';
 import 'reader_pages.dart';
@@ -475,6 +476,11 @@ class _ViewerPageState extends State<ViewerPage> {
 
   void _toggleColorize() => _store.setColorize(!_store.colorize);
 
+  void _toggleAutoCrop() {
+    _store.setAutoCrop(!_store.autoCrop);
+    _say(_store.autoCrop ? '여백 자동 자르기 ON' : '여백 자동 자르기 OFF');
+  }
+
   /// Esc: leaves full screen first, then the book.
   Future<void> _onEscape() async {
     if (await pcIsFullscreen()) {
@@ -634,6 +640,109 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
+  void _showColorPresets() {
+    final presets = [
+      (
+        id: 'natural',
+        name: '내추럴 2번 기본 (권장)',
+        desc: 'AI 원본의 자연스러운 채색과 또렷한 먹선',
+        strength: 1.0,
+        sat: 1.0,
+        con: 1.0,
+        icon: Icons.auto_awesome,
+      ),
+      (
+        id: 'vivid',
+        name: '비비드 애니메이션 (화사한 색감)',
+        desc: '애니메이션 원화처럼 생생하고 또렷한 원색',
+        strength: 1.0,
+        sat: 1.30,
+        con: 1.08,
+        icon: Icons.palette,
+      ),
+      (
+        id: 'pastel',
+        name: '소프트 파스텔 (부드러운 색조)',
+        desc: '눈이 편안한 은은하고 부드러운 수채화풍 톤',
+        strength: 0.85,
+        sat: 0.95,
+        con: 0.96,
+        icon: Icons.wb_sunny_outlined,
+      ),
+      (
+        id: 'vintage',
+        name: '빈티지 레트로 (고전 만화책)',
+        desc: '클래식 컬러 만화 잡지 인쇄물 느낌의 깊은 명암',
+        strength: 0.90,
+        sat: 0.80,
+        con: 1.15,
+        icon: Icons.history_edu,
+      ),
+    ];
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        final curStrength = _store.colorStrength;
+        final curSat = _store.saturation;
+        final curCon = _store.contrast;
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  '채색 스타일 프리셋',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                ),
+              ),
+              for (final p in presets)
+                Builder(
+                  builder: (context) {
+                    final isSelected =
+                        (curStrength - p.strength).abs() < 0.05 &&
+                        (curSat - p.sat).abs() < 0.05 &&
+                        (curCon - p.con).abs() < 0.05;
+                    return ListTile(
+                      leading: Icon(
+                        p.icon,
+                        color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                      ),
+                      title: Text(
+                        p.name,
+                        style: TextStyle(
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                        ),
+                      ),
+                      subtitle: Text(p.desc),
+                      trailing: isSelected
+                          ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
+                          : null,
+                      onTap: () {
+                        Navigator.pop(context);
+                        _store.update((s) {
+                          s.colorStrength = p.strength;
+                          s.saturation = p.sat;
+                          s.contrast = p.con;
+                        });
+                        _say('${p.name} 스타일이 적용되었습니다.');
+                      },
+                    );
+                  },
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   String _key(int i) => ColorizeService.keyFor(
     widget.path,
     i,
@@ -775,12 +884,14 @@ class _ViewerPageState extends State<ViewerPage> {
                   onSelected: (v) => switch (v) {
                     'rtl' => _store.setRtl(!_store.rtl),
                     'dual' => _toggleDual(),
+                    'autoCrop' => _toggleAutoCrop(),
                     'display' => showReaderSettings(
                       context,
                       _store,
                       comic: true,
                       engine: _service?.backend,
                     ),
+                    'presets' => _showColorPresets(),
                     'vertical' => _store.setVertical(!_store.vertical),
                     'savePage' => _savePage(),
                     'hints' => _editHints(),
@@ -805,7 +916,17 @@ class _ViewerPageState extends State<ViewerPage> {
                       checked: _store.vertical,
                       child: const Text('세로 스크롤 (웹툰)'),
                     ),
+                    CheckedPopupMenuItem(
+                      value: 'autoCrop',
+                      checked: _store.autoCrop,
+                      child: const Text('여백 자동 자르기 (스마트 크롭)'),
+                    ),
                     const PopupMenuItem(value: 'display', child: Text('읽기 설정')),
+                    PopupMenuItem(
+                      value: 'presets',
+                      enabled: _store.colorize,
+                      child: const Text('채색 스타일 프리셋…'),
+                    ),
                     const PopupMenuDivider(),
                     PopupMenuItem(
                       value: 'reference',
@@ -851,6 +972,7 @@ class _ViewerPageState extends State<ViewerPage> {
           LogicalKeyboardKey.keyC: _toggleColorize,
           LogicalKeyboardKey.keyD: _toggleDual,
           LogicalKeyboardKey.keyG: _showPageSearch,
+          LogicalKeyboardKey.keyM: _toggleAutoCrop,
           LogicalKeyboardKey.keyP: _showPageSearch,
           LogicalKeyboardKey.keyR: () => _store.setRtl(!_store.rtl),
         },
@@ -1004,6 +1126,7 @@ class _ViewerPageState extends State<ViewerPage> {
       fit: crop != null ? null : (vertical ? BoxFit.fitWidth : BoxFit.contain),
       width: crop == null && vertical ? width : null,
       gaplessPlayback: true,
+      filterQuality: isPc ? FilterQuality.high : FilterQuality.medium,
       // Until decoded (rare: upcoming pages are decoded ahead), show what
       // was there instead of an empty frame.
       frameBuilder: (context, child, frame, sync) =>

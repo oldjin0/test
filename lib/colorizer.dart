@@ -926,7 +926,7 @@ img.Image _composeRgbMultiply(img.Image src, img.Image color) {
     color,
     width: src.width,
     height: src.height,
-    interpolation: img.Interpolation.linear,
+    interpolation: img.Interpolation.cubic,
   );
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);

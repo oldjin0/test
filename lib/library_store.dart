@@ -454,6 +454,11 @@ class LibraryStore extends ChangeNotifier {
     _changed();
   }
 
+  void setAutoCrop(bool v) {
+    autoCrop = v;
+    _changed();
+  }
+
   void setColorStrength(double v) {
     colorStrength = v.clamp(0.0, 1.0);
     _changed();
