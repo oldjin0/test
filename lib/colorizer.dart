@@ -372,8 +372,8 @@ ColorizeResult colorizePage(
   final ColorizeMode mode;
   final img.Image out;
   if (model != null) {
-    // The manga model is already vivid; boost saturation slightly for authentic comic print look.
-    final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.35 : 1.25);
+    // The manga model is already vivid; the photo-trained Lab model is not.
+    final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
     out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
     mode = ColorizeMode.ai;
   } else {
@@ -492,7 +492,7 @@ img.Image _predictChroma(
     }
   }
   fillPlainAreas(chroma, gray, iw, pw, ph);
-  if (hints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, hints);
+  if (effectiveHints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, effectiveHints);
   return chroma;
 }
 
