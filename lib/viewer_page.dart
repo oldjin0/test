@@ -543,6 +543,97 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
+  void _showPageSearch() {
+    final book = _book;
+    if (book == null || book.length <= 1) return;
+    final total = book.length;
+    final controller = TextEditingController(text: '${_page + 1}');
+    controller.selection = TextSelection(baseOffset: 0, extentOffset: controller.text.length);
+
+    void go(String raw) {
+      final p = int.tryParse(raw.trim());
+      if (p != null && p >= 1 && p <= total) {
+        Navigator.pop(context);
+        _jumpTo(p - 1);
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.search, size: 24),
+            SizedBox(width: 8),
+            Text('페이지 검색 / 이동'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('현재 페이지: ${_page + 1} / $total 쪽', style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                labelText: '이동할 페이지 번호 (1 ~ $total)',
+                suffixText: '/ $total',
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+              onSubmitted: go,
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                ActionChip(
+                  label: const Text('처음 (1)'),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _jumpTo(0);
+                  },
+                ),
+                if (_page >= 10)
+                  ActionChip(
+                    label: const Text('-10쪽'),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _jumpTo(math.max(0, _page - 10));
+                    },
+                  ),
+                if (_page + 10 < total)
+                  ActionChip(
+                    label: const Text('+10쪽'),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _jumpTo(math.min(total - 1, _page + 10));
+                    },
+                  ),
+                ActionChip(
+                  label: Text('마지막 ($total)'),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _jumpTo(total - 1);
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
+          FilledButton(onPressed: () => go(controller.text), child: const Text('이동')),
+        ],
+      ),
+    );
+  }
+
   String _key(int i) => ColorizeService.keyFor(
     widget.path,
     i,
@@ -641,10 +732,25 @@ class _ViewerPageState extends State<ViewerPage> {
                 children: [
                   Text(_title, overflow: TextOverflow.ellipsis),
                   if (total > 0)
-                    Text('$shown / $total', style: Theme.of(context).textTheme.bodySmall),
+                    GestureDetector(
+                      onTap: _showPageSearch,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('$shown / $total', style: Theme.of(context).textTheme.bodySmall),
+                          const SizedBox(width: 2),
+                          const Icon(Icons.arrow_drop_down, size: 16, color: Colors.grey),
+                        ],
+                      ),
+                    ),
                 ],
               ),
               actions: [
+                IconButton(
+                  tooltip: '페이지 이동 / 검색 (G)',
+                  icon: const Icon(Icons.search),
+                  onPressed: total == 0 ? null : _showPageSearch,
+                ),
                 IconButton(
                   tooltip: '북마크',
                   icon: Icon(
@@ -744,6 +850,8 @@ class _ViewerPageState extends State<ViewerPage> {
           LogicalKeyboardKey.keyB: _toggleBookmark,
           LogicalKeyboardKey.keyC: _toggleColorize,
           LogicalKeyboardKey.keyD: _toggleDual,
+          LogicalKeyboardKey.keyG: _showPageSearch,
+          LogicalKeyboardKey.keyP: _showPageSearch,
           LogicalKeyboardKey.keyR: () => _store.setRtl(!_store.rtl),
         },
         child: _body(),

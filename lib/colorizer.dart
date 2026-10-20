@@ -919,8 +919,8 @@ final Uint16List _lutLineFactor = () {
 }();
 
 /// Composites the model's full RGB color with the high-resolution original scan
-/// using shadow lifting (gamma 0.55) to prevent crushed darks and clean paper
-/// protection (y > 225) to keep speech bubbles and gutters pure white.
+/// using shadow lifting (gamma 0.70) so colors clearly show up across the whole panel
+/// and ink lines are 100% crisp, without artificial white bleaching.
 img.Image _composeRgbMultiply(img.Image src, img.Image color) {
   final up = img.copyResize(
     color,
@@ -934,33 +934,9 @@ img.Image _composeRgbMultiply(img.Image src, img.Image color) {
   for (var i = 0; i < s.length; i += 3) {
     final y = _luma(s[i], s[i + 1], s[i + 2]);
     final lf = _lutLineFactor[y];
-
-    final cr = c[i], cg = c[i + 1], cb = c[i + 2];
-    var r = cr, g = cg, b = cb;
-
-    // Clean paper white on speech bubbles and margins (y > 225)
-    // when the predicted color is faint/near-white (not a saturated user hint or dark art).
-    if (y > 225) {
-      final minC = math.min(cr, math.min(cg, cb));
-      final maxC = math.max(cr, math.max(cg, cb));
-      final spread = maxC - minC;
-      if (spread < 60) {
-        final wy = (y - 225) / 30.0;
-        final wc = minC > 180 ? ((minC - 180) / 50.0) * (1.0 - spread / 50.0) : 0.0;
-        final wb = y > 245 ? ((y - 245) / 10.0) * (1.0 - spread / 60.0) : 0.0;
-        final w = (wy * math.max(wc, wb)).clamp(0.0, 1.0);
-        if (w > 0) {
-          final iw = (w * 1024).round();
-          r = (cr * (1024 - iw) + 255 * iw) >> 10;
-          g = (cg * (1024 - iw) + 255 * iw) >> 10;
-          b = (cb * (1024 - iw) + 255 * iw) >> 10;
-        }
-      }
-    }
-
-    o[i] = ((r * lf + 512) >> 10).clamp(0, 255);
-    o[i + 1] = ((g * lf + 512) >> 10).clamp(0, 255);
-    o[i + 2] = ((b * lf + 512) >> 10).clamp(0, 255);
+    o[i] = ((c[i] * lf + 512) >> 10).clamp(0, 255);
+    o[i + 1] = ((c[i + 1] * lf + 512) >> 10).clamp(0, 255);
+    o[i + 2] = ((c[i + 2] * lf + 512) >> 10).clamp(0, 255);
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
 }
