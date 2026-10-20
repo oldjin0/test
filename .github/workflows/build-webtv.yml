@@ -1,0 +1,37 @@
+name: Build WebTV APK
+
+on:
+  push:
+    branches: [ccr-5a2458b4-7c5eyz]
+    paths: ["webtv/**", ".github/workflows/build-webtv.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: webtv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon -PversionCode=${{ github.run_number }}
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/debug/app-debug.apk WebTV.apk
+          gh release delete webtv-latest --cleanup-tag -y || true
+          gh release create webtv-latest WebTV.apk --prerelease \
+            --target "$GITHUB_SHA" --title "WebTV (latest build)" \
+            --notes "webtv.dothome.co.kr 스트리밍을 안드로이드 TV·구글캐스트(Google TV)에서 보는 앱. 리모컨 방향키로 이동하고, 메뉴 키(또는 확인 길게)로 포인터 모드 전환."
