@@ -133,14 +133,17 @@ void main() {
     expect(store.lookOf(book).bank, isNull);
 
     await store.setLearned(book, {1}, null, bank: bank);
-    expect(store.lookOf(book).bank, same(bank), reason: 'a bank alone is a look');
-    expect(store.lookOf(book).isEmpty, isFalse);
+    if (useFormBank) {
+      expect(store.lookOf(book).bank, same(bank), reason: 'a bank alone is a look');
+      expect(store.lookOf(book).isEmpty, isFalse);
+    } else {
+      expect(store.lookOf(book).bank, isNull, reason: 'the form bank is not used');
+    }
     expect(store.learnedBank(book), same(bank));
 
     final more = bank.plus(bank);
     await store.setLearned(book, {1, 2}, null, bank: more, publish: false);
-    expect(store.lookOf(book).bank, same(bank), reason: 'in steps');
     store.publishLearned(book);
-    expect(store.lookOf(book).bank, same(more));
+    expect(store.learnedBank(book), same(more));
   });
 }

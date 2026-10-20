@@ -14,6 +14,11 @@ import 'package:image/image.dart' as img;
 /// area's color towards them, as far as they agree and as many as there
 /// are. It grows with every color page learned.
 
+/// Whether a book's learned form bank colors its pages. Off: on real pages
+/// the areas of the bank could not be told apart and one color spread over
+/// the whole page (tried on pages of three series with their covers).
+const useFormBank = false;
+
 /// Numbers per area: size, brightness, texture, roundness, how long, how much
 /// of its box it fills, page edge, y, x, holes (eyes and mouth, letters),
 /// hole share, and how much of its outline lies on big dark masses (hair,

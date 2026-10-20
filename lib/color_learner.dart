@@ -195,7 +195,7 @@ class ColorLearner {
     final more = await _learnMap(pairs);
     if (more != null) map = map == null ? more : map.plus(more);
     // colors by form need only the real pages, not the model
-    final moreBank = await _learnBank(real.values.toList());
+    final moreBank = useFormBank ? await _learnBank(real.values.toList()) : null;
     if (moreBank != null) bank = bank == null ? moreBank : bank.plus(moreBank);
     // pages that could not be read are not retried: counted as done
     // The colors in use change in steps: each change colors the pages again.
