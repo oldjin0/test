@@ -750,6 +750,7 @@ class _ViewerPageState extends State<ViewerPage> {
     hints: _store.hintsOf(widget.path, i),
     denoise: _store.denoise,
     look: _store.lookOf(widget.path),
+    style: _store.colorPreset,
   );
 
   /// Pre-colorizes the entire book in the background, prioritizing the
@@ -1253,6 +1254,7 @@ class _ViewerPageState extends State<ViewerPage> {
             hints: _store.hintsOf(widget.path, i),
             denoise: _store.denoise,
             look: _store.lookOf(widget.path),
+            style: _store.colorPreset,
           );
           return r.bytes;
         } catch (e) {

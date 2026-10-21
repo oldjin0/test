@@ -118,7 +118,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               color: Theme.of(context).scaffoldBackgroundColor,
-              border: Border(top: BorderSide(color: Colors.white.withOpacity(0.1))),
+              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
             ),
             child: Row(
               children: [
@@ -183,7 +183,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.2),
+                    color: Colors.amber.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: const Icon(Icons.flash_on, color: Colors.amber),
@@ -247,6 +247,44 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                 SizedBox(width: 8),
                 Text('세부 채색 설정', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
               ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_awesome, color: Colors.amber, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '추천 방식: Gemini 스마트 팔레트 활성화 (권당 1회)',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.store.geminiKeys.isEmpty
+                              ? '무료 API 키를 등록하면 만화 표지를 자동 분석해 캐릭터 고유 색상을 책 전체에 적용합니다.'
+                              : 'API 키 ${widget.store.geminiKeys.length}개 등록됨 · 캐릭터 고유 색상이 책 전체에 자동 반영됩니다.',
+                          style: const TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.tonal(
+                    onPressed: () => showGeminiSettingsDialog(context, widget.store),
+                    child: Text(widget.store.geminiKeys.isEmpty ? 'API 키 등록' : '키 관리'),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
             const Text('화풍 프리셋', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),

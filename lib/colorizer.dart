@@ -352,6 +352,7 @@ ColorizeResult colorizePage(
   BookLook look = BookLook.none,
   double inkContrast = 1.0,
   double blendRatio = 1.0,
+  String style = 'natural',
 }) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
@@ -381,6 +382,7 @@ ColorizeResult colorizePage(
         inkContrast: inkContrast,
         saturation: saturation ?? 1.0,
         blendRatio: blendRatio,
+        style: style,
       );
     } else {
       final sat = saturation ?? 1.25;
@@ -925,6 +927,7 @@ img.Image _composeRgbMultiply(
   double inkContrast = 1.0,
   double saturation = 1.0,
   double blendRatio = 1.0,
+  String style = 'natural',
 }) {
   final up = img.copyResize(
     color,
@@ -935,17 +938,49 @@ img.Image _composeRgbMultiply(
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);
   final o = Uint8List(s.length);
+
   final bool adjustSat = (saturation - 1.0).abs() > 0.02;
   final bool blend = (blendRatio - 1.0).abs() > 0.01;
   final bool customInk = (inkContrast - 1.0).abs() > 0.02;
+
+  final isSoftPastel = style == 'soft_pastel';
+  final isVividAnime = style == 'vivid_anime';
+  final isCinematicWarm = style == 'cinematic_warm';
+  final isRetroPrint = style == 'retro_print';
+  final isMonochromeAccent = style == 'monochrome_accent';
 
   for (var i = 0; i < s.length; i += 3) {
     var cr = c[i].toDouble();
     var cg = c[i + 1].toDouble();
     var cb = c[i + 2].toDouble();
 
+    final gray = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+
+    // 1. Style-specific color transformations
+    if (isVividAnime) {
+      // S-curve contrast boost on colors for punchy anime cel look
+      cr = ((cr - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      cg = ((cg - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      cb = ((cb - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+    } else if (isCinematicWarm) {
+      // Golden amber warmth in highlights/midtones + subtle teal in deep shadows
+      final normY = (gray / 255.0).clamp(0.0, 1.0);
+      cr = (cr + 22.0 * normY).clamp(0.0, 255.0);
+      cg = (cg + 9.0 * normY).clamp(0.0, 255.0);
+      cb = (cb - 18.0 * normY + 6.0 * (1.0 - normY)).clamp(0.0, 255.0);
+    } else if (isMonochromeAccent) {
+      // Accent mode: keep background and muted areas as pure monochrome ink,
+      // only let distinct saturated colors pop through
+      final chromaDist = math.sqrt((cr - gray) * (cr - gray) + (cg - gray) * (cg - gray) + (cb - gray) * (cb - gray));
+      if (chromaDist < 26.0) {
+        final t = (chromaDist / 26.0).clamp(0.0, 1.0);
+        cr = gray + (cr - gray) * t;
+        cg = gray + (cg - gray) * t;
+        cb = gray + (cb - gray) * t;
+      }
+    }
+
     if (adjustSat) {
-      final gray = 0.299 * cr + 0.587 * cg + 0.114 * cb;
       cr = (gray + (cr - gray) * saturation).clamp(0.0, 255.0);
       cg = (gray + (cg - gray) * saturation).clamp(0.0, 255.0);
       cb = (gray + (cb - gray) * saturation).clamp(0.0, 255.0);
@@ -953,7 +988,15 @@ img.Image _composeRgbMultiply(
 
     final y = _luma(s[i], s[i + 1], s[i + 2]);
     var lf = _lutLineFactor[y];
-    if (customInk && y < 160) {
+
+    // 2. Style-specific line factor / ink handling
+    if (isSoftPastel) {
+      // Soft line art: lines don't drop to harsh pitch black, soft charcoal/pencil feel
+      lf = math.max(120, (lf * 0.92).round());
+    } else if (isVividAnime) {
+      // Crisp deep black line art
+      if (y < 180) lf = (lf * 0.88).round().clamp(0, 1024);
+    } else if (customInk && y < 160) {
       final factor = math.pow(y / 160.0, inkContrast - 1.0);
       lf = (lf * factor).round().clamp(0, 1024);
     }
@@ -961,6 +1004,17 @@ img.Image _composeRgbMultiply(
     var r = ((cr * lf + 512) / 1024).round().clamp(0, 255);
     var g = ((cg * lf + 512) / 1024).round().clamp(0, 255);
     var b = ((cb * lf + 512) / 1024).round().clamp(0, 255);
+
+    // 3. Style-specific paper / background tone
+    if (isRetroPrint) {
+      // Vintage newsprint/comic book cream paper tint
+      if (y > 190) {
+        final weight = ((y - 190) / 65.0).clamp(0.0, 1.0);
+        r = (r * (1.0 - weight * 0.03)).round().clamp(0, 255);
+        g = (g * (1.0 - weight * 0.06)).round().clamp(0, 255);
+        b = (b * (1.0 - weight * 0.16)).round().clamp(0, 255);
+      }
+    }
 
     if (blend) {
       r = (s[i] * (1.0 - blendRatio) + r * blendRatio).round().clamp(0, 255);

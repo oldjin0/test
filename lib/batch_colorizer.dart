@@ -12,23 +12,26 @@ import 'exporter.dart' show imageExtension;
 import 'gemini_service.dart';
 
 enum BatchPreset {
-  standard('순수 신경망 (2번 표준)', 1.0, 1.0, 1.0),
-  vivid('비비드 코믹스 (채도·대비 강화)', 1.08, 1.35, 1.0),
-  inkHeavy('먹선 강화 (딥블랙 펜선)', 1.30, 1.0, 1.0),
-  softPastel('소프트 파스텔 (수채화풍)', 0.90, 0.85, 0.90),
-  custom('사용자 직접 조절', 1.0, 1.0, 1.0);
+  natural('내추럴 (2번 표준)', 'natural', 1.0, 1.0, 1.0),
+  softPastel('소프트 파스텔 (수채화풍)', 'soft_pastel', 0.85, 0.82, 0.90),
+  vividAnime('비비드 셀 애니 (선명·화려)', 'vivid_anime', 1.15, 1.45, 1.0),
+  cinematicWarm('시네마틱 웜 (황혼·필름)', 'cinematic_warm', 1.05, 1.15, 1.0),
+  retroPrint('레트로 코믹스 (빈티지 인쇄)', 'retro_print', 0.95, 1.05, 1.0),
+  monochromeAccent('모노크롬 & 포인트 (수묵 포인트)', 'monochrome_accent', 1.20, 1.30, 1.0),
+  custom('사용자 직접 조절', 'custom', 1.0, 1.0, 1.0);
 
   final String label;
+  final String styleKey;
   final double inkContrast;
   final double saturation;
   final double blendRatio;
-  const BatchPreset(this.label, this.inkContrast, this.saturation, this.blendRatio);
+  const BatchPreset(this.label, this.styleKey, this.inkContrast, this.saturation, this.blendRatio);
 }
 
 enum BatchApiMode {
-  none('순수 로컬 AI (오프라인 · 초고속)'),
-  coverPalette('Gemini 표지 스마트 팔레트 (권당 1회)'),
-  sceneHints('Gemini 장면별 인물 힌트 정밀 생성');
+  coverPalette('Gemini 표지 스마트 팔레트 (추천 · 권당 1회)'),
+  sceneHints('Gemini 장면별 인물 힌트 정밀 생성'),
+  none('순수 로컬 AI (API 미사용 · 초고속)');
 
   final String label;
   const BatchApiMode(this.label);
@@ -96,11 +99,12 @@ class BatchColorizerEngine {
   final List<BatchItem> queue = [];
   final progress = ValueNotifier<BatchProgress>(BatchProgress());
 
-  BatchPreset preset = BatchPreset.standard;
+  BatchPreset preset = BatchPreset.natural;
+  String styleKey = 'natural';
   double inkContrast = 1.0;
   double saturation = 1.0;
   double blendRatio = 1.0;
-  BatchApiMode apiMode = BatchApiMode.none;
+  BatchApiMode apiMode = BatchApiMode.coverPalette;
   String? customOutputDir;
 
   bool _cancelRequested = false;
@@ -108,6 +112,7 @@ class BatchColorizerEngine {
 
   void applyPreset(BatchPreset p) {
     preset = p;
+    styleKey = p.styleKey;
     inkContrast = p.inkContrast;
     saturation = p.saturation;
     blendRatio = p.blendRatio;
@@ -272,6 +277,7 @@ class BatchColorizerEngine {
             inkContrast: inkContrast,
             saturation: saturation,
             blendRatio: blendRatio,
+            style: styleKey,
           );
 
           final colorBytes = res.bytes;

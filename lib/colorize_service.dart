@@ -64,6 +64,7 @@ class _Job {
     this.inkContrast = 1.0,
     this.saturation = 1.0,
     this.blendRatio = 1.0,
+    this.style = 'natural',
   }) : ink = ink ?? ColorizeService.ink {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
@@ -80,6 +81,7 @@ class _Job {
   final double inkContrast;
   final double saturation;
   final double blendRatio;
+  final String style;
 
   /// Waiting in the background queue (whole-book colorizing and the like).
   bool background = false;
@@ -193,8 +195,10 @@ class ColorizeService {
     List<ColorHint> hints = const [],
     bool denoise = false,
     BookLook look = BookLook.none,
+    String style = 'natural',
   }) {
     var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag$composeTag';
+    if (style != 'natural') key += '_$style';
     if (denoise) key += '_dn';
     if (hints.isNotEmpty) {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
@@ -221,6 +225,7 @@ class ColorizeService {
     double inkContrast = 1.0,
     double saturation = 1.0,
     double blendRatio = 1.0,
+    String style = 'natural',
   }) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
@@ -237,6 +242,7 @@ class ColorizeService {
           inkContrast: inkContrast,
           saturation: saturation,
           blendRatio: blendRatio,
+          style: style,
         );
     job.background = false;
     _queue[key] = job;
@@ -275,6 +281,7 @@ class ColorizeService {
     double inkContrast = 1.0,
     double saturation = 1.0,
     double blendRatio = 1.0,
+    String style = 'natural',
   }) {
     final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) {
@@ -293,6 +300,7 @@ class ColorizeService {
       inkContrast: inkContrast,
       saturation: saturation,
       blendRatio: blendRatio,
+      style: style,
     )
       ..background = true
       ..wanted = true;
@@ -391,6 +399,7 @@ class ColorizeService {
           hints: store.hintsOf(path, i),
           denoise: store.denoise,
           look: store.lookOf(path),
+          style: store.colorPreset,
         );
         if (isCached(key)) {
           done++;
@@ -421,6 +430,7 @@ class ColorizeService {
           hints: store.hintsOf(path, i),
           denoise: store.denoise,
           look: store.lookOf(path),
+          style: store.colorPreset,
         );
         colorizeInBackground(
           key,
@@ -428,6 +438,7 @@ class ColorizeService {
           hints: store.hintsOf(path, i),
           denoise: store.denoise,
           look: store.lookOf(path),
+          style: store.colorPreset,
         ).then((_) {
           if (!_wholeBookCancel && _wholeBookProgress?.path == path) {
             done++;
@@ -503,6 +514,7 @@ class ColorizeService {
         job.inkContrast,
         job.saturation,
         job.blendRatio,
+        job.style,
       ]);
     } catch (e) {
       _running = null;
@@ -877,6 +889,7 @@ void _workerMain(List args) {
     final inkContrast = m.length > 7 ? (m[7] as num).toDouble() : 1.0;
     final saturation = m.length > 8 ? (m[8] as num).toDouble() : 1.0;
     final blendRatio = m.length > 9 ? (m[9] as num).toDouble() : 1.0;
+    final style = m.length > 10 ? (m[10] as String) : 'natural';
     try {
       if (inkOnly) {
         final sw = Stopwatch()..start();
@@ -899,6 +912,7 @@ void _workerMain(List args) {
         inkContrast: inkContrast,
         saturation: saturation,
         blendRatio: blendRatio,
+        style: style,
       );
       ColorizeResult r;
       arm();

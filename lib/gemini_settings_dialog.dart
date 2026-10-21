@@ -158,7 +158,7 @@ class _GeminiSettingsDialogState extends State<_GeminiSettingsDialog> {
                 decoration: InputDecoration(
                   border: const OutlineInputBorder(),
                   hintText: 'AIzaSy...\nAIzaSy...',
-                  hintStyle: TextStyle(color: Colors.grey.withOpacity(0.5)),
+                  hintStyle: TextStyle(color: Colors.grey.withValues(alpha: 0.5)),
                 ),
                 onChanged: (_) => setState(() {}),
               ),

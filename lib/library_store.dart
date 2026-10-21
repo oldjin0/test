@@ -193,10 +193,13 @@ class LibraryStore extends ChangeNotifier {
   final List<String> geminiKeys = [];
 
   /// Use Gemini API to intelligently extract palette or character hints.
-  bool useGeminiSmart = false;
+  bool useGeminiSmart = true;
 
   /// Gemini smart mode: 'palette' (cover/book smart palette) or 'hints' (scene region hints).
   String geminiMode = 'palette';
+
+  /// Active coloring preset: 'natural', 'soft_pastel', 'vivid_anime', 'cinematic_warm', 'retro_print', 'monochrome_accent'
+  String colorPreset = 'natural';
 
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());
@@ -212,6 +215,7 @@ class LibraryStore extends ChangeNotifier {
     geminiKeys.addAll(p.getStringList('geminiKeys') ?? const []);
     useGeminiSmart = p.getBool('useGeminiSmart') ?? useGeminiSmart;
     geminiMode = p.getString('geminiMode') ?? geminiMode;
+    colorPreset = p.getString('colorPreset') ?? colorPreset;
     GeminiService.instance.setKeys(geminiKeys);
     folders.addAll(p.getStringList('folders') ?? const []);
     for (final e in _decodeList(p.getString('progress'))) {
@@ -381,6 +385,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setStringList('geminiKeys', geminiKeys);
     _prefs.setBool('useGeminiSmart', useGeminiSmart);
     _prefs.setString('geminiMode', geminiMode);
+    _prefs.setString('colorPreset', colorPreset);
     _prefs.setString('hints', jsonEncode(_hintsJson()));
     _prefs.setString('palettes', jsonEncode(_palettes));
     _prefs.setBool('bookPalette', bookPalette);
@@ -518,6 +523,11 @@ class LibraryStore extends ChangeNotifier {
 
   void setGeminiMode(String m) {
     geminiMode = m;
+    _changed();
+  }
+
+  void setColorPreset(String p) {
+    colorPreset = p;
     _changed();
   }
 

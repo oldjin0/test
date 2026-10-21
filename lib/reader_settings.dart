@@ -165,6 +165,31 @@ List<Widget> _colorSection(BuildContext context, LibraryStore s) => [
     trailing: const Icon(Icons.chevron_right),
     onTap: () => showGeminiSettingsDialog(context, s),
   ),
+  _choices(
+    '화풍 프리셋 (독립 스타일)',
+    const {
+      'natural': '내추럴 (표준)',
+      'soft_pastel': '소프트 파스텔',
+      'vivid_anime': '비비드 셀 애니',
+      'cinematic_warm': '시네마틱 웜',
+      'retro_print': '레트로 코믹스',
+      'monochrome_accent': '모노크롬 포인트',
+    },
+    s.colorPreset,
+    (v) => s.setColorPreset(v),
+  ),
+  _switch(
+    'Gemini 스마트 팔레트 (추천)',
+    s.useGeminiSmart && s.geminiKeys.isNotEmpty,
+    (v) {
+      if (v && s.geminiKeys.isEmpty) {
+        showGeminiSettingsDialog(context, s);
+      } else {
+        s.setUseGeminiSmart(v);
+      }
+    },
+    subtitle: '구글 무료 Vision AI로 만화 표지를 분석해 인물 피부·머리·의상색을 자동 추출하여 책 전체에 적용합니다.',
+  ),
   _slider(
     '채색 강도 ${(s.colorStrength * 100).round()}%',
     s.colorStrength,
