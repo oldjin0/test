@@ -8,6 +8,7 @@ import 'colorize_service.dart';
 import 'gemini_settings_dialog.dart';
 import 'library_store.dart';
 import 'storage.dart';
+import 'updater.dart';
 
 class AutoColorizerPage extends StatefulWidget {
   const AutoColorizerPage({
@@ -28,11 +29,96 @@ class AutoColorizerPage extends StatefulWidget {
 class _AutoColorizerPageState extends State<AutoColorizerPage> {
   late final BatchColorizerEngine _engine;
   bool _isSelectingFiles = false;
+  bool _needsBatteryOptimizationExemption = false;
 
   @override
   void initState() {
     super.initState();
     _engine = BatchColorizerEngine(colorizer: widget.colorizer);
+    _checkBatteryOptimization();
+  }
+
+  Future<void> _checkBatteryOptimization() async {
+    final ignoring = await AppPlatform.isIgnoringBatteryOptimizations();
+    if (mounted) {
+      setState(() => _needsBatteryOptimizationExemption = !ignoring);
+    }
+  }
+
+  Future<void> _requestBatteryOptimization() async {
+    await AppPlatform.requestIgnoreBatteryOptimizations();
+    await Future.delayed(const Duration(seconds: 1));
+    await _checkBatteryOptimization();
+  }
+
+  Future<void> _confirmExitApp() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.power_settings_new, color: Colors.redAccent),
+            SizedBox(width: 8),
+            Text('오토채색기 종료'),
+          ],
+        ),
+        content: const Text(
+          '오토채색기를 완전히 종료하시겠습니까?\n'
+          '진행 중인 백그라운드 채색 작업과 시스템 서비스가 모두 정리됩니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('완전 종료'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await AppPlatform.exitApp();
+    }
+  }
+
+  Future<void> _startBatchWithCheck() async {
+    if (_needsBatteryOptimizationExemption) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.battery_charging_full, color: Colors.amber),
+              SizedBox(width: 8),
+              Text('백그라운드 지속 실행 설정'),
+            ],
+          ),
+          content: const Text(
+            '대용량 압축파일을 화면 꺼짐 상태에서도 끝까지 완성하려면 '
+            '안드로이드 배터리 최적화에서 제외(무제한 실행)해야 합니다.\n\n'
+            '지금 설정하시겠습니까?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('그냥 시작'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.pop(ctx, true);
+                await _requestBatteryOptimization();
+              },
+              child: const Text('배터리 무제한 허용하기'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+    }
+    _engine.start();
   }
 
   Future<void> _pickFiles() async {
@@ -90,6 +176,47 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
     return '$s초';
   }
 
+  Widget _buildBatteryNoticeCard() {
+    if (!_needsBatteryOptimizationExemption) return const SizedBox.shrink();
+    return Card(
+      color: Colors.amber.shade900.withValues(alpha: 0.25),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.amber.shade700, width: 1.2),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            const Icon(Icons.battery_alert, color: Colors.amber, size: 28),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '백그라운드 지속 실행 배터리 설정',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    '화면이 꺼져도 대용량 채색이 중단 없이 끝까지 완료되도록 허용합니다.',
+                    style: TextStyle(fontSize: 11, color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.tonal(
+              onPressed: _requestBatteryOptimization,
+              child: const Text('제한 해제', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -108,25 +235,45 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
             icon: const Icon(Icons.auto_awesome),
             onPressed: () => showGeminiSettingsDialog(context, widget.store),
           ),
+          IconButton(
+            tooltip: '오토채색기 완전 종료',
+            icon: const Icon(Icons.power_settings_new, color: Colors.redAccent),
+            onPressed: _confirmExitApp,
+          ),
         ],
       ),
-      body: ValueListenableBuilder<BatchProgress>(
-        valueListenable: _engine.progress,
-        builder: (context, prog, _) {
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _buildIntroCard(),
-              const SizedBox(height: 16),
-              _buildSettingsCard(prog.isRunning),
-              const SizedBox(height: 16),
-              _buildQueueCard(prog),
-              const SizedBox(height: 16),
-              if (prog.isRunning || prog.statusMessage != '대기 중') _buildProgressCard(prog),
-              const SizedBox(height: 80),
-            ],
-          );
+      body: PopScope(
+        canPop: !_engine.progress.value.isRunning,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _engine.progress.value.isRunning) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('백그라운드에서 채색이 계속 진행됩니다. 알림창에서 확인하실 수 있습니다.'),
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
         },
+        child: ValueListenableBuilder<BatchProgress>(
+          valueListenable: _engine.progress,
+          builder: (context, prog, _) {
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _buildBatteryNoticeCard(),
+                if (_needsBatteryOptimizationExemption) const SizedBox(height: 12),
+                _buildIntroCard(),
+                const SizedBox(height: 16),
+                _buildSettingsCard(prog.isRunning),
+                const SizedBox(height: 16),
+                _buildQueueCard(prog),
+                const SizedBox(height: 16),
+                if (prog.isRunning || prog.statusMessage != '대기 중') _buildProgressCard(prog),
+                const SizedBox(height: 80),
+              ],
+            );
+          },
+        ),
       ),
       bottomNavigationBar: ValueListenableBuilder<BatchProgress>(
         valueListenable: _engine.progress,
@@ -148,7 +295,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                         _engine.queue.isEmpty ? '파일이나 폴더를 추가해 주세요' : '전체 일괄 채색 시작 (${_engine.queue.length}개)',
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                       ),
-                      onPressed: _engine.queue.isEmpty ? null : () => _engine.start(),
+                      onPressed: _engine.queue.isEmpty ? null : _startBatchWithCheck,
                     ),
                   ),
                 ] else ...[

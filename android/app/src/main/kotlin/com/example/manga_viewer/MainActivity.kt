@@ -54,6 +54,15 @@ class MainActivity : FlutterActivity() {
     /// Back on the last screen would finish the activity, and with it the
     /// Flutter engine and the colorizer: while background colorizing runs,
     /// the app goes to the background instead (as Home does) and carries on.
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (keepingAlive) {
+            moveTaskToBack(true)
+            return
+        }
+        super.onBackPressed()
+    }
+
     override fun popSystemNavigator(): Boolean {
         if (keepingAlive) {
             moveTaskToBack(true)
@@ -161,12 +170,40 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(null)
                         }
+                        "isIgnoringBatteryOptimizations" -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                val pm = getSystemService(POWER_SERVICE) as PowerManager
+                                result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                            } else {
+                                result.success(true)
+                            }
+                        }
+                        "requestIgnoreBatteryOptimizations" -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = Uri.parse("package:$packageName")
+                                    }
+                                    startActivity(intent)
+                                    result.success(true)
+                                } catch (e: Exception) {
+                                    try {
+                                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                        result.success(true)
+                                    } catch (_: Exception) {
+                                        result.success(false)
+                                    }
+                                }
+                            } else {
+                                result.success(true)
+                            }
+                        }
                         "keepAlive" -> {
                             val left = call.argument<Int>("left") ?: 0
                             keepingAlive = left > 0
                             if (left > 0) {
                                 ColorizeKeepAlive.onExit = { runOnUiThread { finishAndRemoveTask() } }
-                                ColorizeKeepAlive.show(applicationContext, left)
+                                ColorizeKeepAlive.show(applicationContext, left, call.argument<String>("title"), call.argument<Int>("current") ?: 0, call.argument<Int>("total") ?: 0)
                             } else {
                                 ColorizeKeepAlive.hide(applicationContext)
                             }

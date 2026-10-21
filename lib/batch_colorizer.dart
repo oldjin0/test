@@ -237,6 +237,16 @@ class BatchColorizerEngine {
     final stopwatch = Stopwatch()..start();
     var pagesProcessedInRun = 0;
 
+    // Immediately enter foreground execution mode so OS doesn't sleep while initializing
+    unawaited(
+      AppPlatform.keepAlive(
+        math.max(1, totalOverall - processedOverall),
+        title: queue.isNotEmpty ? queue.first.title : '오토채색기',
+        current: processedOverall,
+        total: totalOverall,
+      ),
+    );
+
     try {
       for (var itemIndex = 0; itemIndex < queue.length; itemIndex++) {
       if (_cancelRequested) break;
@@ -335,7 +345,17 @@ class BatchColorizerEngine {
           final leftPages = totalOverall - processedOverall;
           final eta = (leftPages * secPerPage).round();
 
-          unawaited(AppPlatform.keepAlive(math.max(1, leftPages)));
+          unawaited(
+            AppPlatform.keepAlive(
+              math.max(1, leftPages),
+              title: item.title,
+              current: pageIdx + 1,
+              total: book.length,
+            ),
+          );
+
+          // Allow the Dart event loop and GC to reclaim large image buffers
+          await Future.delayed(Duration.zero);
 
           progress.value = BatchProgress(
             isRunning: true,
