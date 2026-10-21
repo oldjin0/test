@@ -28,17 +28,15 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
 
   Future<void> _pickFiles() async {
     try {
-      final res = await FilePicker.platform.pickFiles(
+      final files = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['zip', 'cbz', 'cbr', 'rar', 'pdf', '7z', 'cb7'],
         allowMultiple: true,
       );
-      if (res != null) {
-        for (final f in res.files) {
-          if (f.path != null) await _engine.addItem(f.path!);
-        }
-        setState(() {});
+      for (final f in files) {
+        if (f.path != null) await _engine.addItem(f.path!);
       }
+      setState(() {});
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('파일 선택 오류: $e')));
@@ -428,7 +426,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 itemCount: _engine.queue.length,
-                separatorBuilder: (_, __) => const Divider(height: 1),
+                separatorBuilder: (context, index) => const Divider(height: 1),
                 itemBuilder: (context, i) {
                   final item = _engine.queue[i];
                   final isCurrent = prog.isRunning && prog.currentItemIndex == i;

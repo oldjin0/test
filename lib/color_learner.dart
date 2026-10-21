@@ -156,7 +156,7 @@ class ColorLearner {
     }
     final pending = store.pendingReferences(path, learned, maxLearned);
     if (pending.isEmpty) {
-      if (store.useGeminiSmart && store.paletteOf(path).isEmpty) {
+      if (store.useGeminiSmart && (store.paletteOf(path)?.isEmpty ?? true)) {
         try {
           final b = await open();
           if (b.length > 0) {
