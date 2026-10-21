@@ -12,6 +12,7 @@ import 'book_colors.dart';
 import 'form_colors.dart';
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
+import 'gemini_service.dart';
 
 class ReadProgress {
   ReadProgress(this.path, this.title, this.page, this.total, this.updatedAt);
@@ -188,6 +189,15 @@ class LibraryStore extends ChangeNotifier {
   String textTheme = 'light';
   bool textSerif = false;
 
+  /// Registered Google Gemini API keys for multi-key pool rotation.
+  final List<String> geminiKeys = [];
+
+  /// Use Gemini API to intelligently extract palette or character hints.
+  bool useGeminiSmart = false;
+
+  /// Gemini smart mode: 'palette' (cover/book smart palette) or 'hints' (scene region hints).
+  String geminiMode = 'palette';
+
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());
     s._read();
@@ -199,6 +209,10 @@ class LibraryStore extends ChangeNotifier {
 
   void _read() {
     final p = _prefs;
+    geminiKeys.addAll(p.getStringList('geminiKeys') ?? const []);
+    useGeminiSmart = p.getBool('useGeminiSmart') ?? useGeminiSmart;
+    geminiMode = p.getString('geminiMode') ?? geminiMode;
+    GeminiService.instance.setKeys(geminiKeys);
     folders.addAll(p.getStringList('folders') ?? const []);
     for (final e in _decodeList(p.getString('progress'))) {
       final r = ReadProgress.fromJson(e);
@@ -364,6 +378,9 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setDouble('textMargin', textMargin);
     _prefs.setString('textTheme', textTheme);
     _prefs.setBool('textSerif', textSerif);
+    _prefs.setStringList('geminiKeys', geminiKeys);
+    _prefs.setBool('useGeminiSmart', useGeminiSmart);
+    _prefs.setString('geminiMode', geminiMode);
     _prefs.setString('hints', jsonEncode(_hintsJson()));
     _prefs.setString('palettes', jsonEncode(_palettes));
     _prefs.setBool('bookPalette', bookPalette);
@@ -483,6 +500,24 @@ class LibraryStore extends ChangeNotifier {
 
   void setTurnStyle(String v) {
     turnStyle = v;
+    _changed();
+  }
+
+  void setGeminiKeys(List<String> keys) {
+    geminiKeys
+      ..clear()
+      ..addAll(keys);
+    GeminiService.instance.setKeys(geminiKeys);
+    _changed();
+  }
+
+  void setUseGeminiSmart(bool v) {
+    useGeminiSmart = v;
+    _changed();
+  }
+
+  void setGeminiMode(String m) {
+    geminiMode = m;
     _changed();
   }
 

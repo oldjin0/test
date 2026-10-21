@@ -13,6 +13,7 @@ import 'book_palette.dart';
 import 'colorize_service.dart';
 import 'comic_loader.dart';
 import 'form_colors.dart';
+import 'gemini_service.dart';
 import 'library_store.dart';
 
 /// Learns books' colors from their own color pages (see [BookColorMap]),
@@ -155,6 +156,18 @@ class ColorLearner {
     }
     final pending = store.pendingReferences(path, learned, maxLearned);
     if (pending.isEmpty) {
+      if (store.useGeminiSmart && store.paletteOf(path).isEmpty) {
+        try {
+          final b = await open();
+          if (b.length > 0) {
+            final cover = await b.page(0);
+            final smartPal = await GeminiService.instance.extractSmartPalette(cover);
+            if (smartPal != null && smartPal.isNotEmpty) {
+              store.setPalette(path, smartPal);
+            }
+          }
+        } catch (_) {}
+      }
       // nothing to learn: keep the restart, or note that there are no references
       if (learned.length != store.learnedPagesOf(path).length || !store.learnedRecorded(path)) {
         await store.setLearned(path, learned, map, bank: bank);
@@ -170,7 +183,18 @@ class ColorLearner {
       } catch (_) {}
     }
     // the palette of those pages serves until there is a learned map
-    if (map == null) store.setPalette(path, await _palette(real.values.toList()));
+    if (map == null) {
+      if (store.useGeminiSmart && real.values.isNotEmpty) {
+        final smartPal = await GeminiService.instance.extractSmartPalette(real.values.first);
+        if (smartPal != null && smartPal.isNotEmpty) {
+          store.setPalette(path, smartPal);
+        } else {
+          store.setPalette(path, await _palette(real.values.toList()));
+        }
+      } else {
+        store.setPalette(path, await _palette(real.values.toList()));
+      }
+    }
     final service = await colorizer;
     if (!service.modelLoaded) return null;
     final pairs = <(Uint8List, Uint8List)>[];

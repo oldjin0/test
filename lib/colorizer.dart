@@ -350,6 +350,8 @@ ColorizeResult colorizePage(
   PageDenoiser? denoiser,
   int ink = 0,
   BookLook look = BookLook.none,
+  double inkContrast = 1.0,
+  double blendRatio = 1.0,
 }) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
@@ -373,7 +375,13 @@ ColorizeResult colorizePage(
   final img.Image out;
   if (model != null) {
     if (model.output == ModelOutput.rgb) {
-      out = _composeRgbMultiply(src, _predictRgb(src, model, hints, denoiser, look: look));
+      out = _composeRgbMultiply(
+        src,
+        _predictRgb(src, model, hints, denoiser, look: look),
+        inkContrast: inkContrast,
+        saturation: saturation ?? 1.0,
+        blendRatio: blendRatio,
+      );
     } else {
       final sat = saturation ?? 1.25;
       out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
@@ -911,7 +919,13 @@ final Uint16List _lutLineFactor = () {
 /// Composites the model's full RGB color with the high-resolution original scan
 /// using shadow lifting (gamma 0.70) so colors clearly show up across the whole panel
 /// and ink lines are 100% crisp, without artificial white bleaching.
-img.Image _composeRgbMultiply(img.Image src, img.Image color) {
+img.Image _composeRgbMultiply(
+  img.Image src,
+  img.Image color, {
+  double inkContrast = 1.0,
+  double saturation = 1.0,
+  double blendRatio = 1.0,
+}) {
   final up = img.copyResize(
     color,
     width: src.width,
@@ -921,12 +935,42 @@ img.Image _composeRgbMultiply(img.Image src, img.Image color) {
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);
   final o = Uint8List(s.length);
+  final bool adjustSat = (saturation - 1.0).abs() > 0.02;
+  final bool blend = (blendRatio - 1.0).abs() > 0.01;
+  final bool customInk = (inkContrast - 1.0).abs() > 0.02;
+
   for (var i = 0; i < s.length; i += 3) {
+    var cr = c[i].toDouble();
+    var cg = c[i + 1].toDouble();
+    var cb = c[i + 2].toDouble();
+
+    if (adjustSat) {
+      final gray = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+      cr = (gray + (cr - gray) * saturation).clamp(0.0, 255.0);
+      cg = (gray + (cg - gray) * saturation).clamp(0.0, 255.0);
+      cb = (gray + (cb - gray) * saturation).clamp(0.0, 255.0);
+    }
+
     final y = _luma(s[i], s[i + 1], s[i + 2]);
-    final lf = _lutLineFactor[y];
-    o[i] = ((c[i] * lf + 512) >> 10).clamp(0, 255);
-    o[i + 1] = ((c[i + 1] * lf + 512) >> 10).clamp(0, 255);
-    o[i + 2] = ((c[i + 2] * lf + 512) >> 10).clamp(0, 255);
+    var lf = _lutLineFactor[y];
+    if (customInk && y < 160) {
+      final factor = math.pow(y / 160.0, inkContrast - 1.0);
+      lf = (lf * factor).round().clamp(0, 1024);
+    }
+
+    var r = ((cr * lf + 512) / 1024).round().clamp(0, 255);
+    var g = ((cg * lf + 512) / 1024).round().clamp(0, 255);
+    var b = ((cb * lf + 512) / 1024).round().clamp(0, 255);
+
+    if (blend) {
+      r = (s[i] * (1.0 - blendRatio) + r * blendRatio).round().clamp(0, 255);
+      g = (s[i + 1] * (1.0 - blendRatio) + g * blendRatio).round().clamp(0, 255);
+      b = (s[i + 2] * (1.0 - blendRatio) + b * blendRatio).round().clamp(0, 255);
+    }
+
+    o[i] = r;
+    o[i + 1] = g;
+    o[i + 2] = b;
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
 }

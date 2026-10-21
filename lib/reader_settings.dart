@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'gemini_settings_dialog.dart';
 import 'library_store.dart';
 import 'onnx_engine.dart';
 import 'pc_platform.dart';
@@ -31,7 +32,7 @@ Future<void> showReaderSettings(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
             if (text) ..._textSection(store),
-            if (comic) ..._colorSection(store),
+            if (comic) ..._colorSection(context, store),
             if (comic && isPc) ..._pcSection(store, engine),
             ..._screenSection(store, comic: comic),
             ..._turnSection(store, comic: comic),
@@ -150,8 +151,20 @@ List<Widget> _textSection(LibraryStore s) => [
   ),
 ];
 
-List<Widget> _colorSection(LibraryStore s) => [
+List<Widget> _colorSection(BuildContext context, LibraryStore s) => [
   _header('채색'),
+  ListTile(
+    contentPadding: EdgeInsets.zero,
+    leading: const Icon(Icons.auto_awesome, color: Colors.amber),
+    title: const Text('Google Gemini AI 설정'),
+    subtitle: Text(
+      s.geminiKeys.isEmpty
+          ? 'API 키 없음 (순수 로컬 AI 동작)'
+          : '${s.geminiKeys.length}개 키 등록됨 · ${s.useGeminiSmart ? "스마트 채색 ON" : "스마트 채색 OFF"}',
+    ),
+    trailing: const Icon(Icons.chevron_right),
+    onTap: () => showGeminiSettingsDialog(context, s),
+  ),
   _slider(
     '채색 강도 ${(s.colorStrength * 100).round()}%',
     s.colorStrength,

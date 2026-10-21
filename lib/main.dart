@@ -153,7 +153,7 @@ class MangaViewerApp extends StatelessWidget {
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) => MaterialApp(
-        title: 'Manga Viewer',
+        title: '채색 뷰어',
         theme: store.eink ? einkTheme : ThemeData.dark(useMaterial3: true),
         home: HomePage(store: store, colorizer: colorizer, openOnStart: openOnStart),
       ),

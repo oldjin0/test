@@ -54,8 +54,17 @@ Future<Uint8List?> loadModelBytes([String asset = modelAsset]) async {
 }
 
 class _Job {
-  _Job(this.key, this.load, this.hints, this.denoise, this.look, {int? ink})
-    : ink = ink ?? ColorizeService.ink {
+  _Job(
+    this.key,
+    this.load,
+    this.hints,
+    this.denoise,
+    this.look, {
+    int? ink,
+    this.inkContrast = 1.0,
+    this.saturation = 1.0,
+    this.blendRatio = 1.0,
+  }) : ink = ink ?? ColorizeService.ink {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
   }
@@ -68,6 +77,9 @@ class _Job {
 
   /// Color e-ink processing level the job was asked with (0 = none).
   final int ink;
+  final double inkContrast;
+  final double saturation;
+  final double blendRatio;
 
   /// Waiting in the background queue (whole-book colorizing and the like).
   bool background = false;
@@ -206,12 +218,26 @@ class ColorizeService {
     bool denoise = false,
     BookLook look = BookLook.none,
     int? ink,
+    double inkContrast = 1.0,
+    double saturation = 1.0,
+    double blendRatio = 1.0,
   }) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
     // Already waiting in the background queue: now the reader wants it.
     final promoted = _background.remove(key);
-    final job = promoted ?? _Job(key, loadPage, hints, denoise, look, ink: ink);
+    final job = promoted ??
+        _Job(
+          key,
+          loadPage,
+          hints,
+          denoise,
+          look,
+          ink: ink,
+          inkContrast: inkContrast,
+          saturation: saturation,
+          blendRatio: blendRatio,
+        );
     job.background = false;
     _queue[key] = job;
     _updateBackgroundLeft();
@@ -246,6 +272,9 @@ class ColorizeService {
     BookLook look = BookLook.none,
     int? ink,
     bool first = false,
+    double inkContrast = 1.0,
+    double saturation = 1.0,
+    double blendRatio = 1.0,
   }) {
     final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) {
@@ -254,7 +283,17 @@ class ColorizeService {
       _updateBackgroundLeft();
       return existing.completer.future;
     }
-    final job = _Job(key, loadPage, hints, denoise, look, ink: ink)
+    final job = _Job(
+      key,
+      loadPage,
+      hints,
+      denoise,
+      look,
+      ink: ink,
+      inkContrast: inkContrast,
+      saturation: saturation,
+      blendRatio: blendRatio,
+    )
       ..background = true
       ..wanted = true;
     first ? _toFront(key, job) : _background[key] = job;
@@ -461,6 +500,9 @@ class ColorizeService {
         job.ink,
         plain != null,
         job.look.toMessage(),
+        job.inkContrast,
+        job.saturation,
+        job.blendRatio,
       ]);
     } catch (e) {
       _running = null;
@@ -832,6 +874,9 @@ void _workerMain(List args) {
     final ink = m[4] as int;
     final inkOnly = m[5] as bool; // bytes are a colorized page: process only
     final look = BookLook.fromMessage(m[6] as List);
+    final inkContrast = m.length > 7 ? (m[7] as num).toDouble() : 1.0;
+    final saturation = m.length > 8 ? (m[8] as num).toDouble() : 1.0;
+    final blendRatio = m.length > 9 ? (m[9] as num).toDouble() : 1.0;
     try {
       if (inkOnly) {
         final sw = Stopwatch()..start();
@@ -851,6 +896,9 @@ void _workerMain(List args) {
         denoiser: engine?.denoiserFor(wantDenoise),
         ink: ink,
         look: look,
+        inkContrast: inkContrast,
+        saturation: saturation,
+        blendRatio: blendRatio,
       );
       ColorizeResult r;
       arm();

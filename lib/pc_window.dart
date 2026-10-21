@@ -11,7 +11,7 @@ Future<void> pcWindowInit() async {
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(
       const WindowOptions(
-        title: 'Manga Viewer',
+        title: '채색 뷰어',
         minimumSize: Size(480, 400),
         titleBarStyle: TitleBarStyle.normal,
       ),

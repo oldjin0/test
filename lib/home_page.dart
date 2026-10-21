@@ -8,7 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
+import 'auto_colorizer_page.dart';
 import 'colorize_service.dart';
+import 'gemini_settings_dialog.dart';
 import 'library_store.dart';
 import 'reader_settings.dart';
 import 'storage.dart';
@@ -283,12 +285,33 @@ class _HomePageState extends State<HomePage> {
       listenable: _store,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
-          title: const Text('Manga Viewer'),
+          title: const Text('채색 뷰어'),
           actions: [
+            IconButton(
+              tooltip: '오토채색기 (배치 일괄 채색)',
+              icon: const Icon(Icons.auto_awesome, color: Colors.amber),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => AutoColorizerPage(
+                    colorizer: widget.colorizer,
+                    store: _store,
+                  ),
+                ),
+              ),
+            ),
             IconButton(tooltip: '파일 열기', icon: const Icon(Icons.file_open), onPressed: _import),
             PopupMenuButton<String>(
               tooltip: '메뉴',
               onSelected: (v) => switch (v) {
+                'auto_colorizer' => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => AutoColorizerPage(
+                      colorizer: widget.colorizer,
+                      store: _store,
+                    ),
+                  ),
+                ),
+                'gemini_api' => showGeminiSettingsDialog(context, _store),
                 'backup' => _exportBackup(),
                 'restore' => _importBackup(),
                 'settings' => showReaderSettings(context, _store, comic: true, text: true),
@@ -296,6 +319,24 @@ class _HomePageState extends State<HomePage> {
                 _ => checkForUpdate(context),
               },
               itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'auto_colorizer',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.palette_outlined, color: Colors.amber),
+                    title: Text('오토채색기'),
+                    subtitle: Text('ZIP / 폴더 일괄 전체 채색'),
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'gemini_api',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.auto_awesome, color: Colors.amber),
+                    title: Text('Google Gemini AI 설정'),
+                    subtitle: Text('무료 다중 API 키 관리'),
+                  ),
+                ),
                 const PopupMenuItem(
                   value: 'settings',
                   child: ListTile(
