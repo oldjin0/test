@@ -31,7 +31,6 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
       final files = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['zip', 'cbz', 'cbr', 'rar', 'pdf', '7z', 'cb7'],
-        allowMultiple: true,
       );
       for (final f in files) {
         if (f.path != null) await _engine.addItem(f.path!);
