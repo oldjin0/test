@@ -906,7 +906,11 @@ void main() {
     await tester.drag(find.byKey(const ValueKey('strength')), const Offset(500, 0));
     await tester.pumpAndSettle();
     expect(store.colorStrength, 1.0);
-    await tester.tap(find.byKey(const ValueKey('choice-미리 채색할 페이지-20')));
+    final choice20 = find.byKey(const ValueKey('choice-미리 채색할 페이지-20'));
+    await tester.scrollUntilVisible(choice20, 200, scrollable: find.byType(Scrollable).last);
+    await tester.ensureVisible(choice20);
+    await tester.pumpAndSettle();
+    await tester.tap(choice20);
     await tester.pumpAndSettle();
     expect(store.prefetchPages, 20);
     final keepOn = find.widgetWithText(SwitchListTile, '읽는 동안 화면 켜짐 유지');
