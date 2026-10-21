@@ -988,17 +988,17 @@ class _ViewerPageState extends State<ViewerPage> {
         },
         child: Stack(
           children: [
-            Positioned.fill(child: _body()),
+            _body(),
             if (_service != null)
-              ValueListenableBuilder<BookColorizeProgress?>(
-                valueListenable: _service!.wholeBookProgressNotifier,
-                builder: (context, p, _) {
-                  if (p == null || p.path != widget.path || p.isFinished) return const SizedBox.shrink();
-                  return Positioned(
-                    top: _showUi ? 16 : 8,
-                    left: 16,
-                    right: 16,
-                    child: Center(
+              Positioned(
+                top: _showUi ? 16 : 8,
+                left: 16,
+                right: 16,
+                child: ValueListenableBuilder<BookColorizeProgress?>(
+                  valueListenable: _service!.wholeBookProgressNotifier,
+                  builder: (context, p, _) {
+                    if (p == null || p.path != widget.path || p.isFinished) return const SizedBox.shrink();
+                    return Center(
                       child: Material(
                         elevation: 6,
                         borderRadius: BorderRadius.circular(24),
@@ -1031,9 +1031,9 @@ class _ViewerPageState extends State<ViewerPage> {
                           ),
                         ),
                       ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
           ],
         ),
