@@ -17,7 +17,6 @@ import 'curl_page_view.dart';
 import 'exporter.dart';
 import 'hint_editor.dart';
 import 'library_store.dart';
-import 'pc_platform.dart';
 import 'pc_window.dart';
 import 'reader_controls.dart';
 import 'reader_pages.dart';
