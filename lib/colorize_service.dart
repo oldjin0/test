@@ -10,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'book_colors.dart';
 import 'colorizer.dart';
+import 'comic_loader.dart';
+import 'library_store.dart';
 import 'onnx_engine.dart';
 import 'pc_platform.dart';
 
@@ -81,6 +83,25 @@ class _Job {
   final completer = Completer<ColorizeResult>();
 }
 
+/// Progress of a whole-book background colorization task.
+class BookColorizeProgress {
+  const BookColorizeProgress({
+    required this.path,
+    required this.title,
+    required this.total,
+    required this.done,
+    required this.isFinished,
+  });
+  final String path;
+  final String title;
+  final int total;
+  final int done;
+  final bool isFinished;
+
+  double get fraction => total > 0 ? (done / total).clamp(0.0, 1.0) : 0.0;
+  int get percent => (fraction * 100).round();
+}
+
 /// Colorizes pages on one long-lived background isolate that keeps the TFLite
 /// interpreter loaded. Jobs run one at a time; [focus] reorders the queue so
 /// the visible page is always next, and drops pages the reader moved away from.
@@ -111,7 +132,7 @@ class ColorizeService {
 
   /// Names how the model's colors are put on the page (see
   /// `_composeChroma` and `_composeRgbMultiply`); part of the cache keys.
-  static const composeTag = '-v2rich';
+  static const composeTag = '-v2pure';
 
   /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.
@@ -262,6 +283,125 @@ class ColorizeService {
     }
     _running?.wanted = false;
     _updateBackgroundLeft();
+  }
+
+  /// Whether a page's colorized version (or color marker) is already cached on disk.
+  bool isCached(String key) {
+    try {
+      final jpg = _file(key, 'jpg');
+      if (jpg != null && jpg.existsSync()) return true;
+      final skip = _file(key, 'color');
+      if (skip != null && skip.existsSync()) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  BookColorizeProgress? _wholeBookProgress;
+  bool _wholeBookCancel = false;
+  final wholeBookProgressNotifier = ValueNotifier<BookColorizeProgress?>(null);
+
+  /// Stops the current whole-book background colorization task.
+  void cancelWholeBook() {
+    _wholeBookCancel = true;
+    cancelBackground();
+    _wholeBookProgress = null;
+    wholeBookProgressNotifier.value = null;
+  }
+
+  /// Pre-colorizes a whole book in the background, starting from [startPage]
+  /// (the page currently being read) forwards to the end of the book, and then
+  /// the preceding pages. Already colorized pages in the cache are preserved
+  /// and skipped to save time and battery.
+  Future<void> startWholeBook({
+    required String path,
+    required String title,
+    required int startPage,
+    required LibraryStore store,
+  }) async {
+    if (!store.colorize || !modelLoaded) return;
+    if (_wholeBookProgress?.path == path && !(_wholeBookProgress?.isFinished ?? true)) {
+      return;
+    }
+    cancelWholeBook();
+    _wholeBookCancel = false;
+
+    try {
+      if (!await FileSystemEntity.isDirectory(path) && !await File(path).exists()) return;
+      await store.loadLook(path);
+      final book = await ComicBook.open(path, window: 4);
+      final total = book.length;
+      if (total <= 0) return;
+
+      final start = startPage.clamp(0, total - 1);
+      final order = <int>[];
+      // 1. Current reading page to end (forward in reading direction)
+      for (var i = start; i < total; i++) {
+        order.add(i);
+      }
+      // 2. Preceding pages (0 to start - 1)
+      for (var i = 0; i < start; i++) {
+        order.add(i);
+      }
+
+      var done = 0;
+      final needed = <int>[];
+      for (final i in order) {
+        final key = ColorizeService.keyFor(
+          path,
+          i,
+          hints: store.hintsOf(path, i),
+          denoise: store.denoise,
+          look: store.lookOf(path),
+        );
+        if (isCached(key)) {
+          done++;
+        } else {
+          needed.add(i);
+        }
+      }
+
+      void report(bool finished) {
+        _wholeBookProgress = BookColorizeProgress(
+          path: path,
+          title: title,
+          total: total,
+          done: done,
+          isFinished: finished,
+        );
+        wholeBookProgressNotifier.value = _wholeBookProgress;
+      }
+
+      report(done >= total);
+      if (done >= total || _wholeBookCancel) return;
+
+      for (final i in needed) {
+        if (_wholeBookCancel) break;
+        final key = ColorizeService.keyFor(
+          path,
+          i,
+          hints: store.hintsOf(path, i),
+          denoise: store.denoise,
+          look: store.lookOf(path),
+        );
+        colorizeInBackground(
+          key,
+          () => book.page(i),
+          hints: store.hintsOf(path, i),
+          denoise: store.denoise,
+          look: store.lookOf(path),
+        ).then((_) {
+          if (!_wholeBookCancel && _wholeBookProgress?.path == path) {
+            done++;
+            report(done >= total);
+          }
+        }, onError: (Object _) {
+          if (!_wholeBookCancel && _wholeBookProgress?.path == path) {
+            done++;
+            report(done >= total);
+          }
+        });
+      }
+    } catch (_) {}
   }
 
   /// Puts [keys] at the front of the queue in this order and cancels queued

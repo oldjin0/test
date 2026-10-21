@@ -453,12 +453,7 @@ img.Image _predictChroma(
   if (denoiser != null && !lab && denoiser.width == iw && denoiser.height == ih) {
     gray = denoiser.denoise(gray);
   }
-  final pal = look.palette.isNotEmpty ? look.palette : defaultMangaPalette;
-  final effectiveHints = hints.isNotEmpty
-      ? hints
-      : (model.inChannels == 5
-          ? autoHintsFromPalette(gray, iw, ih, pw, ph, pal)
-          : const <ColorHint>[]);
+  final effectiveHints = hints;
   final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, effectiveHints) : gray);
 
   // Crop the page area out of the (possibly smaller) prediction.
@@ -885,12 +880,7 @@ img.Image _predictRgb(
   if (denoiser != null && denoiser.width == iw && denoiser.height == ih) {
     gray = denoiser.denoise(gray);
   }
-  final pal = look.palette.isNotEmpty ? look.palette : defaultMangaPalette;
-  final effectiveHints = hints.isNotEmpty
-      ? hints
-      : (model.inChannels == 5
-          ? autoHintsFromPalette(gray, iw, ih, pw, ph, pal)
-          : const <ColorHint>[]);
+  final effectiveHints = hints;
   final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, effectiveHints) : gray);
 
   final ow = model.outWidth;
@@ -926,7 +916,7 @@ img.Image _composeRgbMultiply(img.Image src, img.Image color) {
     color,
     width: src.width,
     height: src.height,
-    interpolation: img.Interpolation.cubic,
+    interpolation: img.Interpolation.linear,
   );
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);

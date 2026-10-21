@@ -125,17 +125,25 @@ class _HomePageState extends State<HomePage> {
     if (!_store.colorize) {
       _store.setColorize(true);
     }
+    final start = _store.progressOf(path)?.page ?? 0;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('[$title] 전체 채색을 시작합니다. 백그라운드에서 진행됩니다.'),
-        duration: const Duration(seconds: 4),
+        content: Text('[$title] 전체 채색을 시작합니다 (${start + 1}쪽부터 우선 진행)'),
+        duration: const Duration(seconds: 3),
       ),
     );
-    await prepareBook(path, 0, 99999, _store, service);
+    await service.startWholeBook(path: path, title: title, startPage: start, store: _store);
   }
 
-  void _showBookMenu(String path, String title) {
+  Future<void> _showBookMenu(String path, String title) async {
     if (isTextFile(path)) return;
+    final service = await widget.colorizer
+        .timeout(const Duration(seconds: 2), onTimeout: () => throw TimeoutException('colorizer'))
+        .then<ColorizeService?>((s) => s, onError: (Object _) => null);
+    if (!mounted) return;
+    final progress = service?.wholeBookProgressNotifier.value;
+    final isRunningHere = progress != null && progress.path == path && !progress.isFinished;
+
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -153,15 +161,29 @@ class _HomePageState extends State<HomePage> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.download_for_offline_outlined),
-              title: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
-              subtitle: const Text('전체 페이지를 미리 채색해 저장해 두어 인터넷/대기 없이 즉시 읽습니다.'),
-              onTap: () {
-                Navigator.pop(context);
-                _startWholeBookColoring(path, title);
-              },
-            ),
+            if (isRunningHere)
+              ListTile(
+                leading: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
+                title: Text('채색 중지 (${progress.done}/${progress.total}쪽 · ${progress.percent}%)'),
+                subtitle: const Text('현재 진행 중인 백그라운드 채색을 멈춥니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  service?.cancelWholeBook();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('백그라운드 채색을 중지했습니다.')),
+                  );
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.download_for_offline_outlined),
+                title: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
+                subtitle: const Text('읽고 있는 위치부터 전체를 미리 채색해 저장합니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _startWholeBookColoring(path, title);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.auto_stories_outlined),
               title: const Text('만화 열기'),
@@ -337,13 +359,62 @@ class _HomePageState extends State<HomePage> {
                 label: const Text('폴더 추가'),
               )
             : null,
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _tab,
-          onDestinationSelected: (i) => setState(() => _tab = i),
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.history), label: '최근'),
-            NavigationDestination(icon: Icon(Icons.folder_outlined), label: '폴더'),
-            NavigationDestination(icon: Icon(Icons.bookmarks_outlined), label: '북마크'),
+        bottomNavigationBar: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            FutureBuilder<ColorizeService>(
+              future: widget.colorizer,
+              builder: (context, snap) {
+                final service = snap.data;
+                if (service == null) return const SizedBox.shrink();
+                return ValueListenableBuilder<BookColorizeProgress?>(
+                  valueListenable: service.wholeBookProgressNotifier,
+                  builder: (context, p, _) {
+                    if (p == null || p.isFinished) return const SizedBox.shrink();
+                    return Container(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.palette, size: 20, color: Colors.blueAccent),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  '${p.title} · ${p.done}/${p.total}쪽 (${p.percent}%)',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                LinearProgressIndicator(value: p.fraction),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            tooltip: '채색 중지',
+                            onPressed: () => service.cancelWholeBook(),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+            NavigationBar(
+              selectedIndex: _tab,
+              onDestinationSelected: (i) => setState(() => _tab = i),
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.history), label: '최근'),
+                NavigationDestination(icon: Icon(Icons.folder_outlined), label: '폴더'),
+                NavigationDestination(icon: Icon(Icons.bookmarks_outlined), label: '북마크'),
+              ],
+            ),
           ],
         ),
       ),
@@ -645,17 +716,25 @@ class _FolderPageState extends State<FolderPage> {
     if (!widget.store.colorize) {
       widget.store.setColorize(true);
     }
+    final start = widget.store.progressOf(path)?.page ?? 0;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('[$title] 전체 채색을 시작합니다. 백그라운드에서 진행됩니다.'),
-        duration: const Duration(seconds: 4),
+        content: Text('[$title] 전체 채색을 시작합니다 (${start + 1}쪽부터 우선 진행)'),
+        duration: const Duration(seconds: 3),
       ),
     );
-    await prepareBook(path, 0, 99999, widget.store, service);
+    await service.startWholeBook(path: path, title: title, startPage: start, store: widget.store);
   }
 
-  void _showBookMenu(String path, String title) {
+  Future<void> _showBookMenu(String path, String title) async {
     if (isTextFile(path)) return;
+    final service = await widget.colorizer
+        .timeout(const Duration(seconds: 2), onTimeout: () => throw TimeoutException('colorizer'))
+        .then<ColorizeService?>((s) => s, onError: (Object _) => null);
+    if (!mounted) return;
+    final progress = service?.wholeBookProgressNotifier.value;
+    final isRunningHere = progress != null && progress.path == path && !progress.isFinished;
+
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -673,15 +752,29 @@ class _FolderPageState extends State<FolderPage> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.download_for_offline_outlined),
-              title: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
-              subtitle: const Text('전체 페이지를 미리 채색해 저장해 두어 인터넷/대기 없이 즉시 읽습니다.'),
-              onTap: () {
-                Navigator.pop(context);
-                _startWholeBookColoring(path, title);
-              },
-            ),
+            if (isRunningHere)
+              ListTile(
+                leading: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
+                title: Text('채색 중지 (${progress.done}/${progress.total}쪽 · ${progress.percent}%)'),
+                subtitle: const Text('현재 진행 중인 백그라운드 채색을 멈춥니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  service?.cancelWholeBook();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('백그라운드 채색을 중지했습니다.')),
+                  );
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.download_for_offline_outlined),
+                title: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
+                subtitle: const Text('읽고 있는 위치부터 전체를 미리 채색해 저장합니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _startWholeBookColoring(path, title);
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.auto_stories_outlined),
               title: const Text('만화 열기'),

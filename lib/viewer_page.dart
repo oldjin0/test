@@ -58,15 +58,17 @@ Future<void> prepareBook(
     final book = await ComicBook.open(path, window: 4);
     final end = math.min(book.length, first + count);
     for (var i = first; i < end; i++) {
+      final key = ColorizeService.keyFor(
+        path,
+        i,
+        hints: store.hintsOf(path, i),
+        denoise: store.denoise,
+        look: store.lookOf(path),
+      );
+      if (service.isCached(key)) continue;
       service
           .colorizeInBackground(
-            ColorizeService.keyFor(
-              path,
-              i,
-              hints: store.hintsOf(path, i),
-              denoise: store.denoise,
-              look: store.lookOf(path),
-            ),
+            key,
             () => book.page(i),
             hints: store.hintsOf(path, i),
             denoise: store.denoise,
@@ -751,27 +753,24 @@ class _ViewerPageState extends State<ViewerPage> {
     look: _store.lookOf(widget.path),
   );
 
-  /// Queues every page for colorizing in the background, from the current
-  /// page on and then the pages before it. Reading goes on: the pages the
-  /// reader looks at are always done first, and the finished ones are
-  /// instant when reached.
-  void _colorizeWholeBook() {
-    final book = _book, service = _service;
-    if (book == null || service == null) return;
-    final n = book.length;
-    for (var k = 0; k < n; k++) {
-      final i = (_page + k) % n;
-      service
-          .colorizeInBackground(
-            _key(i),
-            () => book.page(i),
-            hints: _store.hintsOf(widget.path, i),
-            denoise: _store.denoise,
-            look: _store.lookOf(widget.path),
-          )
-          .then((_) {}, onError: (Object _) {});
-    }
-    _say('전체 $n쪽을 백그라운드에서 채색합니다. 읽는 동안 계속 진행됩니다.');
+  /// Pre-colorizes the entire book in the background, prioritizing the
+  /// page currently being viewed onwards, and skipping already cached pages.
+  void _startWholeBookColoring() {
+    final service = _service;
+    if (service == null || !service.modelLoaded) return;
+    if (!_store.colorize) _store.setColorize(true);
+    service.startWholeBook(
+      path: widget.path,
+      title: _title,
+      startPage: _page,
+      store: _store,
+    );
+    _say('전체 채색을 시작합니다. 현재 보고 계신 페이지(${_page + 1}쪽)부터 순서대로 진행됩니다.');
+  }
+
+  void _cancelWholeBookColoring() {
+    _service?.cancelWholeBook();
+    _say('백그라운드 채색을 중지했습니다.');
   }
 
   /// Opens the color-hint editor for the visible page (the first of a spread).
@@ -897,7 +896,8 @@ class _ViewerPageState extends State<ViewerPage> {
                     'hints' => _editHints(),
                     'reference' => _toggleReference(),
                     'export' => _exportComic(),
-                    'colorizeAll' => _colorizeWholeBook(),
+                    'colorizeAll' => _startWholeBookColoring(),
+                    'cancelColorizeAll' => _cancelWholeBookColoring(),
                     _ => null,
                   },
                   itemBuilder: (context) => [
@@ -943,11 +943,22 @@ class _ViewerPageState extends State<ViewerPage> {
                       child: const Text('이 페이지 색 지정 (힌트)'),
                     ),
                     const PopupMenuDivider(),
-                    PopupMenuItem(
-                      value: 'colorizeAll',
-                      enabled: (_service?.modelLoaded ?? false) && _store.colorize,
-                      child: const Text('이 책 전체를 미리 채색 (백그라운드)'),
-                    ),
+                    if (_service?.wholeBookProgressNotifier.value != null &&
+                        _service!.wholeBookProgressNotifier.value!.path == widget.path &&
+                        !_service!.wholeBookProgressNotifier.value!.isFinished)
+                      PopupMenuItem(
+                        value: 'cancelColorizeAll',
+                        child: Text(
+                          '전체 채색 중지 (${_service!.wholeBookProgressNotifier.value!.done}/${_service!.wholeBookProgressNotifier.value!.total}쪽 · ${_service!.wholeBookProgressNotifier.value!.percent}%)',
+                          style: const TextStyle(color: Colors.redAccent),
+                        ),
+                      )
+                    else
+                      PopupMenuItem(
+                        value: 'colorizeAll',
+                        enabled: (_service?.modelLoaded ?? false) && _store.colorize,
+                        child: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
+                      ),
                     const PopupMenuItem(value: 'savePage', child: Text('현재 페이지를 갤러리에 저장')),
                     const PopupMenuItem(value: 'export', child: Text('컬러 만화(.cbz)로 저장')),
                   ],
@@ -976,7 +987,57 @@ class _ViewerPageState extends State<ViewerPage> {
           LogicalKeyboardKey.keyP: _showPageSearch,
           LogicalKeyboardKey.keyR: () => _store.setRtl(!_store.rtl),
         },
-        child: _body(),
+        child: Stack(
+          children: [
+            Positioned.fill(child: _body()),
+            if (_service != null)
+              ValueListenableBuilder<BookColorizeProgress?>(
+                valueListenable: _service!.wholeBookProgressNotifier,
+                builder: (context, p, _) {
+                  if (p == null || p.path != widget.path || p.isFinished) return const SizedBox.shrink();
+                  return Positioned(
+                    top: _showUi ? 16 : 8,
+                    left: 16,
+                    right: 16,
+                    child: Center(
+                      child: Material(
+                        elevation: 6,
+                        borderRadius: BorderRadius.circular(24),
+                        color: Colors.black87,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.blueAccent),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                '백그라운드 채색 중: ${p.done} / ${p.total}쪽 (${p.percent}%)',
+                                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                              ),
+                              const SizedBox(width: 8),
+                              InkWell(
+                                onTap: _cancelWholeBookColoring,
+                                borderRadius: BorderRadius.circular(12),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(4),
+                                  child: Icon(Icons.close, size: 16, color: Colors.white70),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
       ),
       bottomNavigationBar: _showUi && total > 1 ? _slider(total) : null,
     );
@@ -1126,7 +1187,7 @@ class _ViewerPageState extends State<ViewerPage> {
       fit: crop != null ? null : (vertical ? BoxFit.fitWidth : BoxFit.contain),
       width: crop == null && vertical ? width : null,
       gaplessPlayback: true,
-      filterQuality: isPc ? FilterQuality.high : FilterQuality.medium,
+      filterQuality: FilterQuality.medium,
       // Until decoded (rare: upcoming pages are decoded ahead), show what
       // was there instead of an empty frame.
       frameBuilder: (context, child, frame, sync) =>

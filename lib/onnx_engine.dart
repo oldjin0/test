@@ -254,7 +254,7 @@ class OnnxDenoiser implements PageDenoiser {
         sum += v;
       }
       final mean = sum / r.length;
-      if (m.sawInvalidOutput || mean < 0.2 || mean > 1.0) {
+      if (m.sawInvalidOutput || mean < 0.15 || mean > 1.08 || mean.isNaN) {
         problem = 'DirectML output not plausible (mean $mean)';
         m.close();
         m = null;
