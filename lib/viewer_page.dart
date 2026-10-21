@@ -238,6 +238,7 @@ class _ViewerPageState extends State<ViewerPage> {
   late bool _autoCrop = _store.autoCrop;
   late int _prefetch = _store.prefetchPages;
   late String _orientation = _store.orientation;
+  late String _colorPreset = _store.colorPreset;
 
   void _onStore() {
     if (!mounted) return;
@@ -260,6 +261,10 @@ class _ViewerPageState extends State<ViewerPage> {
       if (_autoCrop != _store.autoCrop) {
         _autoCrop = _store.autoCrop;
         pages.margins = _autoCrop ? findMargins : null;
+        pages.refresh();
+      }
+      if (_colorPreset != _store.colorPreset) {
+        _colorPreset = _store.colorPreset;
         pages.refresh();
       }
       if (_denoise != _store.denoise ||
@@ -645,39 +650,39 @@ class _ViewerPageState extends State<ViewerPage> {
     final presets = [
       (
         id: 'natural',
-        name: '내추럴 2번 기본 (권장)',
-        desc: 'AI 원본의 자연스러운 채색과 또렷한 먹선',
-        strength: 1.0,
-        sat: 1.0,
-        con: 1.0,
+        name: '내추럴 (표준 권장)',
+        desc: 'AI 원본의 자연스러운 피부톤과 배경의 기본 균형',
         icon: Icons.auto_awesome,
       ),
       (
-        id: 'vivid',
-        name: '비비드 애니메이션 (화사한 색감)',
-        desc: '애니메이션 원화처럼 생생하고 또렷한 원색',
-        strength: 1.0,
-        sat: 1.30,
-        con: 1.08,
-        icon: Icons.palette,
-      ),
-      (
-        id: 'pastel',
-        name: '소프트 파스텔 (부드러운 색조)',
-        desc: '눈이 편안한 은은하고 부드러운 수채화풍 톤',
-        strength: 0.85,
-        sat: 0.95,
-        con: 0.96,
+        id: 'soft_pastel',
+        name: '소프트 파스텔 (수채화 감성)',
+        desc: '은은하고 부드러운 수채화톤 + 연필/목탄 느낌의 부드러운 선화',
         icon: Icons.wb_sunny_outlined,
       ),
       (
-        id: 'vintage',
-        name: '빈티지 레트로 (고전 만화책)',
-        desc: '클래식 컬러 만화 잡지 인쇄물 느낌의 깊은 명암',
-        strength: 0.90,
-        sat: 0.80,
-        con: 1.15,
+        id: 'vivid_anime',
+        name: '비비드 셀 애니 (극장판 원색)',
+        desc: '애니메이션 원화처럼 생생한 원색 대비 + 칠흑 먹선',
+        icon: Icons.palette,
+      ),
+      (
+        id: 'cinematic_warm',
+        name: '시네마틱 웜 (영화적 조명)',
+        desc: '따뜻한 앰버 골드 하이라이트와 깊은 청록 틸 음영',
+        icon: Icons.movie_filter,
+      ),
+      (
+        id: 'retro_print',
+        name: '레트로 코믹스 (고전 만화책)',
+        desc: '빈티지 미색 종이와 7080 클래식 출판 만화 잉크 감성',
         icon: Icons.history_edu,
+      ),
+      (
+        id: 'monochrome_accent',
+        name: '모노크롬 포인트 (흑백+포인트)',
+        desc: '배경은 흑백 잉크톤으로 정돈하고 피부·의상 주요 색상만 강조',
+        icon: Icons.contrast,
       ),
     ];
 
@@ -685,59 +690,54 @@ class _ViewerPageState extends State<ViewerPage> {
       context: context,
       showDragHandle: true,
       builder: (context) {
-        final curStrength = _store.colorStrength;
-        final curSat = _store.saturation;
-        final curCon = _store.contrast;
+        final curPreset = _store.colorPreset;
 
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Text(
-                  '채색 스타일 프리셋',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Text(
+                    '독립 화풍 프리셋 (6종)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
                 ),
-              ),
-              for (final p in presets)
-                Builder(
-                  builder: (context) {
-                    final isSelected =
-                        (curStrength - p.strength).abs() < 0.05 &&
-                        (curSat - p.sat).abs() < 0.05 &&
-                        (curCon - p.con).abs() < 0.05;
-                    return ListTile(
-                      leading: Icon(
-                        p.icon,
-                        color: isSelected ? Theme.of(context).colorScheme.primary : null,
-                      ),
-                      title: Text(
-                        p.name,
-                        style: TextStyle(
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                for (final p in presets)
+                  Builder(
+                    builder: (context) {
+                      final isSelected = curPreset == p.id;
+                      return ListTile(
+                        leading: Icon(
+                          p.icon,
                           color: isSelected ? Theme.of(context).colorScheme.primary : null,
                         ),
-                      ),
-                      subtitle: Text(p.desc),
-                      trailing: isSelected
-                          ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
-                          : null,
-                      onTap: () {
-                        Navigator.pop(context);
-                        _store.update((s) {
-                          s.colorStrength = p.strength;
-                          s.saturation = p.sat;
-                          s.contrast = p.con;
-                        });
-                        _say('${p.name} 스타일이 적용되었습니다.');
-                      },
-                    );
-                  },
-                ),
-              const SizedBox(height: 12),
-            ],
+                        title: Text(
+                          p.name,
+                          style: TextStyle(
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                          ),
+                        ),
+                        subtitle: Text(p.desc),
+                        trailing: isSelected
+                            ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
+                            : null,
+                        onTap: () {
+                          Navigator.pop(context);
+                          _store.setColorPreset(p.id);
+                          _pages?.refresh();
+                          if (mounted) setState(() {});
+                          _say('${p.name} 스타일이 적용되었습니다.');
+                        },
+                      );
+                    },
+                  ),
+                const SizedBox(height: 12),
+              ],
+            ),
           ),
         );
       },

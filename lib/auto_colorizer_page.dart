@@ -10,10 +10,16 @@ import 'library_store.dart';
 import 'storage.dart';
 
 class AutoColorizerPage extends StatefulWidget {
-  const AutoColorizerPage({super.key, required this.colorizer, required this.store});
+  const AutoColorizerPage({
+    super.key,
+    required this.colorizer,
+    required this.store,
+    this.isStandalone = false,
+  });
 
   final Future<ColorizeService> colorizer;
   final LibraryStore store;
+  final bool isStandalone;
 
   @override
   State<AutoColorizerPage> createState() => _AutoColorizerPageState();
@@ -21,6 +27,7 @@ class AutoColorizerPage extends StatefulWidget {
 
 class _AutoColorizerPageState extends State<AutoColorizerPage> {
   late final BatchColorizerEngine _engine;
+  bool _isSelectingFiles = false;
 
   @override
   void initState() {
@@ -34,14 +41,20 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
         type: FileType.custom,
         allowedExtensions: ['zip', 'cbz', 'cbr', 'rar', 'pdf', '7z', 'cb7'],
       );
+      if (files.isEmpty) return;
+      setState(() => _isSelectingFiles = true);
       for (final f in files) {
-        if (f.path != null) await _engine.addItem(f.path!);
+        if (f.path != null) {
+          await _engine.addItem(f.path!);
+          if (mounted) setState(() {});
+        }
       }
-      setState(() {});
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('파일 선택 오류: $e')));
       }
+    } finally {
+      if (mounted) setState(() => _isSelectingFiles = false);
     }
   }
 
@@ -49,13 +62,16 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
     try {
       final path = await pickFolder();
       if (path != null) {
+        setState(() => _isSelectingFiles = true);
         await _engine.addItem(path);
-        setState(() {});
+        if (mounted) setState(() {});
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('폴더 선택 오류: $e')));
       }
+    } finally {
+      if (mounted) setState(() => _isSelectingFiles = false);
     }
   }
 
@@ -78,6 +94,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: !widget.isStandalone,
         title: const Row(
           children: [
             Icon(Icons.palette_outlined, color: Colors.amber),
@@ -451,7 +468,32 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
               ],
             ),
             const SizedBox(height: 8),
-            if (_engine.queue.isEmpty)
+            if (_isSelectingFiles)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          '파일 목록 및 압축 구조를 분석하고 있습니다…',
+                          style: TextStyle(fontSize: 13, color: Colors.cyanAccent),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 6),
+                    LinearProgressIndicator(),
+                  ],
+                ),
+              ),
+            if (_engine.queue.isEmpty && !_isSelectingFiles)
               Container(
                 alignment: Alignment.center,
                 padding: const EdgeInsets.symmetric(vertical: 36),
@@ -476,34 +518,63 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                       item.isArchive ? Icons.folder_zip : Icons.folder,
                       color: isCurrent ? Colors.amber : (item.completed ? Colors.green : Colors.grey),
                     ),
-                    title: Text(
-                      item.title,
-                      style: TextStyle(
-                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                        color: isCurrent ? Colors.amber : null,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            item.title,
+                            style: TextStyle(
+                              fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                              color: isCurrent ? Colors.amber : null,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (item.sizeLabel.isNotEmpty)
+                          Container(
+                            margin: const EdgeInsets.only(left: 6),
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white10,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              item.sizeLabel,
+                              style: const TextStyle(fontSize: 11, color: Colors.white70),
+                            ),
+                          ),
+                      ],
                     ),
                     subtitle: Text(
-                      '${item.totalPages > 0 ? "${item.totalPages}쪽" : "페이지 계산 중"} · ${item.completed ? "채색 완료" : (isCurrent ? "채색 진행 중 (${item.completedPages}/${item.totalPages}쪽)" : "대기 중")}',
+                      item.isAnalyzing
+                          ? '압축 파일 분석 중…'
+                          : '${item.totalPages > 0 ? "${item.totalPages}쪽" : (item.error ?? "페이지 계산 중")} · ${item.completed ? "채색 완료" : (isCurrent ? "채색 진행 중 (${item.completedPages}/${item.totalPages}쪽)" : item.status)}',
                       style: TextStyle(
                         fontSize: 12,
-                        color: item.completed ? Colors.green : (isCurrent ? Colors.amber : Colors.grey),
+                        color: item.isAnalyzing
+                            ? Colors.cyanAccent
+                            : (item.completed ? Colors.green : (isCurrent ? Colors.amber : Colors.grey)),
                       ),
                     ),
-                    trailing: prog.isRunning
-                        ? (isCurrent
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : (item.completed ? const Icon(Icons.check, color: Colors.green) : null))
-                        : IconButton(
-                            icon: const Icon(Icons.close, size: 18),
-                            onPressed: () => setState(() => _engine.removeItem(i)),
-                          ),
+                    trailing: item.isAnalyzing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : (prog.isRunning
+                            ? (isCurrent
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  )
+                                : (item.completed ? const Icon(Icons.check, color: Colors.green) : null))
+                            : IconButton(
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: () => setState(() => _engine.removeItem(i)),
+                              )),
                   );
                 },
               ),

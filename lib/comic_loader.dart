@@ -66,30 +66,168 @@ bool _isPageName(String name) {
   return _imageExts.any(lower.endsWith);
 }
 
+int _u16(Uint8List b, int i) => b[i] | (b[i + 1] << 8);
+int _u32(Uint8List b, int i) => _u16(b, i) | (_u16(b, i + 2) << 16);
+int _u64(Uint8List b, int i) => _u32(b, i) + _u32(b, i + 4) * 0x100000000;
+
+/// One entry of a zip's central directory.
+class ZipEntry {
+  ZipEntry(this.method, this.compressed, this.size, this.offset);
+
+  final int method, compressed, size, offset;
+
+  /// Decompresses and returns the complete bytes of this entry in milliseconds.
+  Uint8List readBytes(RandomAccessFile f) {
+    f.setPositionSync(offset);
+    final local = f.readSync(30);
+    if (local.length < 30 || _u32(local, 0) != 0x04034b50) {
+      throw const FormatException('잘못된 zip 로컬 헤더');
+    }
+    final nameLen = _u16(local, 26);
+    final extraLen = _u16(local, 28);
+    f.setPositionSync(offset + 30 + nameLen + extraLen);
+    final raw = f.readSync(compressed);
+    if (method == 0) return raw;
+    if (method != 8) {
+      throw FormatException('지원하지 않는 zip 압축 방식: $method');
+    }
+    return Uint8List.fromList(const ZLibDecoder(raw: true).decodeBytes(raw));
+  }
+
+  /// About the first [max] bytes of the entry's content (stored or
+  /// deflated), read and unpacked from its start only.
+  Uint8List head(RandomAccessFile f, int max) {
+    f.setPositionSync(offset);
+    final local = f.readSync(30);
+    if (local.length < 30 || _u32(local, 0) != 0x04034b50) return Uint8List(0);
+    f.setPositionSync(offset + 30 + _u16(local, 26) + _u16(local, 28));
+    final raw = f.readSync(math.min(compressed, max));
+    if (method == 0) return raw;
+    if (method != 8) return Uint8List(0);
+    final filter = RawZLibFilter.inflateFilter(raw: true);
+    filter.process(raw, 0, raw.length);
+    final out = BytesBuilder(copy: false);
+    try {
+      for (List<int>? c; (c = filter.processed(flush: false)) != null && out.length < max;) {
+        out.add(c!);
+      }
+    } catch (_) {}
+    return out.takeBytes();
+  }
+}
+
+/// The entries of the zip open in [f], by name, read from its central directory
+/// at the end of the file in <10ms without loading the archive into memory.
+Map<String, ZipEntry> zipEntries(RandomAccessFile f) {
+  final len = f.lengthSync();
+  final tailLen = math.min(len, 22 + 0xffff + 20);
+  f.setPositionSync(len - tailLen);
+  final tail = f.readSync(tailLen);
+  var eocd = -1;
+  for (var i = tail.length - 22; i >= 0; i--) {
+    if (_u32(tail, i) == 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw const FormatException('not a zip');
+  var count = _u16(tail, eocd + 10);
+  var cdSize = _u32(tail, eocd + 12);
+  var cdOffset = _u32(tail, eocd + 16);
+  if (eocd >= 20 && _u32(tail, eocd - 20) == 0x07064b50) {
+    f.setPositionSync(_u64(tail, eocd - 20 + 8));
+    final z = f.readSync(56);
+    if (z.length == 56 && _u32(z, 0) == 0x06064b50) {
+      count = _u64(z, 32);
+      cdSize = _u64(z, 40);
+      cdOffset = _u64(z, 48);
+    }
+  }
+  f.setPositionSync(cdOffset);
+  final cd = f.readSync(cdSize);
+  final entries = <String, ZipEntry>{};
+  var i = 0;
+  for (var k = 0; k < count && i + 46 <= cd.length; k++) {
+    if (_u32(cd, i) != 0x02014b50) break;
+    final method = _u16(cd, i + 10);
+    var compressed = _u32(cd, i + 20);
+    var size = _u32(cd, i + 24);
+    final nameLen = _u16(cd, i + 28), extraLen = _u16(cd, i + 30), commentLen = _u16(cd, i + 32);
+    var offset = _u32(cd, i + 42);
+    final nameBytes = cd.sublist(i + 46, i + 46 + nameLen);
+    var x = i + 46 + nameLen;
+    final xEnd = x + extraLen;
+    while (x + 4 <= xEnd) {
+      final id = _u16(cd, x), sz = _u16(cd, x + 2);
+      if (id == 1) {
+        var y = x + 4;
+        if (size == 0xffffffff) (size, y) = (_u64(cd, y), y + 8);
+        if (compressed == 0xffffffff) (compressed, y) = (_u64(cd, y), y + 8);
+        if (offset == 0xffffffff) offset = _u64(cd, y);
+      }
+      x += 4 + sz;
+    }
+    String name;
+    try {
+      name = const Utf8Decoder().convert(nameBytes);
+    } catch (_) {
+      name = String.fromCharCodes(nameBytes);
+    }
+    entries[name] = ZipEntry(method, compressed, size, offset);
+    i = xEnd + commentLen;
+  }
+  return entries;
+}
+
 /// Names of the page images in the comic at [path], in reading order. Only
 /// the zip directory is read: no page is decompressed and the whole file is
 /// never loaded into memory, so size is not a problem.
 List<String> listComicPages(String path) {
-  final input = InputFileStream(path);
   try {
-    final archive = ZipDecoder().decodeStream(input);
-    return [
-      for (final f in archive.files)
-        if (f.isFile && _isPageName(f.name)) f.name,
-    ]..sort((a, b) => naturalCompare(a.toLowerCase(), b.toLowerCase()));
-  } finally {
-    input.closeSync();
+    final f = File(path).openSync(mode: FileMode.read);
+    try {
+      final entries = zipEntries(f);
+      return [
+        for (final name in entries.keys)
+          if (_isPageName(name)) name,
+      ]..sort((a, b) => naturalCompare(a.toLowerCase(), b.toLowerCase()));
+    } finally {
+      f.closeSync();
+    }
+  } catch (_) {
+    final input = InputFileStream(path);
+    try {
+      final archive = ZipDecoder().decodeStream(input);
+      return [
+        for (final f in archive.files)
+          if (f.isFile && _isPageName(f.name)) f.name,
+      ]..sort((a, b) => naturalCompare(a.toLowerCase(), b.toLowerCase()));
+    } finally {
+      input.closeSync();
+    }
   }
 }
 
-/// Decompresses one page of the comic at [path].
+/// Decompresses one page of the comic at [path] via direct offset seek in ms.
 Uint8List readComicPage(String path, String name) {
+  try {
+    final f = File(path).openSync(mode: FileMode.read);
+    try {
+      final entries = zipEntries(f);
+      final entry = entries[name];
+      if (entry != null) {
+        return entry.readBytes(f);
+      }
+    } finally {
+      f.closeSync();
+    }
+  } catch (_) {}
+
   final input = InputFileStream(path);
   try {
     final file = ZipDecoder().decodeStream(input).find(name);
     final bytes = file?.readBytes();
     if (bytes == null) throw FormatException('페이지를 읽을 수 없습니다: $name');
-    // Copy: the bytes may be a view into the stream's buffer, which closes below.
     return Uint8List.fromList(bytes);
   } finally {
     input.closeSync();

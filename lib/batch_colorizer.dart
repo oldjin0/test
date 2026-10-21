@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:archive/archive_io.dart';
 import 'package:flutter/foundation.dart';
@@ -10,6 +11,7 @@ import 'colorizer.dart' show ColorHint, ColorizeResult;
 import 'comic_loader.dart';
 import 'exporter.dart' show imageExtension;
 import 'gemini_service.dart';
+import 'updater.dart' show AppPlatform;
 
 enum BatchPreset {
   natural('내추럴 (2번 표준)', 'natural', 1.0, 1.0, 1.0),
@@ -45,7 +47,18 @@ class BatchItem {
   int totalPages = 0;
   int completedPages = 0;
   bool completed = false;
+  bool isAnalyzing = false;
+  int fileSizeBytes = 0;
+  String status = '대기 중';
   String? error;
+
+  String get sizeLabel {
+    if (fileSizeBytes <= 0) return '';
+    if (fileSizeBytes < 1024 * 1024) {
+      return '${(fileSizeBytes / 1024).toStringAsFixed(1)} KB';
+    }
+    return '${(fileSizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
 }
 
 class BatchProgress {
@@ -125,15 +138,31 @@ class BatchColorizerEngine {
     final isArchive = type == FileSystemEntityType.file;
     final title = p.basenameWithoutExtension(path);
     final item = BatchItem(path: path, title: title, isArchive: isArchive);
+    item.isAnalyzing = true;
+    item.status = '분석 중…';
+
+    try {
+      if (isArchive) {
+        final stat = await File(path).stat();
+        item.fileSizeBytes = stat.size;
+      }
+    } catch (_) {}
+
+    queue.add(item);
+    _updateProgressOverview();
 
     try {
       final book = await ComicBook.open(path);
       item.totalPages = book.length;
-    } catch (_) {
+      item.isAnalyzing = false;
+      item.status = '${item.totalPages}쪽 준비됨';
+    } catch (e) {
+      item.isAnalyzing = false;
       item.totalPages = 0;
+      item.error = '$e';
+      item.status = '오류: $e';
     }
 
-    queue.add(item);
     _updateProgressOverview();
   }
 
@@ -208,7 +237,8 @@ class BatchColorizerEngine {
     final stopwatch = Stopwatch()..start();
     var pagesProcessedInRun = 0;
 
-    for (var itemIndex = 0; itemIndex < queue.length; itemIndex++) {
+    try {
+      for (var itemIndex = 0; itemIndex < queue.length; itemIndex++) {
       if (_cancelRequested) break;
 
       final item = queue[itemIndex];
@@ -305,6 +335,8 @@ class BatchColorizerEngine {
           final leftPages = totalOverall - processedOverall;
           final eta = (leftPages * secPerPage).round();
 
+          unawaited(AppPlatform.keepAlive(math.max(1, leftPages)));
+
           progress.value = BatchProgress(
             isRunning: true,
             isPaused: false,
@@ -332,6 +364,9 @@ class BatchColorizerEngine {
         zipEncoder?.closeSync();
       }
     }
+  } finally {
+    unawaited(AppPlatform.keepAlive(0));
+  }
 
     final finishedStatus = _cancelRequested
         ? '작업 취소됨'

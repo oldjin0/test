@@ -31,6 +31,26 @@ class MainActivity : FlutterActivity() {
     /// Background colorizing has pages left (the keep-alive service runs).
     private var keepingAlive = false
 
+    private fun isAutoColorizerIntent(i: Intent?): Boolean {
+        val comp = i?.component?.className ?: ""
+        return comp.contains("AutoColorizerLauncher") || (i?.getBooleanExtra("auto_colorizer", false) == true)
+    }
+
+    override fun getInitialRoute(): String {
+        if (isAutoColorizerIntent(intent)) {
+            return "/auto_colorizer"
+        }
+        return super.getInitialRoute() ?: "/"
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (isAutoColorizerIntent(intent)) {
+            appChannel?.invokeMethod("openAutoColorizer", null)
+        }
+    }
+
     /// Back on the last screen would finish the activity, and with it the
     /// Flutter engine and the colorizer: while background colorizing runs,
     /// the app goes to the background instead (as Home does) and carries on.
@@ -76,6 +96,7 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
+                        "isAutoColorizer" -> result.success(isAutoColorizerIntent(intent))
                         "versionInfo" -> {
                             @Suppress("DEPRECATION")
                             val info = packageManager.getPackageInfo(packageName, 0)

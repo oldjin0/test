@@ -386,7 +386,14 @@ ColorizeResult colorizePage(
       );
     } else {
       final sat = saturation ?? 1.25;
-      out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser, look: look));
+      out = _composeChroma(
+        src,
+        _predictChroma(src, model, sat, hints, denoiser, look: look),
+        inkContrast: inkContrast,
+        saturation: saturation ?? 1.0,
+        blendRatio: blendRatio,
+        style: style,
+      );
     }
     mode = ColorizeMode.ai;
   } else {
@@ -830,8 +837,16 @@ Float32List hintInput(Float32List gray, int iw, int ih, int pw, int ph, List<Col
   return input;
 }
 
-/// Merges low-resolution chroma with the page's own luminance.
-img.Image _composeChroma(img.Image src, img.Image chroma) {
+/// Merges low-resolution chroma with the page's own luminance, applying
+/// the selected style preset (vivid anime, soft pastel, cinematic warm, etc.).
+img.Image _composeChroma(
+  img.Image src,
+  img.Image chroma, {
+  double inkContrast = 1.0,
+  double saturation = 1.0,
+  double blendRatio = 1.0,
+  String style = 'natural',
+}) {
   final up = img.copyResize(
     chroma,
     width: src.width,
@@ -841,12 +856,90 @@ img.Image _composeChroma(img.Image src, img.Image chroma) {
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);
   final o = Uint8List(s.length);
+
+  final bool adjustSat = (saturation - 1.0).abs() > 0.02;
+  final bool blend = (blendRatio - 1.0).abs() > 0.01;
+  final bool customInk = (inkContrast - 1.0).abs() > 0.02;
+
+  final isSoftPastel = style == 'soft_pastel';
+  final isVividAnime = style == 'vivid_anime';
+  final isCinematicWarm = style == 'cinematic_warm';
+  final isRetroPrint = style == 'retro_print';
+  final isMonochromeAccent = style == 'monochrome_accent';
+
   for (var i = 0; i < s.length; i += 3) {
     final y = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
-    final cb = c[i] - 128, cr = c[i + 1] - 128;
-    o[i] = (y + 1.402 * cr).round().clamp(0, 255);
-    o[i + 1] = (y - 0.344136 * cb - 0.714136 * cr).round().clamp(0, 255);
-    o[i + 2] = (y + 1.772 * cb).round().clamp(0, 255);
+    final cb = (c[i] - 128).toDouble();
+    final cr = (c[i + 1] - 128).toDouble();
+
+    var pr = (y + 1.402 * cr).clamp(0.0, 255.0);
+    var pg = (y - 0.344136 * cb - 0.714136 * cr).clamp(0.0, 255.0);
+    var pb = (y + 1.772 * cb).clamp(0.0, 255.0);
+
+    final gray = y;
+
+    // 1. Style-specific color transformations
+    if (isVividAnime) {
+      pr = ((pr - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      pg = ((pg - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      pb = ((pb - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+    } else if (isCinematicWarm) {
+      final normY = (gray / 255.0).clamp(0.0, 1.0);
+      pr = (pr + 22.0 * normY).clamp(0.0, 255.0);
+      pg = (pg + 9.0 * normY).clamp(0.0, 255.0);
+      pb = (pb - 18.0 * normY + 6.0 * (1.0 - normY)).clamp(0.0, 255.0);
+    } else if (isMonochromeAccent) {
+      final chromaDist = math.sqrt((pr - gray) * (pr - gray) + (pg - gray) * (pg - gray) + (pb - gray) * (pb - gray));
+      if (chromaDist < 26.0) {
+        final t = (chromaDist / 26.0).clamp(0.0, 1.0);
+        pr = gray + (pr - gray) * t;
+        pg = gray + (pg - gray) * t;
+        pb = gray + (pb - gray) * t;
+      }
+    }
+
+    if (adjustSat) {
+      pr = (gray + (pr - gray) * saturation).clamp(0.0, 255.0);
+      pg = (gray + (pg - gray) * saturation).clamp(0.0, 255.0);
+      pb = (gray + (pb - gray) * saturation).clamp(0.0, 255.0);
+    }
+
+    final luma = y.round().clamp(0, 255);
+    var lf = _lutLineFactor[luma];
+
+    // 2. Style-specific line factor / ink handling
+    if (isSoftPastel) {
+      lf = math.max(120, (lf * 0.92).round());
+    } else if (isVividAnime) {
+      if (luma < 180) lf = (lf * 0.88).round().clamp(0, 1024);
+    } else if (customInk && luma < 160) {
+      final factor = math.pow(luma / 160.0, inkContrast - 1.0);
+      lf = (lf * factor).round().clamp(0, 1024);
+    }
+
+    var r = ((pr * lf + 512) / 1024).round().clamp(0, 255);
+    var g = ((pg * lf + 512) / 1024).round().clamp(0, 255);
+    var b = ((pb * lf + 512) / 1024).round().clamp(0, 255);
+
+    // 3. Style-specific paper / background tone
+    if (isRetroPrint) {
+      if (luma > 190) {
+        final weight = ((luma - 190) / 65.0).clamp(0.0, 1.0);
+        r = (r * (1.0 - weight * 0.03)).round().clamp(0, 255);
+        g = (g * (1.0 - weight * 0.06)).round().clamp(0, 255);
+        b = (b * (1.0 - weight * 0.16)).round().clamp(0, 255);
+      }
+    }
+
+    if (blend) {
+      r = (s[i] * (1.0 - blendRatio) + r * blendRatio).round().clamp(0, 255);
+      g = (s[i + 1] * (1.0 - blendRatio) + g * blendRatio).round().clamp(0, 255);
+      b = (s[i + 2] * (1.0 - blendRatio) + b * blendRatio).round().clamp(0, 255);
+    }
+
+    o[i] = r;
+    o[i + 1] = g;
+    o[i + 2] = b;
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
 }
