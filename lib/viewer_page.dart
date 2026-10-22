@@ -654,6 +654,18 @@ class _ViewerPageState extends State<ViewerPage> {
         icon: Icons.auto_awesome,
       ),
       (
+        id: 'chromatic_novel',
+        name: '크로매틱 노블 (극장판 애니)',
+        desc: '하이라이트 골든 크림 & 음영 딥 인디고 Split-Toning + 녹색 오염 완전 차단',
+        icon: Icons.movie_filter_outlined,
+      ),
+      (
+        id: 'eink_pantone',
+        name: '모안 팬톤 (칼레이도3 전용)',
+        desc: '300PPI 순수 흑백 먹선 분리 + 채도 2.0배 증폭 (전자잉크 물빠짐 보상)',
+        icon: Icons.chrome_reader_mode_outlined,
+      ),
+      (
         id: 'vivid_anime',
         name: '비비드 애니 (화사한 원색)',
         desc: '애니메이션 원화처럼 생생하고 화사한 원색 대비 + 딥블랙 먹선',

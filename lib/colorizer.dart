@@ -414,7 +414,7 @@ ColorizeResult colorizePage(
     if (model.output == ModelOutput.rgb) {
       out = _composeRgbMultiply(
         src,
-        _predictRgb(src, model, hints, denoiser, look: look),
+        _predictRgb(src, model, hints, denoiser, look: look, style: style),
         inkContrast: inkContrast,
         saturation: saturation ?? 1.0,
         blendRatio: blendRatio,
@@ -998,6 +998,7 @@ img.Image _predictRgb(
   List<ColorHint> hints,
   PageDenoiser? denoiser, {
   BookLook look = BookLook.none,
+  String style = 'natural',
 }) {
   final iw = model.inWidth, ih = model.inHeight;
   final s = math.min(iw / src.width, ih / src.height);
@@ -1025,10 +1026,41 @@ img.Image _predictRgb(
   for (var y = 0; y < ph; y++) {
     for (var x = 0; x < pw; x++) {
       final k = y * ow + x;
-      final r = (pred[k * 3] * 255).round().clamp(0, 255);
-      final g = (pred[k * 3 + 1] * 255).round().clamp(0, 255);
-      final b = (pred[k * 3 + 2] * 255).round().clamp(0, 255);
-      color.setPixelRgb(x, y, r, g, b);
+      var r = (pred[k * 3] * 255).round().clamp(0, 255);
+      var g = (pred[k * 3 + 1] * 255).round().clamp(0, 255);
+      var b = (pred[k * 3 + 2] * 255).round().clamp(0, 255);
+
+      if (style == 'chromatic_novel') {
+        final maxC = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        final minC = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        final chroma = maxC - minC;
+
+        // 1) 무채색 방치 영역(하얀 뼈/돌) -> 슬레이트 블루/인디고 착색
+        if (chroma < 35) {
+          r = (r * 180 + 55 * 76) >> 8;
+          g = (g * 180 + 75 * 76) >> 8;
+          b = (b * 180 + 115 * 76) >> 8;
+        }
+        // 2) 녹색 번짐(팔/모래의 저~중채도 녹색) -> 네이비/모브 치환
+        else if (g >= r && g >= b && chroma < 115) {
+          final avgRB = (r + b) >> 1;
+          r = (avgRB * 180 + 85 * 76) >> 8;
+          g = (avgRB * 140 + 55 * 76) >> 8;
+          b = (avgRB * 190 + 110 * 76) >> 8;
+        }
+        // 3) 고채도 풀밭(형광 연두) -> 차분한 시네마틱 올리브/청록 톤다운
+        else if (g > r + 25 && chroma >= 115) {
+          g = (g * 215) >> 8;
+          b = (b * 220 + 35) > 255 ? 255 : (b * 220 + 35) >> 8;
+        }
+        // 4) 형광 노란색(가아라 머리 등) -> 적갈색/테라코타 롤오프
+        else if (r > 195 && g > 175 && b < 95 && r >= g) {
+          g = (g * 150) >> 8;
+          b = (b * 180) >> 8;
+        }
+      }
+
+      color.setPixelRgb(x, y, r.clamp(0, 255), g.clamp(0, 255), b.clamp(0, 255));
     }
   }
   if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints);
@@ -1083,8 +1115,98 @@ img.Image _composeRgbMultiply(
   final isWarmAmber = style == 'warm_amber' || style == 'cinematic_warm';
   final isRetroPrint = style == 'retro_print';
   final isMonochromeAccent = style == 'monochrome_accent';
+  final isChromaticNovel = style == 'chromatic_novel';
+  final isEinkPantone = style == 'eink_pantone';
 
   for (var i = 0; i < s.length; i += 3) {
+    if (isChromaticNovel) {
+      final y = _luma(s[i], s[i + 1], s[i + 2]);
+      final lineFactor = _lutLineFactor[y] >> 2;
+      final r = c[i];
+      final g = c[i + 1];
+      final b = c[i + 2];
+      int outR, outG, outB;
+
+      if (y >= 240) {
+        // 말풍선 및 하이라이트 절대 순백 보호 (누런 침범 방지)
+        outR = 255;
+        outG = 255;
+        outB = 255;
+      } else if (y < 85) {
+        // 먹선 및 암부: 2번(natural)과 동일한 날카로운 블랙 유지 (뿌연 현상 방지)
+        outR = (r * lineFactor) >> 8;
+        outG = (g * lineFactor) >> 8;
+        outB = (b * lineFactor) >> 8;
+      } else {
+        // 중간 스크린톤 구간(85 <= y < 240): 골든 하이라이트 & 딥 인디고 섀도우 Split-Toning
+        // y가 어두울수록 검은색 대신 인디고 암부(R:32, G:28, B:58)가 섞이게 보간
+        final shadowWeight = 240 - y; // 0 ~ 155
+        final baseWeight = 256 - shadowWeight;
+        final warmR = y > 190 ? 12 : 0;
+        final warmG = y > 190 ? 6 : 0;
+
+        final blendedR = ((r + warmR) * baseWeight + 32 * shadowWeight) >> 8;
+        final blendedG = ((g + warmG) * baseWeight + 28 * shadowWeight) >> 8;
+        final blendedB = (b * baseWeight + 58 * shadowWeight) >> 8;
+
+        outR = (blendedR * lineFactor) >> 8;
+        outG = (blendedG * lineFactor) >> 8;
+        outB = (blendedB * lineFactor) >> 8;
+      }
+
+      if (blend) {
+        outR = (s[i] * (1.0 - blendRatio) + outR * blendRatio).round().clamp(0, 255);
+        outG = (s[i + 1] * (1.0 - blendRatio) + outG * blendRatio).round().clamp(0, 255);
+        outB = (s[i + 2] * (1.0 - blendRatio) + outB * blendRatio).round().clamp(0, 255);
+      }
+
+      o[i] = outR.clamp(0, 255);
+      o[i + 1] = outG.clamp(0, 255);
+      o[i + 2] = outB.clamp(0, 255);
+      continue;
+    }
+
+    if (isEinkPantone) {
+      final y = _luma(s[i], s[i + 1], s[i + 2]);
+      final r = c[i];
+      final g = c[i + 1];
+      final b = c[i + 2];
+      int outR, outG, outB;
+
+      if (y >= 232) {
+        outR = 255;
+        outG = 255;
+        outB = 255; // 순백 여백 확장
+      } else if (y <= 115) {
+        // 300PPI 흑백 먹선 완전 분리 (컬러 0% 차단으로 글씨/펜선 선명도 극대화)
+        final bw = _lutLineFactor[y] >> 2;
+        outR = bw;
+        outG = bw;
+        outB = bw;
+      } else {
+        // 115 < y < 232: 채도 2.0배 증폭 & 고명도 유지 (전자잉크 물빠짐 보상)
+        final avg = (r + g + b) ~/ 3;
+        final boostR = (avg + ((r - avg) << 1)).clamp(0, 255);
+        final boostG = (avg + ((g - avg) << 1)).clamp(0, 255);
+        final boostB = (avg + ((b - avg) << 1)).clamp(0, 255);
+        final liftY = 160 + ((y * 95) >> 8); // 어두워지지 않게 하한선 고정
+        outR = (boostR * liftY) >> 8;
+        outG = (boostG * liftY) >> 8;
+        outB = (boostB * liftY) >> 8;
+      }
+
+      if (blend) {
+        outR = (s[i] * (1.0 - blendRatio) + outR * blendRatio).round().clamp(0, 255);
+        outG = (s[i + 1] * (1.0 - blendRatio) + outG * blendRatio).round().clamp(0, 255);
+        outB = (s[i + 2] * (1.0 - blendRatio) + outB * blendRatio).round().clamp(0, 255);
+      }
+
+      o[i] = outR.clamp(0, 255);
+      o[i + 1] = outG.clamp(0, 255);
+      o[i + 2] = outB.clamp(0, 255);
+      continue;
+    }
+
     var cr = c[i].toDouble();
     var cg = c[i + 1].toDouble();
     var cb = c[i + 2].toDouble();

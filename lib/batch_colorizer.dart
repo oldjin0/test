@@ -17,6 +17,8 @@ import 'updater.dart' show AppPlatform;
 
 enum BatchPreset {
   natural('내추럴 (2번 표준 · 권장)', 'natural', 1.0, 1.0, 1.0),
+  chromaticNovel('크로매틱 노블 (극장판 애니)', 'chromatic_novel', 1.0, 1.0, 1.0),
+  einkPantone('모안 팬톤 (칼레이도3 전용)', 'eink_pantone', 1.0, 1.0, 1.0),
   vividAnime('비비드 애니 (화사한 원색)', 'vivid_anime', 1.08, 1.35, 1.0),
   warmAmber('클래식 웜 (따뜻한 브라운)', 'warm_amber', 1.05, 1.10, 1.0),
   softPastel('소프트 파스텔 (수채화풍)', 'soft_pastel', 0.90, 0.85, 0.90),

@@ -171,6 +171,8 @@ List<Widget> _colorSection(BuildContext context, LibraryStore s) => [
     '화풍 프리셋 (독립 스타일)',
     const {
       'natural': '내추럴 (2번 표준)',
+      'chromatic_novel': '크로매틱 노블 (극장판)',
+      'eink_pantone': '모안 팬톤 (칼레이도3)',
       'vivid_anime': '비비드 애니',
       'warm_amber': '클래식 웜 (브라운)',
       'soft_pastel': '소프트 파스텔',
