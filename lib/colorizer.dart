@@ -888,6 +888,10 @@ img.Image _composeChroma(
       pr = (pr + 22.0 * normY).clamp(0.0, 255.0);
       pg = (pg + 9.0 * normY).clamp(0.0, 255.0);
       pb = (pb - 18.0 * normY + 6.0 * (1.0 - normY)).clamp(0.0, 255.0);
+    } else if (isSoftPastel) {
+      pr = (gray * 0.2 + pr * 0.8).clamp(0.0, 255.0);
+      pg = (gray * 0.2 + pg * 0.8).clamp(0.0, 255.0);
+      pb = (gray * 0.2 + pb * 0.8).clamp(0.0, 255.0);
     } else if (isMonochromeAccent) {
       final chromaDist = math.sqrt((pr - gray) * (pr - gray) + (pg - gray) * (pg - gray) + (pb - gray) * (pb - gray));
       if (chromaDist < 26.0) {
@@ -904,25 +908,13 @@ img.Image _composeChroma(
       pb = (gray + (pb - gray) * saturation).clamp(0.0, 255.0);
     }
 
-    final luma = y.round().clamp(0, 255);
-    var lf = _lutLineFactor[luma];
+    var r = pr.round().clamp(0, 255);
+    var g = pg.round().clamp(0, 255);
+    var b = pb.round().clamp(0, 255);
 
-    // 2. Style-specific line factor / ink handling
-    if (isSoftPastel) {
-      lf = math.max(120, (lf * 0.92).round());
-    } else if (isVividAnime) {
-      if (luma < 180) lf = (lf * 0.88).round().clamp(0, 1024);
-    } else if (customInk && luma < 160) {
-      final factor = math.pow(luma / 160.0, inkContrast - 1.0);
-      lf = (lf * factor).round().clamp(0, 1024);
-    }
-
-    var r = ((pr * lf + 512) / 1024).round().clamp(0, 255);
-    var g = ((pg * lf + 512) / 1024).round().clamp(0, 255);
-    var b = ((pb * lf + 512) / 1024).round().clamp(0, 255);
-
-    // 3. Style-specific paper / background tone
+    // 2. Retro newsprint vintage warm paper tone
     if (isRetroPrint) {
+      final luma = y.round().clamp(0, 255);
       if (luma > 190) {
         final weight = ((luma - 190) / 65.0).clamp(0.0, 1.0);
         r = (r * (1.0 - weight * 0.03)).round().clamp(0, 255);
@@ -1061,6 +1053,10 @@ img.Image _composeRgbMultiply(
       cr = (cr + 22.0 * normY).clamp(0.0, 255.0);
       cg = (cg + 9.0 * normY).clamp(0.0, 255.0);
       cb = (cb - 18.0 * normY + 6.0 * (1.0 - normY)).clamp(0.0, 255.0);
+    } else if (isSoftPastel) {
+      cr = (gray * 0.2 + cr * 0.8).clamp(0.0, 255.0);
+      cg = (gray * 0.2 + cg * 0.8).clamp(0.0, 255.0);
+      cb = (gray * 0.2 + cb * 0.8).clamp(0.0, 255.0);
     } else if (isMonochromeAccent) {
       // Accent mode: keep background and muted areas as pure monochrome ink,
       // only let distinct saturated colors pop through

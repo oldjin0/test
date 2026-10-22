@@ -36,7 +36,15 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           head -n 40 analyze_log.txt >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-      - run: flutter test
+      - name: Unit tests
+        run: |
+          flutter test --reporter expanded 2>&1 | tee test_log.txt || {
+            echo "## Unit Tests Failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "(FAILED|Expected:|Actual:|Which:)" test_log.txt -A 2 -B 1 | head -n 100 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
