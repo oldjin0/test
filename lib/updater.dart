@@ -116,18 +116,6 @@ class AppPlatform {
     }
   }
 
-  /// Whether this app was launched from the "오토채색기" standalone launcher icon on Android.
-  static Future<bool> isAutoColorizerLauncher() async {
-    if (isPc) return false;
-    try {
-      return await _channel.invokeMethod<bool>('isAutoColorizer') ?? false;
-    } on MissingPluginException {
-      return false;
-    } catch (_) {
-      return false;
-    }
-  }
-
   /// Quits the app for good (background colorizing stops with it).
   static Future<void> exitApp() async {
     if (isPc) exit(0);

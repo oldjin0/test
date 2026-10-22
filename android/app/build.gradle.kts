@@ -37,6 +37,8 @@ android {
         if (!appIdSuffix.isNullOrEmpty()) {
             applicationIdSuffix = appIdSuffix
         }
+        val appLabel = (project.findProperty("appName") as String?) ?: "채색 뷰어"
+        manifestPlaceholders["appLabel"] = appLabel
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

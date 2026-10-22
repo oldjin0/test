@@ -14,7 +14,6 @@ import 'onnx_engine.dart';
 import 'pc_platform.dart';
 import 'pc_window.dart';
 import 'text_book.dart' show isTextFile;
-import 'auto_colorizer_page.dart';
 import 'home_page.dart';
 import 'library_store.dart';
 import 'updater.dart' show AppPlatform;
@@ -24,47 +23,21 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await LibraryStore.load();
 
-  // Check if running as standalone Auto Colorizer
-  final bool isAutoColorizer;
   if (isPc) {
-    final exeName = p.basenameWithoutExtension(Platform.resolvedExecutable).toLowerCase();
-    final hasFlag = args.any((a) => a == '--auto-colorizer' || a == '-c');
-    isAutoColorizer = exeName.contains('오토채색') ||
-        exeName.contains('autocolor') ||
-        exeName.contains('auto_color') ||
-        hasFlag;
-  } else {
-    final defaultRoute = WidgetsBinding.instance.platformDispatcher.defaultRouteName;
-    final isLauncher = await AppPlatform.isAutoColorizerLauncher();
-    isAutoColorizer = isLauncher || defaultRoute == '/auto_colorizer';
-  }
-
-  if (isPc) {
-    await pcWindowInit(title: isAutoColorizer ? '오토채색기' : '채색 뷰어');
+    await pcWindowInit(title: '채색 뷰어');
     unawaited(pruneExtractedArchives());
   }
   final colorizer = startColorizer(store);
-  if (!isAutoColorizer) {
-    unawaited(colorizer.then((s) => prepareNextPages(store, s)));
-  }
+  unawaited(colorizer.then((s) => prepareNextPages(store, s)));
   unawaited(colorizer.then(keepAliveWhileColoring));
 
-  if (isAutoColorizer) {
-    runApp(
-      AutoColorizerStandaloneApp(
-        store: store,
-        colorizer: colorizer,
-      ),
-    );
-  } else {
-    runApp(
-      MangaViewerApp(
-        store: store,
-        colorizer: colorizer,
-        openOnStart: isPc ? bookFromArguments(args) : null,
-      ),
-    );
-  }
+  runApp(
+    MangaViewerApp(
+      store: store,
+      colorizer: colorizer,
+      openOnStart: isPc ? bookFromArguments(args) : null,
+    ),
+  );
 }
 
 /// Keeps the app alive (screen off, other apps in front) while background
@@ -185,33 +158,6 @@ class MangaViewerApp extends StatelessWidget {
         title: '채색 뷰어',
         theme: store.eink ? einkTheme : ThemeData.dark(useMaterial3: true),
         home: HomePage(store: store, colorizer: colorizer, openOnStart: openOnStart),
-      ),
-    );
-  }
-}
-
-class AutoColorizerStandaloneApp extends StatelessWidget {
-  const AutoColorizerStandaloneApp({
-    super.key,
-    required this.store,
-    required this.colorizer,
-  });
-
-  final LibraryStore store;
-  final Future<ColorizeService> colorizer;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: store,
-      builder: (context, _) => MaterialApp(
-        title: '오토채색기',
-        theme: store.eink ? einkTheme : ThemeData.dark(useMaterial3: true),
-        home: AutoColorizerPage(
-          store: store,
-          colorizer: colorizer,
-          isStandalone: true,
-        ),
       ),
     );
   }

@@ -95,7 +95,7 @@ jobs:
           flutter build apk --release $VER --target-platform android-arm64
           cp build/app/outputs/flutter-apk/app-release.apk dist/manga-viewer-arm64.apk
           # Standalone Auto Colorizer APK (arm64)
-          flutter build apk --release $VER --target-platform android-arm64 -t lib/main_auto_colorizer.dart -PappIdSuffix=.autocolorizer
+          flutter build apk --release $VER --target-platform android-arm64 -t lib/main_auto_colorizer.dart -PappIdSuffix=.autocolorizer -PappName="오토채색기"
           cp build/app/outputs/flutter-apk/app-release.apk dist/auto-colorizer-arm64.apk
           ls -l dist
       - name: Verify the APKs (persistent signing key, version code)

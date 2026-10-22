@@ -18,7 +18,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <application
-        android:label="채색 뷰어"
+        android:label="${appLabel}"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">
@@ -44,17 +44,6 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
-        <activity-alias
-            android:name=".AutoColorizerLauncher"
-            android:targetActivity=".MainActivity"
-            android:label="오토채색기"
-            android:icon="@mipmap/ic_launcher"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-        </activity-alias>
         <service
             android:name=".ColorizeKeepAlive"
             android:exported="false"
