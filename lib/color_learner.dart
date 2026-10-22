@@ -12,7 +12,9 @@ import 'book_colors.dart';
 import 'book_palette.dart';
 import 'colorize_service.dart';
 import 'comic_loader.dart';
+export 'comic_loader.dart' show zipEntries, ZipEntry;
 import 'form_colors.dart';
+import 'gemini_service.dart';
 import 'library_store.dart';
 
 /// Learns books' colors from their own color pages (see [BookColorMap]),
@@ -155,6 +157,18 @@ class ColorLearner {
     }
     final pending = store.pendingReferences(path, learned, maxLearned);
     if (pending.isEmpty) {
+      if (store.useGeminiSmart && (store.paletteOf(path)?.isEmpty ?? true)) {
+        try {
+          final b = await open();
+          if (b.length > 0) {
+            final cover = await b.page(0);
+            final smartPal = await GeminiService.instance.extractSmartPalette(cover);
+            if (smartPal != null && smartPal.isNotEmpty) {
+              store.setPalette(path, smartPal);
+            }
+          }
+        } catch (_) {}
+      }
       // nothing to learn: keep the restart, or note that there are no references
       if (learned.length != store.learnedPagesOf(path).length || !store.learnedRecorded(path)) {
         await store.setLearned(path, learned, map, bank: bank);
@@ -170,7 +184,18 @@ class ColorLearner {
       } catch (_) {}
     }
     // the palette of those pages serves until there is a learned map
-    if (map == null) store.setPalette(path, await _palette(real.values.toList()));
+    if (map == null) {
+      if (store.useGeminiSmart && real.values.isNotEmpty) {
+        final smartPal = await GeminiService.instance.extractSmartPalette(real.values.first);
+        if (smartPal != null && smartPal.isNotEmpty) {
+          store.setPalette(path, smartPal);
+        } else {
+          store.setPalette(path, await _palette(real.values.toList()));
+        }
+      } else {
+        store.setPalette(path, await _palette(real.values.toList()));
+      }
+    }
     final service = await colorizer;
     if (!service.modelLoaded) return null;
     final pairs = <(Uint8List, Uint8List)>[];
@@ -305,102 +330,4 @@ List<PageSignature> _signatures(String path, List<String> names, bool isDir) {
   } finally {
     f.closeSync();
   }
-}
-
-/// One entry of a zip's central directory.
-class ZipEntry {
-  ZipEntry(this.method, this.compressed, this.size, this.offset);
-
-  final int method, compressed, size, offset;
-
-  /// About the first [max] bytes of the entry's content (stored or
-  /// deflated), read and unpacked from its start only.
-  Uint8List head(RandomAccessFile f, int max) {
-    f.setPositionSync(offset);
-    final local = f.readSync(30);
-    if (local.length < 30 || _u32(local, 0) != 0x04034b50) return Uint8List(0);
-    f.setPositionSync(offset + 30 + _u16(local, 26) + _u16(local, 28));
-    final raw = f.readSync(math.min(compressed, max));
-    if (method == 0) return raw;
-    if (method != 8) return Uint8List(0);
-    final filter = RawZLibFilter.inflateFilter(raw: true);
-    filter.process(raw, 0, raw.length);
-    final out = BytesBuilder(copy: false);
-    try {
-      for (List<int>? c; (c = filter.processed(flush: false)) != null && out.length < max;) {
-        out.add(c!);
-      }
-    } catch (_) {} // cut off mid-stream: what came out is enough
-    return out.takeBytes();
-  }
-}
-
-int _u16(Uint8List b, int i) => b[i] | (b[i + 1] << 8);
-int _u32(Uint8List b, int i) => _u16(b, i) | (_u16(b, i + 2) << 16);
-int _u64(Uint8List b, int i) => _u32(b, i) + _u32(b, i + 4) * 0x100000000;
-
-/// The entries of the zip open in [f], by name (decoded as the archive
-/// package does, so the names match the book's), from its central
-/// directory alone.
-Map<String, ZipEntry> zipEntries(RandomAccessFile f) {
-  final len = f.lengthSync();
-  final tailLen = math.min(len, 22 + 0xffff + 20);
-  f.setPositionSync(len - tailLen);
-  final tail = f.readSync(tailLen);
-  var eocd = -1;
-  for (var i = tail.length - 22; i >= 0; i--) {
-    if (_u32(tail, i) == 0x06054b50) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) throw const FormatException('not a zip');
-  var count = _u16(tail, eocd + 10);
-  var cdSize = _u32(tail, eocd + 12);
-  var cdOffset = _u32(tail, eocd + 16);
-  if (eocd >= 20 && _u32(tail, eocd - 20) == 0x07064b50) {
-    // zip64: the real numbers are in the zip64 end record
-    f.setPositionSync(_u64(tail, eocd - 20 + 8));
-    final z = f.readSync(56);
-    if (z.length == 56 && _u32(z, 0) == 0x06064b50) {
-      count = _u64(z, 32);
-      cdSize = _u64(z, 40);
-      cdOffset = _u64(z, 48);
-    }
-  }
-  f.setPositionSync(cdOffset);
-  final cd = f.readSync(cdSize);
-  final entries = <String, ZipEntry>{};
-  var i = 0;
-  for (var k = 0; k < count && i + 46 <= cd.length; k++) {
-    if (_u32(cd, i) != 0x02014b50) break;
-    final method = _u16(cd, i + 10);
-    var compressed = _u32(cd, i + 20);
-    var size = _u32(cd, i + 24);
-    final nameLen = _u16(cd, i + 28), extraLen = _u16(cd, i + 30), commentLen = _u16(cd, i + 32);
-    var offset = _u32(cd, i + 42);
-    final nameBytes = cd.sublist(i + 46, i + 46 + nameLen);
-    // zip64 sizes and offset, for the fields that are full
-    var x = i + 46 + nameLen;
-    final xEnd = x + extraLen;
-    while (x + 4 <= xEnd) {
-      final id = _u16(cd, x), sz = _u16(cd, x + 2);
-      if (id == 1) {
-        var y = x + 4;
-        if (size == 0xffffffff) (size, y) = (_u64(cd, y), y + 8);
-        if (compressed == 0xffffffff) (compressed, y) = (_u64(cd, y), y + 8);
-        if (offset == 0xffffffff) offset = _u64(cd, y);
-      }
-      x += 4 + sz;
-    }
-    String name;
-    try {
-      name = const Utf8Decoder().convert(nameBytes);
-    } catch (_) {
-      name = String.fromCharCodes(nameBytes);
-    }
-    entries[name] = ZipEntry(method, compressed, size, offset);
-    i = xEnd + commentLen;
-  }
-  return entries;
 }

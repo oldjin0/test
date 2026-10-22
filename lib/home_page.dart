@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
 import 'colorize_service.dart';
+import 'gemini_settings_dialog.dart';
 import 'library_store.dart';
 import 'reader_settings.dart';
 import 'storage.dart';
@@ -111,6 +112,92 @@ class _HomePageState extends State<HomePage> {
 
   LibraryStore get _store => widget.store;
 
+  Future<void> _startWholeBookColoring(String path, String title) async {
+    final service = await widget.colorizer
+        .timeout(const Duration(seconds: 2), onTimeout: () => throw TimeoutException('colorizer'))
+        .then<ColorizeService?>((s) => s, onError: (Object _) => null);
+    if (!mounted) return;
+    if (service == null || !service.modelLoaded) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('AI 채색 모델이 아직 로드되지 않았습니다.')));
+      return;
+    }
+    if (!_store.colorize) {
+      _store.setColorize(true);
+    }
+    final start = _store.progressOf(path)?.page ?? 0;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('[$title] 전체 채색을 시작합니다 (${start + 1}쪽부터 우선 진행)'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+    await service.startWholeBook(path: path, title: title, startPage: start, store: _store);
+  }
+
+  Future<void> _showBookMenu(String path, String title) async {
+    if (isTextFile(path)) return;
+    final service = await widget.colorizer
+        .timeout(const Duration(seconds: 2), onTimeout: () => throw TimeoutException('colorizer'))
+        .then<ColorizeService?>((s) => s, onError: (Object _) => null);
+    if (!mounted) return;
+    final progress = service?.wholeBookProgressNotifier.value;
+    final isRunningHere = progress != null && progress.path == path && !progress.isFinished;
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                title,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (isRunningHere)
+              ListTile(
+                leading: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
+                title: Text('채색 중지 (${progress.done}/${progress.total}쪽 · ${progress.percent}%)'),
+                subtitle: const Text('현재 진행 중인 백그라운드 채색을 멈춥니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  service?.cancelWholeBook();
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('백그라운드 채색을 중지했습니다.')));
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.download_for_offline_outlined),
+                title: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
+                subtitle: const Text('읽고 있는 위치부터 전체를 미리 채색해 저장합니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _startWholeBookColoring(path, title);
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.auto_stories_outlined),
+              title: const Text('만화 열기'),
+              onTap: () {
+                Navigator.pop(context);
+                _open(path);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _open(String path, {int? page}) =>
       openComic(context, _store, widget.colorizer, path, page: page);
 
@@ -195,12 +282,13 @@ class _HomePageState extends State<HomePage> {
       listenable: _store,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
-          title: const Text('Manga Viewer'),
+          title: const Text('채색 뷰어'),
           actions: [
             IconButton(tooltip: '파일 열기', icon: const Icon(Icons.file_open), onPressed: _import),
             PopupMenuButton<String>(
               tooltip: '메뉴',
               onSelected: (v) => switch (v) {
+                'gemini_api' => showGeminiSettingsDialog(context, _store),
                 'backup' => _exportBackup(),
                 'restore' => _importBackup(),
                 'settings' => showReaderSettings(context, _store, comic: true, text: true),
@@ -208,6 +296,15 @@ class _HomePageState extends State<HomePage> {
                 _ => checkForUpdate(context),
               },
               itemBuilder: (context) => [
+                const PopupMenuItem(
+                  value: 'gemini_api',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.auto_awesome, color: Colors.amber),
+                    title: Text('Google Gemini AI 설정'),
+                    subtitle: Text('무료 다중 API 키 관리'),
+                  ),
+                ),
                 const PopupMenuItem(
                   value: 'settings',
                   child: ListTile(
@@ -271,13 +368,62 @@ class _HomePageState extends State<HomePage> {
                 label: const Text('폴더 추가'),
               )
             : null,
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _tab,
-          onDestinationSelected: (i) => setState(() => _tab = i),
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.history), label: '최근'),
-            NavigationDestination(icon: Icon(Icons.folder_outlined), label: '폴더'),
-            NavigationDestination(icon: Icon(Icons.bookmarks_outlined), label: '북마크'),
+        bottomNavigationBar: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            FutureBuilder<ColorizeService>(
+              future: widget.colorizer,
+              builder: (context, snap) {
+                final service = snap.data;
+                if (service == null) return const SizedBox.shrink();
+                return ValueListenableBuilder<BookColorizeProgress?>(
+                  valueListenable: service.wholeBookProgressNotifier,
+                  builder: (context, p, _) {
+                    if (p == null || p.isFinished) return const SizedBox.shrink();
+                    return Container(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.palette, size: 20, color: Colors.blueAccent),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  '${p.title} · ${p.done}/${p.total}쪽 (${p.percent}%)',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                LinearProgressIndicator(value: p.fraction),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            tooltip: '채색 중지',
+                            onPressed: () => service.cancelWholeBook(),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+            NavigationBar(
+              selectedIndex: _tab,
+              onDestinationSelected: (i) => setState(() => _tab = i),
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.history), label: '최근'),
+                NavigationDestination(icon: Icon(Icons.folder_outlined), label: '폴더'),
+                NavigationDestination(icon: Icon(Icons.bookmarks_outlined), label: '북마크'),
+              ],
+            ),
           ],
         ),
       ),
@@ -328,6 +474,7 @@ class _HomePageState extends State<HomePage> {
                   ],
                 ),
                 onTap: () => _open(r.path),
+                onLongPress: () => _showBookMenu(r.path, r.title),
                 trailing: IconButton(
                   tooltip: '기록 삭제',
                   icon: const Icon(Icons.close),
@@ -506,6 +653,7 @@ class _FolderPageState extends State<FolderPage> {
                     title: Text('이 폴더의 이미지 ${l.images}장 보기'),
                     subtitle: _progressText(widget.path),
                     onTap: () => openComic(context, widget.store, widget.colorizer, widget.path),
+                    onLongPress: () => _showBookMenu(widget.path, p.basename(widget.path)),
                   ),
                 for (final d in l.dirs.where((d) => _matches(d.path)))
                   ListTile(
@@ -559,6 +707,93 @@ class _FolderPageState extends State<FolderPage> {
             )
           : null,
       onTap: () => openComic(context, widget.store, widget.colorizer, path),
+      onLongPress: () => _showBookMenu(path, comicTitle(path)),
+    );
+  }
+
+  Future<void> _startWholeBookColoring(String path, String title) async {
+    final service = await widget.colorizer
+        .timeout(const Duration(seconds: 2), onTimeout: () => throw TimeoutException('colorizer'))
+        .then<ColorizeService?>((s) => s, onError: (Object _) => null);
+    if (!mounted) return;
+    if (service == null || !service.modelLoaded) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('AI 채색 모델이 아직 로드되지 않았습니다.')));
+      return;
+    }
+    if (!widget.store.colorize) {
+      widget.store.setColorize(true);
+    }
+    final start = widget.store.progressOf(path)?.page ?? 0;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('[$title] 전체 채색을 시작합니다 (${start + 1}쪽부터 우선 진행)'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+    await service.startWholeBook(path: path, title: title, startPage: start, store: widget.store);
+  }
+
+  Future<void> _showBookMenu(String path, String title) async {
+    if (isTextFile(path)) return;
+    final service = await widget.colorizer
+        .timeout(const Duration(seconds: 2), onTimeout: () => throw TimeoutException('colorizer'))
+        .then<ColorizeService?>((s) => s, onError: (Object _) => null);
+    if (!mounted) return;
+    final progress = service?.wholeBookProgressNotifier.value;
+    final isRunningHere = progress != null && progress.path == path && !progress.isFinished;
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                title,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (isRunningHere)
+              ListTile(
+                leading: const Icon(Icons.cancel_outlined, color: Colors.redAccent),
+                title: Text('채색 중지 (${progress.done}/${progress.total}쪽 · ${progress.percent}%)'),
+                subtitle: const Text('현재 진행 중인 백그라운드 채색을 멈춥니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  service?.cancelWholeBook();
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('백그라운드 채색을 중지했습니다.')));
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.download_for_offline_outlined),
+                title: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
+                subtitle: const Text('읽고 있는 위치부터 전체를 미리 채색해 저장합니다.'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _startWholeBookColoring(path, title);
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.auto_stories_outlined),
+              title: const Text('만화 열기'),
+              onTap: () {
+                Navigator.pop(context);
+                openComic(context, widget.store, widget.colorizer, path);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
     );
   }
 }

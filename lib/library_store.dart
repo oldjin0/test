@@ -12,6 +12,7 @@ import 'book_colors.dart';
 import 'form_colors.dart';
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
+import 'gemini_service.dart';
 
 class ReadProgress {
   ReadProgress(this.path, this.title, this.page, this.total, this.updatedAt);
@@ -192,6 +193,18 @@ class LibraryStore extends ChangeNotifier {
   String textTheme = 'light';
   bool textSerif = false;
 
+  /// Registered Google Gemini API keys for multi-key pool rotation.
+  final List<String> geminiKeys = [];
+
+  /// Use Gemini API to intelligently extract palette or character hints.
+  bool useGeminiSmart = true;
+
+  /// Gemini smart mode: 'palette' (cover/book smart palette) or 'hints' (scene region hints).
+  String geminiMode = 'palette';
+
+  /// Active coloring preset: 'natural', 'soft_pastel', 'vivid_anime', 'cinematic_warm', 'retro_print', 'monochrome_accent'
+  String colorPreset = 'natural';
+
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());
     s._read();
@@ -206,6 +219,12 @@ class LibraryStore extends ChangeNotifier {
 
   void _read() {
     final p = _prefs;
+    geminiKeys.addAll(p.getStringList('geminiKeys') ?? const []);
+    useGeminiSmart = p.getBool('useGeminiSmart') ?? useGeminiSmart;
+    geminiMode = p.getString('geminiMode') ?? geminiMode;
+    colorPreset = p.getString('colorPreset') ?? colorPreset;
+    if (colorPreset == 'cinematic_warm') colorPreset = 'warm_amber';
+    GeminiService.instance.setKeys(geminiKeys);
     folders.addAll(p.getStringList('folders') ?? const []);
     for (final e in _decodeList(p.getString('progress'))) {
       final r = ReadProgress.fromJson(e);
@@ -373,6 +392,10 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setDouble('textMargin', textMargin);
     _prefs.setString('textTheme', textTheme);
     _prefs.setBool('textSerif', textSerif);
+    _prefs.setStringList('geminiKeys', geminiKeys);
+    _prefs.setBool('useGeminiSmart', useGeminiSmart);
+    _prefs.setString('geminiMode', geminiMode);
+    _prefs.setString('colorPreset', colorPreset);
     _prefs.setString('hints', jsonEncode(_hintsJson()));
     _prefs.setString('palettes', jsonEncode(_palettes));
     _prefs.setBool('bookPalette', bookPalette);
@@ -463,6 +486,11 @@ class LibraryStore extends ChangeNotifier {
     _changed();
   }
 
+  void setAutoCrop(bool v) {
+    autoCrop = v;
+    _changed();
+  }
+
   void setColorStrength(double v) {
     colorStrength = v.clamp(0.0, 1.0);
     _changed();
@@ -487,6 +515,29 @@ class LibraryStore extends ChangeNotifier {
 
   void setTurnStyle(String v) {
     turnStyle = v;
+    _changed();
+  }
+
+  void setGeminiKeys(List<String> keys) {
+    geminiKeys
+      ..clear()
+      ..addAll(keys);
+    GeminiService.instance.setKeys(geminiKeys);
+    _changed();
+  }
+
+  void setUseGeminiSmart(bool v) {
+    useGeminiSmart = v;
+    _changed();
+  }
+
+  void setGeminiMode(String m) {
+    geminiMode = m;
+    _changed();
+  }
+
+  void setColorPreset(String p) {
+    colorPreset = p;
     _changed();
   }
 
@@ -552,10 +603,11 @@ class LibraryStore extends ChangeNotifier {
     // what was learned so far serves while more is being learned; it changes
     // in steps, not with every page, since every change colors the pages again
     final map = _published[path], bank = _publishedBanks[path];
-    if (map != null || (useFormBank && bank != null)) {
-      return BookLook(map: map, bank: useFormBank ? bank : null);
-    }
-    return BookLook(palette: _palettes[path] ?? const []);
+    return BookLook(
+      palette: _palettes[path] ?? const [],
+      map: map,
+      bank: useFormBank ? bank : null,
+    );
   }
 
   /// Tells listeners that a look was loaded (cache keys may change).

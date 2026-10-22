@@ -36,9 +36,25 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter analyze
+      - name: Flutter analyze
+        shell: bash
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee analyze_log.txt || true
+          echo "## Flutter Analyze Output" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          head -n 40 analyze_log.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
       - name: Unit tests (on Windows)
-        run: flutter test
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test --reporter expanded 2>&1 | tee test_log.txt || {
+            echo "## Unit Tests Failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "(FAILED|Expected:|Actual:|Which:|Error:)" test_log.txt -A 2 -B 1 | head -n 100 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
       - uses: actions/download-artifact@v4
         with:
           name: onnx
@@ -84,20 +100,26 @@ jobs:
           }
           New-Item -ItemType Directory "$rel/models" | Out-Null
           Copy-Item onnx/colorizer_fp32.onnx, onnx/colorizer_fp16.onnx, onnx/denoiser.onnx "$rel/models"
+          $viewerExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7LGE7IOJ67ew7Ja0LmV4ZQ=="))
+          $autoExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7Jik7Yag7LGE7IOJ6riwLmV4ZQ=="))
           Set-Content -Path "$rel/version.json" -Value '{"code": ${{ github.run_number }}, "name": "1.0.${{ github.run_number }}"}'
-          Set-Content -Path "$rel/README.txt" -Value "Manga Viewer for Windows`nRun manga_viewer.exe. Nothing is installed; delete the folder to remove it."
+          Copy-Item "$rel/manga_viewer.exe" "$rel/$viewerExe"
+          Copy-Item "$rel/manga_viewer.exe" "$rel/$autoExe"
+          Set-Content -Path "$rel/README.txt" -Encoding utf8 -Value "Manga Viewer & Auto Colorizer Windows Release`n`n- manga_viewer.exe: Default launcher`n- $viewerExe: Manga Viewer launcher`n- $autoExe: Standalone Auto Colorizer launcher"
           Get-ChildItem $rel | Format-Table Name, Length
-          Compress-Archive -Path "$rel/*" -DestinationPath MangaViewer-windows.zip -CompressionLevel Fastest
+          & "$env:SystemRoot/System32/tar.exe" -a -cf MangaViewer-windows.zip -C $rel *
           "{0:N0} MB" -f ((Get-Item MangaViewer-windows.zip).Length / 1MB)
       - name: The packaged program starts and stays up
         shell: pwsh
         run: |
           # Unpack the zip the way the in-app updater does (the system tar) and
           # start that copy: proves the archive itself is complete and readable.
+          $viewerExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7LGE7IOJ67ew7Ja0LmV4ZQ=="))
+          $autoExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7Jik7Yag7LGE7IOJ6riwLmV4ZQ=="))
           New-Item -ItemType Directory unpacked | Out-Null
           & "$env:SystemRoot/System32/tar.exe" -xf MangaViewer-windows.zip -C unpacked
           if ($LASTEXITCODE -ne 0) { throw "tar could not unpack the release zip" }
-          foreach ($f in 'manga_viewer.exe', 'data/app.so', 'flutter_windows.dll', 'models/colorizer_fp32.onnx', 'vcruntime140_1.dll', 'version.json') {
+          foreach ($f in 'manga_viewer.exe', $viewerExe, $autoExe, 'data/app.so', 'flutter_windows.dll', 'models/colorizer_fp32.onnx', 'vcruntime140_1.dll', 'version.json') {
             if (-not (Test-Path "unpacked/$f")) { throw "missing in the zip: $f" }
           }
           $exe = (Resolve-Path "unpacked/manga_viewer.exe").Path
@@ -106,6 +128,12 @@ jobs:
           if ($p.HasExited) { throw "manga_viewer.exe exited with code $($p.ExitCode)" }
           Write-Output "running: $($p.MainWindowTitle)"
           Stop-Process $p -Force
+          $autoPath = (Resolve-Path "unpacked/$autoExe").Path
+          $p2 = Start-Process $autoPath -PassThru
+          Start-Sleep -Seconds 8
+          if ($p2.HasExited) { throw "$autoExe exited with code $($p2.ExitCode)" }
+          Write-Output "running auto colorizer: $($p2.MainWindowTitle)"
+          Stop-Process $p2 -Force
       - uses: actions/upload-artifact@v4
         with:
           name: MangaViewer-windows

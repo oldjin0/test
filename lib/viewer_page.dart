@@ -57,15 +57,17 @@ Future<void> prepareBook(
     final book = await ComicBook.open(path, window: 4);
     final end = math.min(book.length, first + count);
     for (var i = first; i < end; i++) {
+      final key = ColorizeService.keyFor(
+        path,
+        i,
+        hints: store.hintsOf(path, i),
+        denoise: store.denoise,
+        look: store.lookOf(path),
+      );
+      if (service.isCached(key)) continue;
       service
           .colorizeInBackground(
-            ColorizeService.keyFor(
-              path,
-              i,
-              hints: store.hintsOf(path, i),
-              denoise: store.denoise,
-              look: store.lookOf(path),
-            ),
+            key,
             () => book.page(i),
             hints: store.hintsOf(path, i),
             denoise: store.denoise,
@@ -237,6 +239,7 @@ class _ViewerPageState extends State<ViewerPage> {
   late bool _autoCrop = _store.autoCrop;
   late int _prefetch = _store.prefetchPages;
   late String _orientation = _store.orientation;
+  late String _colorPreset = _store.colorPreset;
 
   void _onStore() {
     if (!mounted) return;
@@ -259,6 +262,10 @@ class _ViewerPageState extends State<ViewerPage> {
       if (_autoCrop != _store.autoCrop) {
         _autoCrop = _store.autoCrop;
         pages.margins = _autoCrop ? findMargins : null;
+        pages.refresh();
+      }
+      if (_colorPreset != _store.colorPreset) {
+        _colorPreset = _store.colorPreset;
         pages.refresh();
       }
       if (_denoise != _store.denoise ||
@@ -478,6 +485,11 @@ class _ViewerPageState extends State<ViewerPage> {
 
   void _toggleColorize() => _store.setColorize(!_store.colorize);
 
+  void _toggleAutoCrop() {
+    _store.setAutoCrop(!_store.autoCrop);
+    _say(_store.autoCrop ? '여백 자동 자르기 ON' : '여백 자동 자르기 OFF');
+  }
+
   /// Esc: leaves full screen first, then the book.
   Future<void> _onEscape() async {
     if (await pcIsFullscreen()) {
@@ -546,35 +558,213 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
+  void _showPageSearch() {
+    final book = _book;
+    if (book == null || book.length <= 1) return;
+    final total = book.length;
+    final controller = TextEditingController(text: '${_page + 1}');
+    controller.selection = TextSelection(baseOffset: 0, extentOffset: controller.text.length);
+
+    void go(String raw) {
+      final p = int.tryParse(raw.trim());
+      if (p != null && p >= 1 && p <= total) {
+        Navigator.pop(context);
+        _jumpTo(p - 1);
+      }
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [Icon(Icons.search, size: 24), SizedBox(width: 8), Text('페이지 검색 / 이동')],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('현재 페이지: ${_page + 1} / $total 쪽', style: const TextStyle(color: Colors.grey)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              autofocus: true,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              decoration: InputDecoration(
+                labelText: '이동할 페이지 번호 (1 ~ $total)',
+                suffixText: '/ $total',
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+              onSubmitted: go,
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                ActionChip(
+                  label: const Text('처음 (1)'),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _jumpTo(0);
+                  },
+                ),
+                if (_page >= 10)
+                  ActionChip(
+                    label: const Text('-10쪽'),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _jumpTo(math.max(0, _page - 10));
+                    },
+                  ),
+                if (_page + 10 < total)
+                  ActionChip(
+                    label: const Text('+10쪽'),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _jumpTo(math.min(total - 1, _page + 10));
+                    },
+                  ),
+                ActionChip(
+                  label: Text('마지막 ($total)'),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _jumpTo(total - 1);
+                  },
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
+          FilledButton(onPressed: () => go(controller.text), child: const Text('이동')),
+        ],
+      ),
+    );
+  }
+
+  void _showColorPresets() {
+    final presets = [
+      (
+        id: 'natural',
+        name: '내추럴 (2번 표준 권장)',
+        desc: 'AI 원본의 자연스러운 피부톤과 배경의 기본 균형 (먹선 보존)',
+        icon: Icons.auto_awesome,
+      ),
+      (
+        id: 'vivid_anime',
+        name: '비비드 애니 (화사한 원색)',
+        desc: '애니메이션 원화처럼 생생하고 화사한 원색 대비 + 딥블랙 먹선',
+        icon: Icons.palette,
+      ),
+      (
+        id: 'warm_amber',
+        name: '클래식 웜 (따뜻한 브라운)',
+        desc: '과거 인기 버전의 따뜻한 브라운·골드 색조를 자연스럽게 정돈한 감성 톤',
+        icon: Icons.wb_incandescent_outlined,
+      ),
+      (
+        id: 'soft_pastel',
+        name: '소프트 파스텔 (수채화 감성)',
+        desc: '은은하고 부드러운 수채화톤 + 연필/목탄 느낌의 부드러운 선화',
+        icon: Icons.wb_sunny_outlined,
+      ),
+      (
+        id: 'retro_print',
+        name: '레트로 코믹스 (빈티지 인쇄)',
+        desc: '빈티지 미색 종이와 7080 클래식 출판 만화 잉크 감성',
+        icon: Icons.history_edu,
+      ),
+      (
+        id: 'monochrome_accent',
+        name: '모노크롬 포인트 (수묵 포인트)',
+        desc: '배경은 흑백 잉크톤으로 정돈하고 피부·의상 주요 색상만 강조',
+        icon: Icons.contrast,
+      ),
+    ];
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        final curPreset = _store.colorPreset;
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Text(
+                    '독립 화풍 프리셋 (6종)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+                ),
+                for (final p in presets)
+                  Builder(
+                    builder: (context) {
+                      final isSelected = curPreset == p.id;
+                      return ListTile(
+                        leading: Icon(
+                          p.icon,
+                          color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                        ),
+                        title: Text(
+                          p.name,
+                          style: TextStyle(
+                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                          ),
+                        ),
+                        subtitle: Text(p.desc),
+                        trailing: isSelected
+                            ? Icon(Icons.check, color: Theme.of(context).colorScheme.primary)
+                            : null,
+                        onTap: () {
+                          Navigator.pop(context);
+                          _store.setColorPreset(p.id);
+                          _pages?.refresh();
+                          if (mounted) setState(() {});
+                          _say('${p.name} 스타일이 적용되었습니다.');
+                        },
+                      );
+                    },
+                  ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   String _key(int i) => ColorizeService.keyFor(
     widget.path,
     i,
     hints: _store.hintsOf(widget.path, i),
     denoise: _store.denoise,
     look: _store.lookOf(widget.path),
+    style: _store.colorPreset,
   );
 
-  /// Queues every page for colorizing in the background, from the current
-  /// page on and then the pages before it. Reading goes on: the pages the
-  /// reader looks at are always done first, and the finished ones are
-  /// instant when reached.
-  void _colorizeWholeBook() {
-    final book = _book, service = _service;
-    if (book == null || service == null) return;
-    final n = book.length;
-    for (var k = 0; k < n; k++) {
-      final i = (_page + k) % n;
-      service
-          .colorizeInBackground(
-            _key(i),
-            () => book.page(i),
-            hints: _store.hintsOf(widget.path, i),
-            denoise: _store.denoise,
-            look: _store.lookOf(widget.path),
-          )
-          .then((_) {}, onError: (Object _) {});
-    }
-    _say('전체 $n쪽을 백그라운드에서 채색합니다. 읽는 동안 계속 진행됩니다.');
+  /// Pre-colorizes the entire book in the background, prioritizing the
+  /// page currently being viewed onwards, and skipping already cached pages.
+  void _startWholeBookColoring() {
+    final service = _service;
+    if (service == null || !service.modelLoaded) return;
+    if (!_store.colorize) _store.setColorize(true);
+    service.startWholeBook(path: widget.path, title: _title, startPage: _page, store: _store);
+    _say('전체 채색을 시작합니다. 현재 보고 계신 페이지(${_page + 1}쪽)부터 순서대로 진행됩니다.');
+  }
+
+  void _cancelWholeBookColoring() {
+    _service?.cancelWholeBook();
+    _say('백그라운드 채색을 중지했습니다.');
   }
 
   /// Opens the color-hint editor for the visible page (the first of a spread).
@@ -644,10 +834,25 @@ class _ViewerPageState extends State<ViewerPage> {
                 children: [
                   Text(_title, overflow: TextOverflow.ellipsis),
                   if (total > 0)
-                    Text('$shown / $total', style: Theme.of(context).textTheme.bodySmall),
+                    GestureDetector(
+                      onTap: _showPageSearch,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('$shown / $total', style: Theme.of(context).textTheme.bodySmall),
+                          const SizedBox(width: 2),
+                          const Icon(Icons.arrow_drop_down, size: 16, color: Colors.grey),
+                        ],
+                      ),
+                    ),
                 ],
               ),
               actions: [
+                IconButton(
+                  tooltip: '페이지 이동 / 검색 (G)',
+                  icon: const Icon(Icons.search),
+                  onPressed: total == 0 ? null : _showPageSearch,
+                ),
                 IconButton(
                   tooltip: '북마크',
                   icon: Icon(
@@ -672,18 +877,21 @@ class _ViewerPageState extends State<ViewerPage> {
                   onSelected: (v) => switch (v) {
                     'rtl' => _store.setRtl(!_store.rtl),
                     'dual' => _toggleDual(),
+                    'autoCrop' => _toggleAutoCrop(),
                     'display' => showReaderSettings(
                       context,
                       _store,
                       comic: true,
                       engine: _service?.backend,
                     ),
+                    'presets' => _showColorPresets(),
                     'vertical' => _store.setVertical(!_store.vertical),
                     'savePage' => _savePage(),
                     'hints' => _editHints(),
                     'reference' => _toggleReference(),
                     'export' => _exportComic(),
-                    'colorizeAll' => _colorizeWholeBook(),
+                    'colorizeAll' => _startWholeBookColoring(),
+                    'cancelColorizeAll' => _cancelWholeBookColoring(),
                     _ => null,
                   },
                   itemBuilder: (context) => [
@@ -702,7 +910,17 @@ class _ViewerPageState extends State<ViewerPage> {
                       checked: _store.vertical,
                       child: const Text('세로 스크롤 (웹툰)'),
                     ),
+                    CheckedPopupMenuItem(
+                      value: 'autoCrop',
+                      checked: _store.autoCrop,
+                      child: const Text('여백 자동 자르기 (스마트 크롭)'),
+                    ),
                     const PopupMenuItem(value: 'display', child: Text('읽기 설정')),
+                    PopupMenuItem(
+                      value: 'presets',
+                      enabled: _store.colorize,
+                      child: const Text('채색 스타일 프리셋…'),
+                    ),
                     const PopupMenuDivider(),
                     PopupMenuItem(
                       value: 'reference',
@@ -719,11 +937,22 @@ class _ViewerPageState extends State<ViewerPage> {
                       child: const Text('이 페이지 색 지정 (힌트)'),
                     ),
                     const PopupMenuDivider(),
-                    PopupMenuItem(
-                      value: 'colorizeAll',
-                      enabled: (_service?.modelLoaded ?? false) && _store.colorize,
-                      child: const Text('이 책 전체를 미리 채색 (백그라운드)'),
-                    ),
+                    if (_service?.wholeBookProgressNotifier.value != null &&
+                        _service!.wholeBookProgressNotifier.value!.path == widget.path &&
+                        !_service!.wholeBookProgressNotifier.value!.isFinished)
+                      PopupMenuItem(
+                        value: 'cancelColorizeAll',
+                        child: Text(
+                          '전체 채색 중지 (${_service!.wholeBookProgressNotifier.value!.done}/${_service!.wholeBookProgressNotifier.value!.total}쪽 · ${_service!.wholeBookProgressNotifier.value!.percent}%)',
+                          style: const TextStyle(color: Colors.redAccent),
+                        ),
+                      )
+                    else
+                      PopupMenuItem(
+                        value: 'colorizeAll',
+                        enabled: (_service?.modelLoaded ?? false) && _store.colorize,
+                        child: const Text('이 책 전체 백그라운드 채색 (오프라인 캐싱)'),
+                      ),
                     const PopupMenuItem(value: 'savePage', child: Text('현재 페이지를 갤러리에 저장')),
                     const PopupMenuItem(value: 'export', child: Text('컬러 만화(.cbz)로 저장')),
                   ],
@@ -747,9 +976,70 @@ class _ViewerPageState extends State<ViewerPage> {
           LogicalKeyboardKey.keyB: _toggleBookmark,
           LogicalKeyboardKey.keyC: _toggleColorize,
           LogicalKeyboardKey.keyD: _toggleDual,
+          LogicalKeyboardKey.keyG: _showPageSearch,
+          LogicalKeyboardKey.keyM: _toggleAutoCrop,
+          LogicalKeyboardKey.keyP: _showPageSearch,
           LogicalKeyboardKey.keyR: () => _store.setRtl(!_store.rtl),
         },
-        child: _body(),
+        child: Stack(
+          children: [
+            _body(),
+            if (_service != null)
+              Positioned(
+                top: _showUi ? 16 : 8,
+                left: 16,
+                right: 16,
+                child: ValueListenableBuilder<BookColorizeProgress?>(
+                  valueListenable: _service!.wholeBookProgressNotifier,
+                  builder: (context, p, _) {
+                    if (p == null || p.path != widget.path || p.isFinished)
+                      return const SizedBox.shrink();
+                    return Center(
+                      child: Material(
+                        elevation: 6,
+                        borderRadius: BorderRadius.circular(24),
+                        color: Colors.black87,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.blueAccent,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                '백그라운드 채색 중: ${p.done} / ${p.total}쪽 (${p.percent}%)',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              InkWell(
+                                onTap: _cancelWholeBookColoring,
+                                borderRadius: BorderRadius.circular(12),
+                                child: const Padding(
+                                  padding: EdgeInsets.all(4),
+                                  child: Icon(Icons.close, size: 16, color: Colors.white70),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
       ),
       bottomNavigationBar: _showUi && total > 1 ? _slider(total) : null,
     );
@@ -899,6 +1189,7 @@ class _ViewerPageState extends State<ViewerPage> {
       fit: crop != null ? null : (vertical ? BoxFit.fitWidth : BoxFit.contain),
       width: crop == null && vertical ? width : null,
       gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
       // Until decoded (rare: upcoming pages are decoded ahead), show what
       // was there instead of an empty frame.
       frameBuilder: (context, child, frame, sync) =>
@@ -965,6 +1256,7 @@ class _ViewerPageState extends State<ViewerPage> {
             hints: _store.hintsOf(widget.path, i),
             denoise: _store.denoise,
             look: _store.lookOf(widget.path),
+            style: _store.colorPreset,
           );
           return r.bytes;
         } catch (e) {

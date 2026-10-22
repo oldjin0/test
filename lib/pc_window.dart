@@ -5,14 +5,14 @@ import 'package:window_manager/window_manager.dart';
 import 'pc_platform.dart';
 
 /// Window setup for the PC version: title, a sensible minimum size.
-Future<void> pcWindowInit() async {
+Future<void> pcWindowInit({String title = '채색 뷰어'}) async {
   if (!isPc) return;
   try {
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(
-      const WindowOptions(
-        title: 'Manga Viewer',
-        minimumSize: Size(480, 400),
+      WindowOptions(
+        title: title,
+        minimumSize: const Size(480, 400),
         titleBarStyle: TitleBarStyle.normal,
       ),
       () async {
@@ -23,6 +23,14 @@ Future<void> pcWindowInit() async {
   } catch (_) {
     // the window works without these refinements
   }
+}
+
+/// Sets the PC window title dynamically.
+Future<void> pcSetTitle(String title) async {
+  if (!isPc) return;
+  try {
+    await windowManager.setTitle(title);
+  } catch (_) {}
 }
 
 /// Full screen on / off (F11 in the readers).

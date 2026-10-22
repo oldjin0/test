@@ -350,7 +350,7 @@ void applyBookColors(Uint8List rgb, BookColorMap map, {double strength = 0.95}) 
     final c = math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
     // the model's gray (paper, white skin, ink) is left as it is: from gray
     // alone a white face and white paper cannot be told apart
-    if (c < 4 || lab[0] < 12) return (r.round(), g.round(), b.round());
+    if (c < 4 || lab[0] < 12 || lab[0] >= 95) return (r.round(), g.round(), b.round());
     final (la, lb, lc, w) = map.lookup(lab);
     if (w <= 0) return (r.round(), g.round(), b.round());
     final trust = strength * (w / (w + 20)) * ((c - 4) / 8).clamp(0.0, 1.0);

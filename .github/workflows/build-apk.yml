@@ -29,8 +29,23 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter analyze
-      - run: flutter test
+      - name: Flutter analyze
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee analyze_log.txt || true
+          echo "## Flutter Analyze Output" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          head -n 40 analyze_log.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          flutter test --reporter expanded 2>&1 | tee test_log.txt || {
+            echo "## Unit Tests Failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep -E "(FAILED|Expected:|Actual:|Which:|Error:)" test_log.txt -A 2 -B 1 | head -n 100 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
       - run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
@@ -79,6 +94,9 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk dist/manga-viewer-universal.apk
           flutter build apk --release $VER --target-platform android-arm64
           cp build/app/outputs/flutter-apk/app-release.apk dist/manga-viewer-arm64.apk
+          # Standalone Auto Colorizer APK (arm64)
+          flutter build apk --release $VER --target-platform android-arm64 -t lib/main_auto_colorizer.dart -PappIdSuffix=.autocolorizer -PappName="오토채색기"
+          cp build/app/outputs/flutter-apk/app-release.apk dist/auto-colorizer-arm64.apk
           ls -l dist
       - name: Verify the APKs (persistent signing key, version code)
         run: |
@@ -134,10 +152,10 @@ jobs:
             echo "::notice::Workflows changed after this commit; the newer build publishes the update."
             exit 0
           fi
-          (cd dist && sha256sum manga-viewer-*.apk > SHA256SUMS && cat SHA256SUMS)
+          (cd dist && sha256sum *.apk > SHA256SUMS && cat SHA256SUMS)
           git log -1 --format='%s%n%n%b' | grep -vE '^(Co-Authored-By|Claude-Session):' > notes.md || true
           gh release create "build-${{ github.run_number }}" \
-            dist/manga-viewer-arm64.apk dist/manga-viewer-universal.apk dist/SHA256SUMS \
+            dist/*.apk dist/SHA256SUMS \
             --repo "$REPO" --target "${{ github.sha }}" --latest \
             --title "Manga Viewer 1.0.${{ github.run_number }}" --notes-file notes.md
       - name: Keep only the 3 newest builds

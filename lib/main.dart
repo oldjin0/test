@@ -22,13 +22,15 @@ import 'viewer_page.dart' show prepareNextPages;
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await LibraryStore.load();
+
   if (isPc) {
-    await pcWindowInit();
+    await pcWindowInit(title: '채색 뷰어');
     unawaited(pruneExtractedArchives());
   }
   final colorizer = startColorizer(store);
   unawaited(colorizer.then((s) => prepareNextPages(store, s)));
   unawaited(colorizer.then(keepAliveWhileColoring));
+
   runApp(
     MangaViewerApp(
       store: store,
@@ -153,7 +155,7 @@ class MangaViewerApp extends StatelessWidget {
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) => MaterialApp(
-        title: 'Manga Viewer',
+        title: '채색 뷰어',
         theme: store.eink ? einkTheme : ThemeData.dark(useMaterial3: true),
         home: HomePage(store: store, colorizer: colorizer, openOnStart: openOnStart),
       ),

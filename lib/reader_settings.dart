@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'art_grade.dart';
+import 'gemini_settings_dialog.dart';
 import 'library_store.dart';
 import 'onnx_engine.dart';
 import 'pc_platform.dart';
@@ -32,7 +33,7 @@ Future<void> showReaderSettings(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           children: [
             if (text) ..._textSection(store),
-            if (comic) ..._colorSection(store),
+            if (comic) ..._colorSection(context, store),
             if (comic) ..._gradeSection(store),
             if (comic && isPc) ..._pcSection(store, engine),
             ..._screenSection(store, comic: comic),
@@ -152,8 +153,40 @@ List<Widget> _textSection(LibraryStore s) => [
   ),
 ];
 
-List<Widget> _colorSection(LibraryStore s) => [
+List<Widget> _colorSection(BuildContext context, LibraryStore s) => [
   _header('채색'),
+  ListTile(
+    contentPadding: EdgeInsets.zero,
+    leading: const Icon(Icons.auto_awesome, color: Colors.amber),
+    title: const Text('Google Gemini AI 설정'),
+    subtitle: Text(
+      s.geminiKeys.isEmpty
+          ? 'API 키 없음 (순수 로컬 AI 동작)'
+          : '${s.geminiKeys.length}개 키 등록됨 · ${s.useGeminiSmart ? "스마트 채색 ON" : "스마트 채색 OFF"}',
+    ),
+    trailing: const Icon(Icons.chevron_right),
+    onTap: () => showGeminiSettingsDialog(context, s),
+  ),
+  _choices(
+    '화풍 프리셋 (독립 스타일)',
+    const {
+      'natural': '내추럴 (2번 표준)',
+      'vivid_anime': '비비드 애니',
+      'warm_amber': '클래식 웜 (브라운)',
+      'soft_pastel': '소프트 파스텔',
+      'retro_print': '레트로 코믹스',
+      'monochrome_accent': '모노크롬 포인트',
+    },
+    s.colorPreset,
+    (v) => s.setColorPreset(v),
+  ),
+  _switch('Gemini 스마트 팔레트 (추천)', s.useGeminiSmart && s.geminiKeys.isNotEmpty, (v) {
+    if (v && s.geminiKeys.isEmpty) {
+      showGeminiSettingsDialog(context, s);
+    } else {
+      s.setUseGeminiSmart(v);
+    }
+  }, subtitle: '구글 무료 Vision AI로 만화 표지를 분석해 인물 피부·머리·의상색을 자동 추출하여 책 전체에 적용합니다.'),
   _slider(
     '채색 강도 ${(s.colorStrength * 100).round()}%',
     s.colorStrength,

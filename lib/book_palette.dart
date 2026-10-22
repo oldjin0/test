@@ -135,7 +135,7 @@ void applyBookPalette(Uint8List rgb, List<int> palette, {double strength = 0.75}
       final l = lab[0];
       final c = math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
       final w = ((c - 3) / 9).clamp(0.0, 1.0); // gray, paper: untouched
-      if (w <= 0) return (r.round(), g.round(), b.round());
+      if (w <= 0 || l >= 95) return (r.round(), g.round(), b.round());
       final h = math.atan2(lab[2], lab[1]);
       var best = 0;
       var bestD = double.infinity;

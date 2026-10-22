@@ -71,7 +71,7 @@ class AppPlatform {
   /// running with the screen off or another app in front (Android: a
   /// foreground service with a notification and a wake lock; PC: the system
   /// stays awake). 0 lets it go.
-  static Future<void> keepAlive(int left) async {
+  static Future<void> keepAlive(int left, {String? title, int current = 0, int total = 0}) async {
     if (isPc) return pcKeepBusy(left > 0);
     try {
       if (left > 0 && !_askedNotifications) {
@@ -80,10 +80,35 @@ class AppPlatform {
         // the work goes on even without it.
         await Permission.notification.request();
       }
-      await _channel.invokeMethod('keepAlive', {'left': left});
+      await _channel.invokeMethod('keepAlive', {
+        'left': left,
+        'title': title,
+        'current': current,
+        'total': total,
+      });
     } on MissingPluginException {
       // tests / non-Android
     } catch (_) {}
+  }
+
+  /// Whether the app is exempt from Android battery optimizations (unrestricted background execution).
+  static Future<bool> isIgnoringBatteryOptimizations() async {
+    if (isPc) return true;
+    try {
+      return await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations') ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Prompts the user or system setting to exempt the app from battery optimizations.
+  static Future<bool> requestIgnoreBatteryOptimizations() async {
+    if (isPc) return true;
+    try {
+      return await _channel.invokeMethod<bool>('requestIgnoreBatteryOptimizations') ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Quits the app for good (background colorizing stops with it).

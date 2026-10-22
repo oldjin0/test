@@ -120,23 +120,57 @@ _Opened _openInterpreter(
   bool xnnpack,
   bool fp16,
 ) {
+  final safeThreads = math.max(1, math.min(threads, Platform.numberOfProcessors));
   if (xnnpack) {
     for (final half in fp16 ? const [true, false] : const [false]) {
       XnnpackDelegate? xnn;
+      Interpreter? it;
       try {
-        xnn = XnnpackDelegate(threads: threads, fp16: half);
-        final it = open(
+        xnn = XnnpackDelegate(threads: safeThreads, fp16: half);
+        it = open(
           InterpreterOptions()
-            ..threads = threads
+            ..threads = safeThreads
             ..addDelegate(xnn),
         );
+        it.allocateTensors();
+        final inShape = it.getInputTensor(0).shape;
+        final outShape = it.getOutputTensor(0).shape;
+        var inSize = 1, outSize = 1;
+        for (final d in inShape) {
+          inSize *= d;
+        }
+        for (final d in outShape) {
+          outSize *= d;
+        }
+        final testIn = Float32List(inSize);
+        final testOut = Float32List(outSize);
+        final sw = Stopwatch()..start();
+        it.run(testIn.buffer.asUint8List(), testOut.buffer.asUint8List());
+        if (!_allFinite(testOut) || (half && sw.elapsedMilliseconds > 3000)) {
+          it.close();
+          xnn.delete();
+          continue;
+        }
         return (it: it, xnn: xnn, fp16: half);
       } catch (_) {
-        xnn?.delete();
+        try {
+          it?.close();
+        } catch (_) {}
+        try {
+          xnn?.delete();
+        } catch (_) {}
       }
     }
   }
-  return (it: open(InterpreterOptions()..threads = threads), xnn: null, fp16: false);
+  try {
+    final it = open(InterpreterOptions()..threads = safeThreads);
+    it.allocateTensors();
+    return (it: it, xnn: null, fp16: false);
+  } catch (_) {
+    final it = open(InterpreterOptions()..threads = 1);
+    it.allocateTensors();
+    return (it: it, xnn: null, fp16: false);
+  }
 }
 
 bool _allFinite(Float32List v) {
@@ -352,6 +386,9 @@ ColorizeResult colorizePage(
   int ink = 0,
   int grade = 0,
   BookLook look = BookLook.none,
+  double inkContrast = 1.0,
+  double blendRatio = 1.0,
+  String style = 'natural',
 }) {
   final sw = Stopwatch()..start();
   final decoded = img.decodeImage(pageBytes);
@@ -374,9 +411,26 @@ ColorizeResult colorizePage(
   final ColorizeMode mode;
   final img.Image out;
   if (model != null) {
-    // The manga model is already vivid; the photo-trained Lab model is not.
-    final sat = saturation ?? (model.output == ModelOutput.rgb ? 1.0 : 1.25);
-    out = _composeChroma(src, _predictChroma(src, model, sat, hints, denoiser));
+    if (model.output == ModelOutput.rgb) {
+      out = _composeRgbMultiply(
+        src,
+        _predictRgb(src, model, hints, denoiser, look: look),
+        inkContrast: inkContrast,
+        saturation: saturation ?? 1.0,
+        blendRatio: blendRatio,
+        style: style,
+      );
+    } else {
+      final sat = saturation ?? 1.25;
+      out = _composeChroma(
+        src,
+        _predictChroma(src, model, sat, hints, denoiser, look: look),
+        inkContrast: inkContrast,
+        saturation: saturation ?? 1.0,
+        blendRatio: blendRatio,
+        style: style,
+      );
+    }
     mode = ColorizeMode.ai;
   } else {
     out = _toneFilter(src);
@@ -433,8 +487,9 @@ img.Image _predictChroma(
   ColorModel model,
   double saturation,
   List<ColorHint> hints,
-  PageDenoiser? denoiser,
-) {
+  PageDenoiser? denoiser, {
+  BookLook look = BookLook.none,
+}) {
   final iw = model.inWidth, ih = model.inHeight;
   final s = math.min(iw / src.width, ih / src.height);
   final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
@@ -452,7 +507,10 @@ img.Image _predictChroma(
   if (denoiser != null && !lab && denoiser.width == iw && denoiser.height == ih) {
     gray = denoiser.denoise(gray);
   }
-  final pred = model.predict(model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, hints) : gray);
+  final effectiveHints = hints;
+  final pred = model.predict(
+    model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, effectiveHints) : gray,
+  );
 
   // Crop the page area out of the (possibly smaller) prediction.
   final ow = model.outWidth;
@@ -488,7 +546,7 @@ img.Image _predictChroma(
     }
   }
   fillPlainAreas(chroma, gray, iw, pw, ph);
-  if (hints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, hints);
+  if (effectiveHints.isNotEmpty) _fillHints(chroma, gray, iw, pw, ph, effectiveHints);
   return chroma;
 }
 
@@ -632,6 +690,103 @@ void _fillHints(img.Image chroma, Float32List gray, int iw, int pw, int ph, List
   }
 }
 
+/// Standard vivid manga palette (warm skin, golden/brown hair, soft blue clothing, slate shadow, crimson accent).
+const defaultMangaPalette = [
+  0xF5DBC5, // warm anime skin tone (245, 219, 197)
+  0xD2B98C, // golden / warm hair (210, 185, 140)
+  0x8C96C8, // soft denim / clothing blue (140, 150, 200)
+  0x6E78AA, // shadow slate (110, 120, 170)
+  0xD84030, // crimson accent (216, 64, 48)
+];
+
+/// Automatically generates sparse hints across closed drawing regions using
+/// colors learned from the book's palette, avoiding speech bubbles and line art.
+List<ColorHint> autoHintsFromPalette(
+  Float32List gray,
+  int iw,
+  int ih,
+  int pw,
+  int ph,
+  List<int> palette,
+) {
+  final pal = List<int>.from(palette.isNotEmpty ? palette : defaultMangaPalette);
+  if (pal.length < 4) {
+    for (final def in defaultMangaPalette) {
+      if (!pal.contains(def)) pal.add(def);
+      if (pal.length >= 4) break;
+    }
+  }
+  int lumaOf(int c) => ((c >> 16) & 0xff) * 299 + ((c >> 8) & 0xff) * 587 + (c & 0xff) * 114;
+  final sortedPal = pal..sort((a, b) => lumaOf(b).compareTo(lumaOf(a)));
+
+  final n = pw * ph;
+  final label = Int32List(n)..fillRange(0, n, -1);
+  bool open(int x, int y) => gray[y * iw + x] >= _lineGray;
+
+  final queue = <int>[];
+  final hints = <ColorHint>[];
+
+  for (var start = 0; start < n; start++) {
+    final sx = start % pw, sy = start ~/ pw;
+    if (label[start] >= 0 || !open(sx, sy)) continue;
+
+    label[start] = 1;
+    queue
+      ..clear()
+      ..add(start);
+
+    var sumX = 0, sumY = 0;
+    var sumG = 0.0;
+    var touchesEdge = false;
+
+    for (var q = 0; q < queue.length; q++) {
+      final i = queue[q], x = i % pw, y = i ~/ pw;
+      sumX += x;
+      sumY += y;
+      sumG += gray[y * iw + x];
+      if (x == 0 || y == 0 || x == pw - 1 || y == ph - 1) touchesEdge = true;
+
+      for (final (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]) {
+        if (nx < 0 || ny < 0 || nx >= pw || ny >= ph) continue;
+        final j = ny * pw + nx;
+        if (label[j] >= 0) continue;
+        label[j] = 1;
+        if (open(nx, ny)) queue.add(j);
+      }
+    }
+
+    final count = queue.length;
+    if (count < n * 0.0005 || count > n * 0.25) continue;
+
+    final meanG = sumG / count;
+    if (meanG > 0.88 && (touchesEdge || count > n * 0.012)) continue;
+    if (meanG > 0.90 || meanG < 0.15) continue;
+
+    var cx = sumX ~/ count, cy = sumY ~/ count;
+    if (!open(cx, cy)) {
+      final pick = queue[count ~/ 2];
+      cx = pick % pw;
+      cy = pick ~/ pw;
+    }
+
+    final int color;
+    if (meanG > 0.68) {
+      color = sortedPal[0];
+    } else if (meanG > 0.50 && sortedPal.length > 1) {
+      color = sortedPal[1];
+    } else if (meanG > 0.32 && sortedPal.length > 2) {
+      color = sortedPal[2];
+    } else {
+      color = sortedPal.last;
+    }
+
+    hints.add(ColorHint(cx / pw, cy / ph, color));
+    if (hints.length >= 120) break;
+  }
+
+  return hints;
+}
+
 /// Weights (pw*ph, 0..1) of the area a hint at ([fx], [fy]) of the page
 /// fills: pixels reachable from it without crossing line art, softened at
 /// the border. When that area is open (over 40% of the page), a disc
@@ -702,7 +857,7 @@ Float32List hintInput(Float32List gray, int iw, int ih, int pw, int ph, List<Col
   for (var i = 0; i < iw * ih; i++) {
     input[i * 5] = gray[i];
   }
-  final r = math.max(2, (iw * hintRadius).round());
+  final r = math.max(2, (iw * 0.010).round());
   for (final h in hints) {
     final cx = (h.x.clamp(0.0, 1.0) * pw).round(), cy = (h.y.clamp(0.0, 1.0) * ph).round();
     final rgb = [(h.color >> 16) & 0xff, (h.color >> 8) & 0xff, h.color & 0xff];
@@ -720,8 +875,16 @@ Float32List hintInput(Float32List gray, int iw, int ih, int pw, int ph, List<Col
   return input;
 }
 
-/// Merges low-resolution chroma with the page's own luminance.
-img.Image _composeChroma(img.Image src, img.Image chroma) {
+/// Merges low-resolution chroma with the page's own luminance, applying
+/// the selected style preset (vivid anime, soft pastel, cinematic warm, etc.).
+img.Image _composeChroma(
+  img.Image src,
+  img.Image chroma, {
+  double inkContrast = 1.0,
+  double saturation = 1.0,
+  double blendRatio = 1.0,
+  String style = 'natural',
+}) {
   final up = img.copyResize(
     chroma,
     width: src.width,
@@ -731,12 +894,84 @@ img.Image _composeChroma(img.Image src, img.Image chroma) {
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);
   final o = Uint8List(s.length);
+
+  final bool adjustSat = (saturation - 1.0).abs() > 0.02;
+  final bool blend = (blendRatio - 1.0).abs() > 0.01;
+  final bool customInk = (inkContrast - 1.0).abs() > 0.02;
+
+  final isSoftPastel = style == 'soft_pastel';
+  final isVividAnime = style == 'vivid_anime';
+  final isWarmAmber = style == 'warm_amber' || style == 'cinematic_warm';
+  final isRetroPrint = style == 'retro_print';
+  final isMonochromeAccent = style == 'monochrome_accent';
+
   for (var i = 0; i < s.length; i += 3) {
     final y = 0.299 * s[i] + 0.587 * s[i + 1] + 0.114 * s[i + 2];
-    final cb = c[i] - 128, cr = c[i + 1] - 128;
-    o[i] = (y + 1.402 * cr).round().clamp(0, 255);
-    o[i + 1] = (y - 0.344136 * cb - 0.714136 * cr).round().clamp(0, 255);
-    o[i + 2] = (y + 1.772 * cb).round().clamp(0, 255);
+    final cb = (c[i] - 128).toDouble();
+    final cr = (c[i + 1] - 128).toDouble();
+
+    var pr = (y + 1.402 * cr).clamp(0.0, 255.0);
+    var pg = (y - 0.344136 * cb - 0.714136 * cr).clamp(0.0, 255.0);
+    var pb = (y + 1.772 * cb).clamp(0.0, 255.0);
+
+    final gray = y;
+
+    // 1. Style-specific color transformations
+    if (isVividAnime) {
+      pr = ((pr - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      pg = ((pg - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      pb = ((pb - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+    } else if (isWarmAmber) {
+      final normY = (gray / 255.0).clamp(0.0, 1.0);
+      pr = (pr + 14.0 * normY).clamp(0.0, 255.0);
+      pg = (pg + 5.0 * normY).clamp(0.0, 255.0);
+      pb = (pb - 10.0 * normY + 3.0 * (1.0 - normY)).clamp(0.0, 255.0);
+    } else if (isSoftPastel) {
+      pr = (gray * 0.2 + pr * 0.8).clamp(0.0, 255.0);
+      pg = (gray * 0.2 + pg * 0.8).clamp(0.0, 255.0);
+      pb = (gray * 0.2 + pb * 0.8).clamp(0.0, 255.0);
+    } else if (isMonochromeAccent) {
+      final chromaDist = math.sqrt(
+        (pr - gray) * (pr - gray) + (pg - gray) * (pg - gray) + (pb - gray) * (pb - gray),
+      );
+      if (chromaDist < 26.0) {
+        final t = (chromaDist / 26.0).clamp(0.0, 1.0);
+        pr = gray + (pr - gray) * t;
+        pg = gray + (pg - gray) * t;
+        pb = gray + (pb - gray) * t;
+      }
+    }
+
+    if (adjustSat) {
+      pr = (gray + (pr - gray) * saturation).clamp(0.0, 255.0);
+      pg = (gray + (pg - gray) * saturation).clamp(0.0, 255.0);
+      pb = (gray + (pb - gray) * saturation).clamp(0.0, 255.0);
+    }
+
+    var r = pr.round().clamp(0, 255);
+    var g = pg.round().clamp(0, 255);
+    var b = pb.round().clamp(0, 255);
+
+    // 2. Retro newsprint vintage warm paper tone
+    if (isRetroPrint) {
+      final luma = y.round().clamp(0, 255);
+      if (luma > 190) {
+        final weight = ((luma - 190) / 65.0).clamp(0.0, 1.0);
+        r = (r * (1.0 - weight * 0.03)).round().clamp(0, 255);
+        g = (g * (1.0 - weight * 0.06)).round().clamp(0, 255);
+        b = (b * (1.0 - weight * 0.16)).round().clamp(0, 255);
+      }
+    }
+
+    if (blend) {
+      r = (s[i] * (1.0 - blendRatio) + r * blendRatio).round().clamp(0, 255);
+      g = (s[i + 1] * (1.0 - blendRatio) + g * blendRatio).round().clamp(0, 255);
+      b = (s[i + 2] * (1.0 - blendRatio) + b * blendRatio).round().clamp(0, 255);
+    }
+
+    o[i] = r;
+    o[i + 1] = g;
+    o[i + 2] = b;
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
 }
@@ -754,4 +989,213 @@ img.Image _toneFilter(img.Image src) {
     o[i + 2] = (s[i + 2] * (1 - a) + (l * 0.9 + 10 * (1 - t)) * a).round().clamp(0, 255);
   }
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
+}
+
+/// Predicts full RGB directly from the manga model and crops to the page area.
+img.Image _predictRgb(
+  img.Image src,
+  ColorModel model,
+  List<ColorHint> hints,
+  PageDenoiser? denoiser, {
+  BookLook look = BookLook.none,
+}) {
+  final iw = model.inWidth, ih = model.inHeight;
+  final s = math.min(iw / src.width, ih / src.height);
+  final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
+  final small = img.copyResize(src, width: pw, height: ph, interpolation: img.Interpolation.linear);
+  final sb = small.getBytes(order: img.ChannelOrder.rgb);
+  var gray = Float32List(iw * ih)..fillRange(0, iw * ih, 1.0); // white padding
+  for (var y = 0; y < ph; y++) {
+    for (var x = 0; x < pw; x++) {
+      final j = (y * pw + x) * 3;
+      final v = _luma(sb[j], sb[j + 1], sb[j + 2]);
+      gray[y * iw + x] = v / 255.0;
+    }
+  }
+  if (denoiser != null && denoiser.width == iw && denoiser.height == ih) {
+    gray = denoiser.denoise(gray);
+  }
+  final effectiveHints = hints;
+  final pred = model.predict(
+    model.inChannels == 5 ? hintInput(gray, iw, ih, pw, ph, effectiveHints) : gray,
+  );
+
+  final ow = model.outWidth;
+  final color = img.Image(width: pw, height: ph, numChannels: 3);
+  for (var y = 0; y < ph; y++) {
+    for (var x = 0; x < pw; x++) {
+      final k = y * ow + x;
+      final r = (pred[k * 3] * 255).round().clamp(0, 255);
+      final g = (pred[k * 3 + 1] * 255).round().clamp(0, 255);
+      final b = (pred[k * 3 + 2] * 255).round().clamp(0, 255);
+      color.setPixelRgb(x, y, r, g, b);
+    }
+  }
+  if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints);
+  return color;
+}
+
+/// Precomputed line factor with shadow & heavy screentone lifting:
+/// keeps line art deep pitch-black (y < 25), smoothly lifts dark screentones
+/// (30 <= y <= 130) so colors clearly emerge without turning into black mud,
+/// and preserves pure white paper (y >= 235).
+final Uint16List _lutLineFactor = () {
+  final list = Uint16List(256);
+  for (var y = 0; y < 256; y++) {
+    final base = (y / 235.0).clamp(0.0, 1.0);
+    var f = math.pow(base, 0.70).toDouble();
+    if (y > 20 && y < 140) {
+      final toneLift = math.sin((y - 20) / 120.0 * math.pi) * 0.055;
+      f = (f + toneLift).clamp(0.0, 1.0);
+    }
+    list[y] = (f * 1024.0).round().clamp(0, 1024);
+  }
+  return list;
+}();
+
+/// Composites the model's full RGB color with the high-resolution original scan
+/// using shadow and screentone lifting so colors clearly show up across shaded areas
+/// and ink lines are 100% crisp, without artificial white bleaching.
+img.Image _composeRgbMultiply(
+  img.Image src,
+  img.Image color, {
+  double inkContrast = 1.0,
+  double saturation = 1.0,
+  double blendRatio = 1.0,
+  String style = 'natural',
+}) {
+  final up = img.copyResize(
+    color,
+    width: src.width,
+    height: src.height,
+    interpolation: img.Interpolation.linear,
+  );
+  final s = src.getBytes(order: img.ChannelOrder.rgb);
+  final c = up.getBytes(order: img.ChannelOrder.rgb);
+  final o = Uint8List(s.length);
+
+  final bool adjustSat = (saturation - 1.0).abs() > 0.02;
+  final bool blend = (blendRatio - 1.0).abs() > 0.01;
+  final bool customInk = (inkContrast - 1.0).abs() > 0.02;
+
+  final isSoftPastel = style == 'soft_pastel';
+  final isVividAnime = style == 'vivid_anime';
+  final isWarmAmber = style == 'warm_amber' || style == 'cinematic_warm';
+  final isRetroPrint = style == 'retro_print';
+  final isMonochromeAccent = style == 'monochrome_accent';
+
+  for (var i = 0; i < s.length; i += 3) {
+    var cr = c[i].toDouble();
+    var cg = c[i + 1].toDouble();
+    var cb = c[i + 2].toDouble();
+
+    final gray = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+
+    // 1. Style-specific color transformations
+    if (isVividAnime) {
+      // S-curve contrast boost on colors for punchy anime cel look
+      cr = ((cr - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      cg = ((cg - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      cb = ((cb - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+    } else if (isWarmAmber) {
+      // Moderate the previous heavy brown cast to a pleasing warm amber/sepia tone
+      final normY = (gray / 255.0).clamp(0.0, 1.0);
+      cr = (cr + 14.0 * normY).clamp(0.0, 255.0);
+      cg = (cg + 5.0 * normY).clamp(0.0, 255.0);
+      cb = (cb - 10.0 * normY + 3.0 * (1.0 - normY)).clamp(0.0, 255.0);
+    } else if (isSoftPastel) {
+      cr = (gray * 0.2 + cr * 0.8).clamp(0.0, 255.0);
+      cg = (gray * 0.2 + cg * 0.8).clamp(0.0, 255.0);
+      cb = (gray * 0.2 + cb * 0.8).clamp(0.0, 255.0);
+    } else if (isMonochromeAccent) {
+      // Accent mode: keep background and muted areas as pure monochrome ink,
+      // only let distinct saturated colors pop through
+      final chromaDist = math.sqrt(
+        (cr - gray) * (cr - gray) + (cg - gray) * (cg - gray) + (cb - gray) * (cb - gray),
+      );
+      if (chromaDist < 26.0) {
+        final t = (chromaDist / 26.0).clamp(0.0, 1.0);
+        cr = gray + (cr - gray) * t;
+        cg = gray + (cg - gray) * t;
+        cb = gray + (cb - gray) * t;
+      }
+    }
+
+    if (adjustSat) {
+      cr = (gray + (cr - gray) * saturation).clamp(0.0, 255.0);
+      cg = (gray + (cg - gray) * saturation).clamp(0.0, 255.0);
+      cb = (gray + (cb - gray) * saturation).clamp(0.0, 255.0);
+    }
+
+    final y = _luma(s[i], s[i + 1], s[i + 2]);
+    var lf = _lutLineFactor[y];
+
+    // 2. Style-specific line factor / ink handling
+    if (isSoftPastel) {
+      // Soft line art: lines don't drop to harsh pitch black, soft charcoal/pencil feel
+      lf = math.max(120, (lf * 0.92).round());
+    } else if (isVividAnime) {
+      // Crisp deep black line art
+      if (y < 180) lf = (lf * 0.88).round().clamp(0, 1024);
+    } else if (customInk && y < 160) {
+      final factor = math.pow(y / 160.0, inkContrast - 1.0);
+      lf = (lf * factor).round().clamp(0, 1024);
+    }
+
+    var r = ((cr * lf + 512) / 1024).round().clamp(0, 255);
+    var g = ((cg * lf + 512) / 1024).round().clamp(0, 255);
+    var b = ((cb * lf + 512) / 1024).round().clamp(0, 255);
+
+    // 3. Style-specific paper / background tone
+    if (isRetroPrint) {
+      // Vintage newsprint/comic book cream paper tint
+      if (y > 190) {
+        final weight = ((y - 190) / 65.0).clamp(0.0, 1.0);
+        r = (r * (1.0 - weight * 0.03)).round().clamp(0, 255);
+        g = (g * (1.0 - weight * 0.06)).round().clamp(0, 255);
+        b = (b * (1.0 - weight * 0.16)).round().clamp(0, 255);
+      }
+    }
+
+    if (blend) {
+      r = (s[i] * (1.0 - blendRatio) + r * blendRatio).round().clamp(0, 255);
+      g = (s[i + 1] * (1.0 - blendRatio) + g * blendRatio).round().clamp(0, 255);
+      b = (s[i + 2] * (1.0 - blendRatio) + b * blendRatio).round().clamp(0, 255);
+    }
+
+    o[i] = r;
+    o[i + 1] = g;
+    o[i + 2] = b;
+  }
+  return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
+}
+
+void _fillRgbHints(
+  img.Image color,
+  Float32List gray,
+  int iw,
+  int pw,
+  int ph,
+  List<ColorHint> hints,
+) {
+  final cw = color.width, ch = color.height;
+  for (final h in hints) {
+    final mask = hintFillMask(gray, iw, pw, ph, h.x, h.y);
+    final hr = (h.color >> 16) & 0xff, hg = (h.color >> 8) & 0xff, hb = h.color & 0xff;
+    for (var y = 0; y < ch; y++) {
+      final my = math.min(ph - 1, y * ph ~/ ch);
+      for (var x = 0; x < cw; x++) {
+        final w = mask[my * pw + math.min(pw - 1, x * pw ~/ cw)];
+        if (w == 0) continue;
+        final p = color.getPixel(x, y);
+        color.setPixelRgb(
+          x,
+          y,
+          (p.r + (hr - p.r) * w).round(),
+          (p.g + (hg - p.g) * w).round(),
+          (p.b + (hb - p.b) * w).round(),
+        );
+      }
+    }
+  }
 }

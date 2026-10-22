@@ -10,6 +10,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'book_colors.dart';
 import 'colorizer.dart';
+import 'comic_loader.dart';
+import 'library_store.dart';
 import 'onnx_engine.dart';
 import 'pc_platform.dart';
 
@@ -52,9 +54,20 @@ Future<Uint8List?> loadModelBytes([String asset = modelAsset]) async {
 }
 
 class _Job {
-  _Job(this.key, this.load, this.hints, this.denoise, this.look, {int? ink, int? grade})
-    : ink = ink ?? ColorizeService.ink,
-      grade = grade ?? ColorizeService.grade {
+  _Job(
+    this.key,
+    this.load,
+    this.hints,
+    this.denoise,
+    this.look, {
+    int? ink,
+    int? grade,
+    this.inkContrast = 1.0,
+    this.saturation = 1.0,
+    this.blendRatio = 1.0,
+    this.style = 'natural',
+  }) : ink = ink ?? ColorizeService.ink,
+       grade = grade ?? ColorizeService.grade {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
   }
@@ -67,6 +80,10 @@ class _Job {
 
   /// Color e-ink processing level the job was asked with (0 = none).
   final int ink;
+  final double inkContrast;
+  final double saturation;
+  final double blendRatio;
+  final String style;
 
   /// Color direction level ([ArtGrade]) the job was asked with (0 = none).
   final int grade;
@@ -83,6 +100,25 @@ class _Job {
   /// pages cost no memory.
   final Future<Uint8List> Function() load;
   final completer = Completer<ColorizeResult>();
+}
+
+/// Progress of a whole-book background colorization task.
+class BookColorizeProgress {
+  const BookColorizeProgress({
+    required this.path,
+    required this.title,
+    required this.total,
+    required this.done,
+    required this.isFinished,
+  });
+  final String path;
+  final String title;
+  final int total;
+  final int done;
+  final bool isFinished;
+
+  double get fraction => total > 0 ? (done / total).clamp(0.0, 1.0) : 0.0;
+  int get percent => (fraction * 100).round();
 }
 
 /// Colorizes pages on one long-lived background isolate that keeps the TFLite
@@ -114,8 +150,8 @@ class ColorizeService {
   static String cacheTag = modelVersion;
 
   /// Names how the model's colors are put on the page (see
-  /// `_composeChroma`); part of the cache keys.
-  static const composeTag = '-t4';
+  /// `_composeChroma` and `_composeRgbMultiply`); part of the cache keys.
+  static const composeTag = '-v3pure';
 
   /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.
@@ -170,8 +206,10 @@ class ColorizeService {
     List<ColorHint> hints = const [],
     bool denoise = false,
     BookLook look = BookLook.none,
+    String style = 'natural',
   }) {
     var key = '${md5.convert(comicId.codeUnits)}_${index}_$cacheTag$composeTag';
+    if (style != 'natural') key += '_$style';
     if (denoise) key += '_dn';
     if (hints.isNotEmpty) {
       final h = hints.map((h) => '${h.x.toStringAsFixed(4)},${h.y.toStringAsFixed(4)},${h.color}');
@@ -197,12 +235,30 @@ class ColorizeService {
     BookLook look = BookLook.none,
     int? ink,
     int? grade,
+    double inkContrast = 1.0,
+    double saturation = 1.0,
+    double blendRatio = 1.0,
+    String style = 'natural',
   }) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
     // Already waiting in the background queue: now the reader wants it.
     final promoted = _background.remove(key);
-    final job = promoted ?? _Job(key, loadPage, hints, denoise, look, ink: ink, grade: grade);
+    final job =
+        promoted ??
+        _Job(
+          key,
+          loadPage,
+          hints,
+          denoise,
+          look,
+          ink: ink,
+          grade: grade,
+          inkContrast: inkContrast,
+          saturation: saturation,
+          blendRatio: blendRatio,
+          style: style,
+        );
     job.background = false;
     _queue[key] = job;
     _updateBackgroundLeft();
@@ -238,6 +294,10 @@ class ColorizeService {
     int? ink,
     int? grade,
     bool first = false,
+    double inkContrast = 1.0,
+    double saturation = 1.0,
+    double blendRatio = 1.0,
+    String style = 'natural',
   }) {
     final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) {
@@ -246,9 +306,22 @@ class ColorizeService {
       _updateBackgroundLeft();
       return existing.completer.future;
     }
-    final job = _Job(key, loadPage, hints, denoise, look, ink: ink, grade: grade)
-      ..background = true
-      ..wanted = true;
+    final job =
+        _Job(
+            key,
+            loadPage,
+            hints,
+            denoise,
+            look,
+            ink: ink,
+            grade: grade,
+            inkContrast: inkContrast,
+            saturation: saturation,
+            blendRatio: blendRatio,
+            style: style,
+          )
+          ..background = true
+          ..wanted = true;
     first ? _toFront(key, job) : _background[key] = job;
     _updateBackgroundLeft();
     unawaited(_pump());
@@ -275,6 +348,131 @@ class ColorizeService {
     }
     _running?.wanted = false;
     _updateBackgroundLeft();
+  }
+
+  /// Whether a page's colorized version (or color marker) is already cached on disk.
+  bool isCached(String key) {
+    try {
+      final jpg = _file(key, 'jpg');
+      if (jpg != null && jpg.existsSync()) return true;
+      final skip = _file(key, 'color');
+      if (skip != null && skip.existsSync()) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  BookColorizeProgress? _wholeBookProgress;
+  bool _wholeBookCancel = false;
+  final wholeBookProgressNotifier = ValueNotifier<BookColorizeProgress?>(null);
+
+  /// Stops the current whole-book background colorization task.
+  void cancelWholeBook() {
+    _wholeBookCancel = true;
+    cancelBackground();
+    _wholeBookProgress = null;
+    wholeBookProgressNotifier.value = null;
+  }
+
+  /// Pre-colorizes a whole book in the background, starting from [startPage]
+  /// (the page currently being read) forwards to the end of the book, and then
+  /// the preceding pages. Already colorized pages in the cache are preserved
+  /// and skipped to save time and battery.
+  Future<void> startWholeBook({
+    required String path,
+    required String title,
+    required int startPage,
+    required LibraryStore store,
+  }) async {
+    if (!store.colorize || !modelLoaded) return;
+    if (_wholeBookProgress?.path == path && !(_wholeBookProgress?.isFinished ?? true)) {
+      return;
+    }
+    cancelWholeBook();
+    _wholeBookCancel = false;
+
+    try {
+      if (!await FileSystemEntity.isDirectory(path) && !await File(path).exists()) return;
+      await store.loadLook(path);
+      final book = await ComicBook.open(path, window: 4);
+      final total = book.length;
+      if (total <= 0) return;
+
+      final start = startPage.clamp(0, total - 1);
+      final order = <int>[];
+      // 1. Current reading page to end (forward in reading direction)
+      for (var i = start; i < total; i++) {
+        order.add(i);
+      }
+      // 2. Preceding pages (0 to start - 1)
+      for (var i = 0; i < start; i++) {
+        order.add(i);
+      }
+
+      var done = 0;
+      final needed = <int>[];
+      for (final i in order) {
+        final key = ColorizeService.keyFor(
+          path,
+          i,
+          hints: store.hintsOf(path, i),
+          denoise: store.denoise,
+          look: store.lookOf(path),
+          style: store.colorPreset,
+        );
+        if (isCached(key)) {
+          done++;
+        } else {
+          needed.add(i);
+        }
+      }
+
+      void report(bool finished) {
+        _wholeBookProgress = BookColorizeProgress(
+          path: path,
+          title: title,
+          total: total,
+          done: done,
+          isFinished: finished,
+        );
+        wholeBookProgressNotifier.value = _wholeBookProgress;
+      }
+
+      report(done >= total);
+      if (done >= total || _wholeBookCancel) return;
+
+      for (final i in needed) {
+        if (_wholeBookCancel) break;
+        final key = ColorizeService.keyFor(
+          path,
+          i,
+          hints: store.hintsOf(path, i),
+          denoise: store.denoise,
+          look: store.lookOf(path),
+          style: store.colorPreset,
+        );
+        colorizeInBackground(
+          key,
+          () => book.page(i),
+          hints: store.hintsOf(path, i),
+          denoise: store.denoise,
+          look: store.lookOf(path),
+          style: store.colorPreset,
+        ).then(
+          (_) {
+            if (!_wholeBookCancel && _wholeBookProgress?.path == path) {
+              done++;
+              report(done >= total);
+            }
+          },
+          onError: (Object _) {
+            if (!_wholeBookCancel && _wholeBookProgress?.path == path) {
+              done++;
+              report(done >= total);
+            }
+          },
+        );
+      }
+    } catch (_) {}
   }
 
   /// Puts [keys] at the front of the queue in this order and cancels queued
@@ -334,6 +532,10 @@ class ColorizeService {
         job.ink,
         plain != null,
         job.look.toMessage(),
+        job.inkContrast,
+        job.saturation,
+        job.blendRatio,
+        job.style,
         job.grade,
       ]);
     } catch (e) {
@@ -542,13 +744,26 @@ class _TfliteEngine implements _Engine {
 
   @override
   bool recover() {
-    // FP16 gave NaN/infinity here: reload in full precision for good.
-    _noFp16.writeAsStringSync('1');
-    (model as TfliteColorModel).close();
-    model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack, fp16: false);
-    _denoiser?.close();
+    try {
+      _noFp16.writeAsStringSync('1');
+    } catch (_) {}
+    try {
+      (model as TfliteColorModel?)?.close();
+    } catch (_) {}
+    try {
+      // First attempt: XNNPACK FP32 (full precision NEON)
+      model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack, fp16: false);
+    } catch (_) {
+      try {
+        // Second attempt: Standard CPU interpreter (no delegates, 100% universal)
+        model = TfliteColorModel.fromFile(modelPath, xnnpack: false, fp16: false);
+      } catch (_) {}
+    }
+    try {
+      _denoiser?.close();
+    } catch (_) {}
     _denoiser = null;
-    return true;
+    return model != null;
   }
 }
 
@@ -706,7 +921,11 @@ void _workerMain(List args) {
     final ink = m[4] as int;
     final inkOnly = m[5] as bool; // bytes are a colorized page: process only
     final look = BookLook.fromMessage(m[6] as List);
-    final grade = m.length > 7 ? m[7] as int : 0;
+    final inkContrast = m.length > 7 ? (m[7] as num).toDouble() : 1.0;
+    final saturation = m.length > 8 ? (m[8] as num).toDouble() : 1.0;
+    final blendRatio = m.length > 9 ? (m[9] as num).toDouble() : 1.0;
+    final style = m.length > 10 ? (m[10] as String) : 'natural';
+    final grade = m.length > 11 ? m[11] as int : 0;
     try {
       if (inkOnly) {
         final sw = Stopwatch()..start();
@@ -727,12 +946,44 @@ void _workerMain(List args) {
         ink: ink,
         grade: grade,
         look: look,
+        inkContrast: inkContrast,
+        saturation: saturation,
+        blendRatio: blendRatio,
+        style: style,
       );
       ColorizeResult r;
       arm();
       try {
         r = run();
         if (engine != null && engine.sawInvalid && engine.recover()) r = run();
+      } catch (e) {
+        if (engine != null && engine.recover()) {
+          try {
+            r = run();
+          } catch (_) {
+            r = colorizePage(
+              bytes,
+              null,
+              look: look,
+              ink: ink,
+              inkContrast: inkContrast,
+              saturation: saturation,
+              blendRatio: blendRatio,
+              style: style,
+            );
+          }
+        } else {
+          r = colorizePage(
+            bytes,
+            null,
+            look: look,
+            ink: ink,
+            inkContrast: inkContrast,
+            saturation: saturation,
+            blendRatio: blendRatio,
+            style: style,
+          );
+        }
       } finally {
         disarm();
       }
