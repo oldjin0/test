@@ -242,38 +242,25 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
           ),
         ],
       ),
-      body: PopScope(
-        canPop: !_engine.progress.value.isRunning,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && _engine.progress.value.isRunning) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('백그라운드에서 채색이 계속 진행됩니다. 알림창에서 확인하실 수 있습니다.'),
-                duration: Duration(seconds: 3),
-              ),
-            );
-          }
+      body: ValueListenableBuilder<BatchProgress>(
+        valueListenable: _engine.progress,
+        builder: (context, prog, _) {
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              _buildBatteryNoticeCard(),
+              if (_needsBatteryOptimizationExemption) const SizedBox(height: 12),
+              _buildIntroCard(),
+              const SizedBox(height: 16),
+              _buildSettingsCard(prog.isRunning),
+              const SizedBox(height: 16),
+              _buildQueueCard(prog),
+              const SizedBox(height: 16),
+              if (prog.isRunning || prog.statusMessage != '대기 중') _buildProgressCard(prog),
+              const SizedBox(height: 80),
+            ],
+          );
         },
-        child: ValueListenableBuilder<BatchProgress>(
-          valueListenable: _engine.progress,
-          builder: (context, prog, _) {
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _buildBatteryNoticeCard(),
-                if (_needsBatteryOptimizationExemption) const SizedBox(height: 12),
-                _buildIntroCard(),
-                const SizedBox(height: 16),
-                _buildSettingsCard(prog.isRunning),
-                const SizedBox(height: 16),
-                _buildQueueCard(prog),
-                const SizedBox(height: 16),
-                if (prog.isRunning || prog.statusMessage != '대기 중') _buildProgressCard(prog),
-                const SizedBox(height: 80),
-              ],
-            );
-          },
-        ),
       ),
       bottomNavigationBar: ValueListenableBuilder<BatchProgress>(
         valueListenable: _engine.progress,

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'archive_tar.dart';
 import 'auto_colorizer_page.dart';
-import 'colorize_service.dart';
 import 'library_store.dart';
 import 'main.dart' show startColorizer, keepAliveWhileColoring, einkTheme;
 import 'pc_platform.dart';
