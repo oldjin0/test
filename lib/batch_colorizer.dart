@@ -7,6 +7,7 @@ import 'package:archive/archive_io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import 'book_colors.dart' show BookLook;
 import 'colorize_service.dart';
 import 'colorizer.dart' show ColorHint, ColorizeResult;
 import 'comic_loader.dart';
@@ -15,12 +16,12 @@ import 'gemini_service.dart';
 import 'updater.dart' show AppPlatform;
 
 enum BatchPreset {
-  natural('내추럴 (2번 표준)', 'natural', 1.0, 1.0, 1.0),
-  softPastel('소프트 파스텔 (수채화풍)', 'soft_pastel', 0.85, 0.82, 0.90),
-  vividAnime('비비드 셀 애니 (선명·화려)', 'vivid_anime', 1.15, 1.45, 1.0),
-  cinematicWarm('시네마틱 웜 (황혼·필름)', 'cinematic_warm', 1.05, 1.15, 1.0),
-  retroPrint('레트로 코믹스 (빈티지 인쇄)', 'retro_print', 0.95, 1.05, 1.0),
-  monochromeAccent('모노크롬 & 포인트 (수묵 포인트)', 'monochrome_accent', 1.20, 1.30, 1.0),
+  natural('내추럴 (2번 표준 · 권장)', 'natural', 1.0, 1.0, 1.0),
+  vividAnime('비비드 애니 (화사한 원색)', 'vivid_anime', 1.08, 1.35, 1.0),
+  warmAmber('클래식 웜 (따뜻한 브라운)', 'warm_amber', 1.05, 1.10, 1.0),
+  softPastel('소프트 파스텔 (수채화풍)', 'soft_pastel', 0.90, 0.85, 0.90),
+  retroPrint('레트로 코믹스 (빈티지 인쇄)', 'retro_print', 0.95, 1.00, 1.0),
+  monochromeAccent('모노크롬 포인트 (수묵 포인트)', 'monochrome_accent', 1.20, 1.30, 1.0),
   custom('사용자 직접 조절', 'custom', 1.0, 1.0, 1.0);
 
   final String label;
@@ -32,9 +33,9 @@ enum BatchPreset {
 }
 
 enum BatchApiMode {
-  coverPalette('Gemini 표지 스마트 팔레트 (추천 · 권당 1회)'),
-  sceneHints('Gemini 장면별 인물 힌트 정밀 생성'),
-  none('순수 로컬 AI (API 미사용 · 초고속)');
+  none('순수 로컬 AI (오프라인 · 초고속 · 기본)'),
+  coverPalette('Gemini 표지 스마트 팔레트 (권당 1회)'),
+  sceneHints('Gemini 장면별 인물 힌트 정밀 생성');
 
   final String label;
   const BatchApiMode(this.label);
@@ -118,7 +119,7 @@ class BatchColorizerEngine {
   double inkContrast = 1.0;
   double saturation = 1.0;
   double blendRatio = 1.0;
-  BatchApiMode apiMode = BatchApiMode.coverPalette;
+  BatchApiMode apiMode = BatchApiMode.none;
   String? customOutputDir;
 
   bool _cancelRequested = false;
@@ -279,7 +280,7 @@ class BatchColorizerEngine {
       }
 
       try {
-        List<ColorHint> activeHints = const [];
+        BookLook coverLook = BookLook.none;
 
         // If smart palette mode: extract smart palette from cover/page 0
         if (apiMode == BatchApiMode.coverPalette && GeminiService.instance.hasKeys) {
@@ -287,8 +288,7 @@ class BatchColorizerEngine {
             final coverBytes = await book.page(0);
             final pal = await GeminiService.instance.extractSmartPalette(coverBytes);
             if (pal != null && pal.isNotEmpty) {
-              // Extract primary skin tone hint as guide
-              activeHints = [ColorHint(0.5, 0.5, pal.first)];
+              coverLook = BookLook(palette: pal);
             }
           } catch (_) {}
         }
@@ -302,7 +302,7 @@ class BatchColorizerEngine {
           final pageBytes = await book.page(pageIdx);
           final pageKey = 'batch:${item.title}:$pageIdx-c${inkContrast.toStringAsFixed(2)}-s${saturation.toStringAsFixed(2)}';
 
-          List<ColorHint> pageHints = activeHints;
+          List<ColorHint> pageHints = const [];
           if (apiMode == BatchApiMode.sceneHints && GeminiService.instance.hasKeys) {
             try {
               final detected = await GeminiService.instance.extractSceneHints(pageBytes);
@@ -315,6 +315,7 @@ class BatchColorizerEngine {
             () async => pageBytes,
             hints: pageHints,
             denoise: false,
+            look: coverLook,
             inkContrast: inkContrast,
             saturation: saturation,
             blendRatio: blendRatio,

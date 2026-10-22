@@ -146,7 +146,7 @@ class ColorizeService {
 
   /// Names how the model's colors are put on the page (see
   /// `_composeChroma` and `_composeRgbMultiply`); part of the cache keys.
-  static const composeTag = '-v2pure';
+  static const composeTag = '-v3pure';
 
   /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.

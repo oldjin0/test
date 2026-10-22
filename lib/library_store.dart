@@ -216,6 +216,7 @@ class LibraryStore extends ChangeNotifier {
     useGeminiSmart = p.getBool('useGeminiSmart') ?? useGeminiSmart;
     geminiMode = p.getString('geminiMode') ?? geminiMode;
     colorPreset = p.getString('colorPreset') ?? colorPreset;
+    if (colorPreset == 'cinematic_warm') colorPreset = 'warm_amber';
     GeminiService.instance.setKeys(geminiKeys);
     folders.addAll(p.getStringList('folders') ?? const []);
     for (final e in _decodeList(p.getString('progress'))) {

@@ -650,9 +650,21 @@ class _ViewerPageState extends State<ViewerPage> {
     final presets = [
       (
         id: 'natural',
-        name: '내추럴 (표준 권장)',
-        desc: 'AI 원본의 자연스러운 피부톤과 배경의 기본 균형',
+        name: '내추럴 (2번 표준 권장)',
+        desc: 'AI 원본의 자연스러운 피부톤과 배경의 기본 균형 (먹선 보존)',
         icon: Icons.auto_awesome,
+      ),
+      (
+        id: 'vivid_anime',
+        name: '비비드 애니 (화사한 원색)',
+        desc: '애니메이션 원화처럼 생생하고 화사한 원색 대비 + 딥블랙 먹선',
+        icon: Icons.palette,
+      ),
+      (
+        id: 'warm_amber',
+        name: '클래식 웜 (따뜻한 브라운)',
+        desc: '과거 인기 버전의 따뜻한 브라운·골드 색조를 자연스럽게 정돈한 감성 톤',
+        icon: Icons.wb_incandescent_outlined,
       ),
       (
         id: 'soft_pastel',
@@ -661,26 +673,14 @@ class _ViewerPageState extends State<ViewerPage> {
         icon: Icons.wb_sunny_outlined,
       ),
       (
-        id: 'vivid_anime',
-        name: '비비드 셀 애니 (극장판 원색)',
-        desc: '애니메이션 원화처럼 생생한 원색 대비 + 칠흑 먹선',
-        icon: Icons.palette,
-      ),
-      (
-        id: 'cinematic_warm',
-        name: '시네마틱 웜 (영화적 조명)',
-        desc: '따뜻한 앰버 골드 하이라이트와 깊은 청록 틸 음영',
-        icon: Icons.movie_filter,
-      ),
-      (
         id: 'retro_print',
-        name: '레트로 코믹스 (고전 만화책)',
+        name: '레트로 코믹스 (빈티지 인쇄)',
         desc: '빈티지 미색 종이와 7080 클래식 출판 만화 잉크 감성',
         icon: Icons.history_edu,
       ),
       (
         id: 'monochrome_accent',
-        name: '모노크롬 포인트 (흑백+포인트)',
+        name: '모노크롬 포인트 (수묵 포인트)',
         desc: '배경은 흑백 잉크톤으로 정돈하고 피부·의상 주요 색상만 강조',
         icon: Icons.contrast,
       ),

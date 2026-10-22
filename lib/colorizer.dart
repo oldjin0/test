@@ -897,7 +897,7 @@ img.Image _composeChroma(
 
   final isSoftPastel = style == 'soft_pastel';
   final isVividAnime = style == 'vivid_anime';
-  final isCinematicWarm = style == 'cinematic_warm';
+  final isWarmAmber = style == 'warm_amber' || style == 'cinematic_warm';
   final isRetroPrint = style == 'retro_print';
   final isMonochromeAccent = style == 'monochrome_accent';
 
@@ -917,11 +917,11 @@ img.Image _composeChroma(
       pr = ((pr - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
       pg = ((pg - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
       pb = ((pb - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
-    } else if (isCinematicWarm) {
+    } else if (isWarmAmber) {
       final normY = (gray / 255.0).clamp(0.0, 1.0);
-      pr = (pr + 22.0 * normY).clamp(0.0, 255.0);
-      pg = (pg + 9.0 * normY).clamp(0.0, 255.0);
-      pb = (pb - 18.0 * normY + 6.0 * (1.0 - normY)).clamp(0.0, 255.0);
+      pr = (pr + 14.0 * normY).clamp(0.0, 255.0);
+      pg = (pg + 5.0 * normY).clamp(0.0, 255.0);
+      pb = (pb - 10.0 * normY + 3.0 * (1.0 - normY)).clamp(0.0, 255.0);
     } else if (isSoftPastel) {
       pr = (gray * 0.2 + pr * 0.8).clamp(0.0, 255.0);
       pg = (gray * 0.2 + pg * 0.8).clamp(0.0, 255.0);
@@ -1027,18 +1027,26 @@ img.Image _predictRgb(
   return color;
 }
 
-/// Precomputed gamma 0.70 line factor: keeps lineart dark, lifts shadows from black mud.
+/// Precomputed line factor with shadow & heavy screentone lifting:
+/// keeps line art deep pitch-black (y < 25), smoothly lifts dark screentones
+/// (30 <= y <= 190) so colors clearly emerge without turning into black mud,
+/// and preserves pure white paper (y >= 235).
 final Uint16List _lutLineFactor = () {
   final list = Uint16List(256);
   for (var y = 0; y < 256; y++) {
-    final f = math.pow((y / 235.0).clamp(0.0, 1.0), 0.70).toDouble();
+    final base = (y / 235.0).clamp(0.0, 1.0);
+    var f = math.pow(base, 0.58).toDouble();
+    if (y > 25 && y < 210) {
+      final toneLift = math.sin((y - 25) / 185.0 * math.pi) * 0.08;
+      f = (f + toneLift).clamp(0.0, 1.0);
+    }
     list[y] = (f * 1024.0).round().clamp(0, 1024);
   }
   return list;
 }();
 
 /// Composites the model's full RGB color with the high-resolution original scan
-/// using shadow lifting (gamma 0.70) so colors clearly show up across the whole panel
+/// using shadow and screentone lifting so colors clearly show up across shaded areas
 /// and ink lines are 100% crisp, without artificial white bleaching.
 img.Image _composeRgbMultiply(
   img.Image src,
@@ -1064,7 +1072,7 @@ img.Image _composeRgbMultiply(
 
   final isSoftPastel = style == 'soft_pastel';
   final isVividAnime = style == 'vivid_anime';
-  final isCinematicWarm = style == 'cinematic_warm';
+  final isWarmAmber = style == 'warm_amber' || style == 'cinematic_warm';
   final isRetroPrint = style == 'retro_print';
   final isMonochromeAccent = style == 'monochrome_accent';
 
@@ -1081,12 +1089,12 @@ img.Image _composeRgbMultiply(
       cr = ((cr - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
       cg = ((cg - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
       cb = ((cb - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
-    } else if (isCinematicWarm) {
-      // Golden amber warmth in highlights/midtones + subtle teal in deep shadows
+    } else if (isWarmAmber) {
+      // Moderate the previous heavy brown cast to a pleasing warm amber/sepia tone
       final normY = (gray / 255.0).clamp(0.0, 1.0);
-      cr = (cr + 22.0 * normY).clamp(0.0, 255.0);
-      cg = (cg + 9.0 * normY).clamp(0.0, 255.0);
-      cb = (cb - 18.0 * normY + 6.0 * (1.0 - normY)).clamp(0.0, 255.0);
+      cr = (cr + 14.0 * normY).clamp(0.0, 255.0);
+      cg = (cg + 5.0 * normY).clamp(0.0, 255.0);
+      cb = (cb - 10.0 * normY + 3.0 * (1.0 - normY)).clamp(0.0, 255.0);
     } else if (isSoftPastel) {
       cr = (gray * 0.2 + cr * 0.8).clamp(0.0, 255.0);
       cg = (gray * 0.2 + cg * 0.8).clamp(0.0, 255.0);
