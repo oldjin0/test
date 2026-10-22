@@ -119,23 +119,57 @@ _Opened _openInterpreter(
   bool xnnpack,
   bool fp16,
 ) {
+  final safeThreads = math.max(1, math.min(threads, Platform.numberOfProcessors));
   if (xnnpack) {
     for (final half in fp16 ? const [true, false] : const [false]) {
       XnnpackDelegate? xnn;
+      Interpreter? it;
       try {
-        xnn = XnnpackDelegate(threads: threads, fp16: half);
-        final it = open(
+        xnn = XnnpackDelegate(threads: safeThreads, fp16: half);
+        it = open(
           InterpreterOptions()
-            ..threads = threads
+            ..threads = safeThreads
             ..addDelegate(xnn),
         );
+        it.allocateTensors();
+        final inShape = it.getInputTensor(0).shape;
+        final outShape = it.getOutputTensor(0).shape;
+        var inSize = 1, outSize = 1;
+        for (final d in inShape) {
+          inSize *= d;
+        }
+        for (final d in outShape) {
+          outSize *= d;
+        }
+        final testIn = Float32List(inSize);
+        final testOut = Float32List(outSize);
+        final sw = Stopwatch()..start();
+        it.run(testIn.buffer.asUint8List(), testOut.buffer.asUint8List());
+        if (!_allFinite(testOut) || (half && sw.elapsedMilliseconds > 3000)) {
+          it.close();
+          xnn.delete();
+          continue;
+        }
         return (it: it, xnn: xnn, fp16: half);
       } catch (_) {
-        xnn?.delete();
+        try {
+          it?.close();
+        } catch (_) {}
+        try {
+          xnn?.delete();
+        } catch (_) {}
       }
     }
   }
-  return (it: open(InterpreterOptions()..threads = threads), xnn: null, fp16: false);
+  try {
+    final it = open(InterpreterOptions()..threads = safeThreads);
+    it.allocateTensors();
+    return (it: it, xnn: null, fp16: false);
+  } catch (_) {
+    final it = open(InterpreterOptions()..threads = 1);
+    it.allocateTensors();
+    return (it: it, xnn: null, fp16: false);
+  }
 }
 
 bool _allFinite(Float32List v) {

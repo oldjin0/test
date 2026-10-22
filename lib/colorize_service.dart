@@ -722,13 +722,26 @@ class _TfliteEngine implements _Engine {
 
   @override
   bool recover() {
-    // FP16 gave NaN/infinity here: reload in full precision for good.
-    _noFp16.writeAsStringSync('1');
-    (model as TfliteColorModel).close();
-    model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack, fp16: false);
-    _denoiser?.close();
+    try {
+      _noFp16.writeAsStringSync('1');
+    } catch (_) {}
+    try {
+      (model as TfliteColorModel?)?.close();
+    } catch (_) {}
+    try {
+      // First attempt: XNNPACK FP32 (full precision NEON)
+      model = TfliteColorModel.fromFile(modelPath, xnnpack: xnnpack, fp16: false);
+    } catch (_) {
+      try {
+        // Second attempt: Standard CPU interpreter (no delegates, 100% universal)
+        model = TfliteColorModel.fromFile(modelPath, xnnpack: false, fp16: false);
+      } catch (_) {}
+    }
+    try {
+      _denoiser?.close();
+    } catch (_) {}
     _denoiser = null;
-    return true;
+    return model != null;
   }
 }
 
@@ -919,6 +932,34 @@ void _workerMain(List args) {
       try {
         r = run();
         if (engine != null && engine.sawInvalid && engine.recover()) r = run();
+      } catch (e) {
+        if (engine != null && engine.recover()) {
+          try {
+            r = run();
+          } catch (_) {
+            r = colorizePage(
+              bytes,
+              null,
+              look: look,
+              ink: ink,
+              inkContrast: inkContrast,
+              saturation: saturation,
+              blendRatio: blendRatio,
+              style: style,
+            );
+          }
+        } else {
+          r = colorizePage(
+            bytes,
+            null,
+            look: look,
+            ink: ink,
+            inkContrast: inkContrast,
+            saturation: saturation,
+            blendRatio: blendRatio,
+            style: style,
+          );
+        }
       } finally {
         disarm();
       }

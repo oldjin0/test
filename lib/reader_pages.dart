@@ -279,7 +279,13 @@ class ReaderPages extends ChangeNotifier {
       },
       onError: (Object e) {
         if (_requests[i]?.$2 == f) _requests.remove(i);
-        if (!isCancelled(e)) _notify();
+        if (!isCancelled(e)) {
+          final orig = _originals[i];
+          if (orig != null) {
+            _results[i] = (key, ColorizeResult(orig, ColorizeMode.alreadyColor, 0));
+          }
+          _notify();
+        }
       },
     );
   }
