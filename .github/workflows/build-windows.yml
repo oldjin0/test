@@ -100,10 +100,18 @@ jobs:
           }
           New-Item -ItemType Directory "$rel/models" | Out-Null
           Copy-Item onnx/colorizer_fp32.onnx, onnx/colorizer_fp16.onnx, onnx/denoiser.onnx "$rel/models"
+          $viewerExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7LGE7IOJ67ew7Ja0LmV4ZQ=="))
+          $autoExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7Jik7Yag7LGE7IOJ6riwLmV4ZQ=="))
           Set-Content -Path "$rel/version.json" -Value '{"code": ${{ github.run_number }}, "name": "1.0.${{ github.run_number }}"}'
-          Copy-Item "$rel/manga_viewer.exe" "$rel/채색뷰어.exe"
-          Copy-Item "$rel/manga_viewer.exe" "$rel/오토채색기.exe"
-          Set-Content -Path "$rel/README.txt" -Value "채색 뷰어 & 오토채색기 Windows 통합 배포본`n`n- 채색뷰어.exe: 만화 뷰어 실행`n- 오토채색기.exe: 대용량 일괄 자동 채색기 독립 실행 (백그라운드 지속 실행 지원)`n- manga_viewer.exe: 기본 실행 파일`n`n별도의 설치가 필요하지 않으며 폴더 압축 해제 후 바로 실행하시면 됩니다."
+          Copy-Item "$rel/manga_viewer.exe" "$rel/$viewerExe"
+          Copy-Item "$rel/manga_viewer.exe" "$rel/$autoExe"
+          Set-Content -Path "$rel/README.txt" -Encoding utf8 -Value @"
+Manga Viewer & Auto Colorizer Windows Release
+
+- manga_viewer.exe: Default launcher
+- $viewerExe: Manga Viewer launcher
+- $autoExe: Standalone Auto Colorizer launcher
+"@
           Get-ChildItem $rel | Format-Table Name, Length
           & "$env:SystemRoot/System32/tar.exe" -a -cf MangaViewer-windows.zip -C $rel *
           "{0:N0} MB" -f ((Get-Item MangaViewer-windows.zip).Length / 1MB)
@@ -112,10 +120,12 @@ jobs:
         run: |
           # Unpack the zip the way the in-app updater does (the system tar) and
           # start that copy: proves the archive itself is complete and readable.
+          $viewerExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7LGE7IOJ67ew7Ja0LmV4ZQ=="))
+          $autoExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7Jik7Yag7LGE7IOJ6riwLmV4ZQ=="))
           New-Item -ItemType Directory unpacked | Out-Null
           & "$env:SystemRoot/System32/tar.exe" -xf MangaViewer-windows.zip -C unpacked
           if ($LASTEXITCODE -ne 0) { throw "tar could not unpack the release zip" }
-          foreach ($f in 'manga_viewer.exe', '채색뷰어.exe', '오토채색기.exe', 'data/app.so', 'flutter_windows.dll', 'models/colorizer_fp32.onnx', 'vcruntime140_1.dll', 'version.json') {
+          foreach ($f in 'manga_viewer.exe', $viewerExe, $autoExe, 'data/app.so', 'flutter_windows.dll', 'models/colorizer_fp32.onnx', 'vcruntime140_1.dll', 'version.json') {
             if (-not (Test-Path "unpacked/$f")) { throw "missing in the zip: $f" }
           }
           $exe = (Resolve-Path "unpacked/manga_viewer.exe").Path
@@ -124,10 +134,10 @@ jobs:
           if ($p.HasExited) { throw "manga_viewer.exe exited with code $($p.ExitCode)" }
           Write-Output "running: $($p.MainWindowTitle)"
           Stop-Process $p -Force
-          $autoExe = (Resolve-Path "unpacked/오토채색기.exe").Path
-          $p2 = Start-Process $autoExe -PassThru
+          $autoPath = (Resolve-Path "unpacked/$autoExe").Path
+          $p2 = Start-Process $autoPath -PassThru
           Start-Sleep -Seconds 8
-          if ($p2.HasExited) { throw "오토채색기.exe exited with code $($p2.ExitCode)" }
+          if ($p2.HasExited) { throw "$autoExe exited with code $($p2.ExitCode)" }
           Write-Output "running auto colorizer: $($p2.MainWindowTitle)"
           Stop-Process $p2 -Force
       - uses: actions/upload-artifact@v4
