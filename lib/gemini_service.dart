@@ -201,7 +201,14 @@ class GeminiService {
   }
 
   /// Sends a POST request, automatically rotating keys on 429 (quota) or network errors.
-  Future<String?> _postWithFailover(String jsonBody) async {
+  Future<String?> postRaw(String jsonBody, {String model = 'gemini-1.5-flash'}) =>
+      _postWithFailover(jsonBody, model: model, raw: true);
+
+  Future<String?> _postWithFailover(
+    String jsonBody, {
+    String model = 'gemini-1.5-flash',
+    bool raw = false,
+  }) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
     final maxAttempts = _keys.length.clamp(1, 4);
 
@@ -212,7 +219,7 @@ class GeminiService {
 
         try {
           final uri = Uri.parse(
-            'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyInfo.key}',
+            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=${keyInfo.key}',
           );
           final req = await client.postUrl(uri);
           req.headers.contentType = ContentType.json;
@@ -223,6 +230,7 @@ class GeminiService {
 
           if (resp.statusCode == 200) {
             keyInfo.successCount++;
+            if (raw) return responseBody;
             final parsed = jsonDecode(responseBody);
             final candidates = parsed['candidates'] as List?;
             if (candidates != null && candidates.isNotEmpty) {
