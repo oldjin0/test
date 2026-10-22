@@ -105,7 +105,7 @@ jobs:
           Copy-Item "$rel/manga_viewer.exe" "$rel/오토채색기.exe"
           Set-Content -Path "$rel/README.txt" -Value "채색 뷰어 & 오토채색기 Windows 통합 배포본`n`n- 채색뷰어.exe: 만화 뷰어 실행`n- 오토채색기.exe: 대용량 일괄 자동 채색기 독립 실행 (백그라운드 지속 실행 지원)`n- manga_viewer.exe: 기본 실행 파일`n`n별도의 설치가 필요하지 않으며 폴더 압축 해제 후 바로 실행하시면 됩니다."
           Get-ChildItem $rel | Format-Table Name, Length
-          Compress-Archive -Path "$rel/*" -DestinationPath MangaViewer-windows.zip -CompressionLevel Fastest
+          & "$env:SystemRoot/System32/tar.exe" -a -cf MangaViewer-windows.zip -C $rel *
           "{0:N0} MB" -f ((Get-Item MangaViewer-windows.zip).Length / 1MB)
       - name: The packaged program starts and stays up
         shell: pwsh
