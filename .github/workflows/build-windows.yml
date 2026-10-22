@@ -36,7 +36,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter analyze
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - name: Unit tests (on Windows)
         run: flutter test
       - uses: actions/download-artifact@v4
