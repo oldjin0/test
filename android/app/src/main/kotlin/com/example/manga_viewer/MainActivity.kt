@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.provider.Settings
 import android.view.KeyEvent
