@@ -105,13 +105,7 @@ jobs:
           Set-Content -Path "$rel/version.json" -Value '{"code": ${{ github.run_number }}, "name": "1.0.${{ github.run_number }}"}'
           Copy-Item "$rel/manga_viewer.exe" "$rel/$viewerExe"
           Copy-Item "$rel/manga_viewer.exe" "$rel/$autoExe"
-          Set-Content -Path "$rel/README.txt" -Encoding utf8 -Value @"
-Manga Viewer & Auto Colorizer Windows Release
-
-- manga_viewer.exe: Default launcher
-- $viewerExe: Manga Viewer launcher
-- $autoExe: Standalone Auto Colorizer launcher
-"@
+          Set-Content -Path "$rel/README.txt" -Encoding utf8 -Value "Manga Viewer & Auto Colorizer Windows Release`n`n- manga_viewer.exe: Default launcher`n- $viewerExe: Manga Viewer launcher`n- $autoExe: Standalone Auto Colorizer launcher"
           Get-ChildItem $rel | Format-Table Name, Length
           & "$env:SystemRoot/System32/tar.exe" -a -cf MangaViewer-windows.zip -C $rel *
           "{0:N0} MB" -f ((Get-Item MangaViewer-windows.zip).Length / 1MB)
