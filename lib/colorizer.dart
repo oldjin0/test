@@ -1029,15 +1029,15 @@ img.Image _predictRgb(
 
 /// Precomputed line factor with shadow & heavy screentone lifting:
 /// keeps line art deep pitch-black (y < 25), smoothly lifts dark screentones
-/// (30 <= y <= 190) so colors clearly emerge without turning into black mud,
+/// (30 <= y <= 130) so colors clearly emerge without turning into black mud,
 /// and preserves pure white paper (y >= 235).
 final Uint16List _lutLineFactor = () {
   final list = Uint16List(256);
   for (var y = 0; y < 256; y++) {
     final base = (y / 235.0).clamp(0.0, 1.0);
-    var f = math.pow(base, 0.58).toDouble();
-    if (y > 25 && y < 210) {
-      final toneLift = math.sin((y - 25) / 185.0 * math.pi) * 0.08;
+    var f = math.pow(base, 0.70).toDouble();
+    if (y > 20 && y < 140) {
+      final toneLift = math.sin((y - 20) / 120.0 * math.pi) * 0.055;
       f = (f + toneLift).clamp(0.0, 1.0);
     }
     list[y] = (f * 1024.0).round().clamp(0, 1024);
