@@ -12,6 +12,7 @@ import 'book_colors.dart';
 import 'book_palette.dart';
 import 'colorize_service.dart';
 import 'comic_loader.dart';
+export 'comic_loader.dart' show zipEntries, ZipEntry;
 import 'form_colors.dart';
 import 'gemini_service.dart';
 import 'library_store.dart';

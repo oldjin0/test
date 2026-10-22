@@ -8,6 +8,7 @@ import 'package:image/image.dart' as img;
 import 'package:manga_viewer/book_colors.dart';
 import 'package:manga_viewer/book_palette.dart';
 import 'package:manga_viewer/color_learner.dart';
+import 'package:manga_viewer/comic_loader.dart';
 import 'package:manga_viewer/colorize_service.dart';
 import 'package:manga_viewer/ink_color.dart';
 

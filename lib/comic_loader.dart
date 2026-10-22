@@ -4,7 +4,7 @@ import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
+import 'package:archive/archive.dart' hide ZLibDecoder;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
@@ -94,7 +94,7 @@ class ZipEntry {
     if (method != 8) {
       throw FormatException('지원하지 않는 zip 압축 방식: $method');
     }
-    return Uint8List.fromList(const ZLibDecoder(raw: true).decodeBytes(raw));
+    return Uint8List.fromList(const ZLibDecoder(raw: true).convert(raw));
   }
 
   /// About the first [max] bytes of the entry's content (stored or
