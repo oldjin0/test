@@ -232,6 +232,7 @@ class _ViewerPageState extends State<ViewerPage> {
   late bool _colorize = _store.colorize;
   late bool _denoise = _store.denoise;
   late int _ink = ColorizeService.ink;
+  late int _grade = ColorizeService.grade;
   late String _lookKey = _store.lookOf(widget.path).tag;
   late bool _autoCrop = _store.autoCrop;
   late int _prefetch = _store.prefetchPages;
@@ -263,10 +264,12 @@ class _ViewerPageState extends State<ViewerPage> {
       if (_denoise != _store.denoise ||
           _prefetch != _store.prefetchPages ||
           _ink != ColorizeService.ink ||
+          _grade != ColorizeService.grade ||
           _lookKey != _store.lookOf(widget.path).tag) {
         _lookKey = _store.lookOf(widget.path).tag;
         _denoise = _store.denoise;
         _ink = ColorizeService.ink; // colors are processed differently: new cache keys
+        _grade = ColorizeService.grade;
         _prefetch = _store.prefetchPages;
         _focus();
       }

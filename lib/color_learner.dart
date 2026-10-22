@@ -187,6 +187,7 @@ class ColorLearner {
           () async => gray,
           denoise: store.denoise,
           ink: 0,
+          grade: 0,
           first: true, // not behind the pages of a whole book
         );
         pairs.add((r.bytes, bytes));

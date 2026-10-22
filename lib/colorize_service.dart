@@ -52,8 +52,9 @@ Future<Uint8List?> loadModelBytes([String asset = modelAsset]) async {
 }
 
 class _Job {
-  _Job(this.key, this.load, this.hints, this.denoise, this.look, {int? ink})
-    : ink = ink ?? ColorizeService.ink {
+  _Job(this.key, this.load, this.hints, this.denoise, this.look, {int? ink, int? grade})
+    : ink = ink ?? ColorizeService.ink,
+      grade = grade ?? ColorizeService.grade {
     // Prefetched pages may have no listener when they get cancelled.
     completer.future.ignore();
   }
@@ -66,6 +67,9 @@ class _Job {
 
   /// Color e-ink processing level the job was asked with (0 = none).
   final int ink;
+
+  /// Color direction level ([ArtGrade]) the job was asked with (0 = none).
+  final int grade;
 
   /// Waiting in the background queue (whole-book colorizing and the like).
   bool background = false;
@@ -117,7 +121,13 @@ class ColorizeService {
   /// cache keys; the library settings set it from the E-ink mode.
   static int ink = 0;
 
-  static final _postSuffix = RegExp(r'(_pal[0-9a-z]+|_bc[0-9a-z]+)?(_fb[0-9a-z]+)?(_ink[0-9]+)?$');
+  /// Color direction level ([ArtGrade]; 0 = off, 1..3). Part of the cache
+  /// keys; the library settings set it.
+  static int grade = 0;
+
+  static final _postSuffix = RegExp(
+    r'(_pal[0-9a-z]+|_bc[0-9a-z]+)?(_fb[0-9a-z]+)?(_ink[0-9]+)?(_ag[0-9]+)?$',
+  );
 
   /// The cache key of the same page before the steps after the model (the
   /// book's palette, color e-ink processing).
@@ -169,6 +179,7 @@ class ColorizeService {
     }
     key += look.tag;
     if (ink > 0) key += '_ink$ink';
+    if (grade > 0) key += '_ag$grade';
     return key;
   }
 
@@ -185,12 +196,13 @@ class ColorizeService {
     bool denoise = false,
     BookLook look = BookLook.none,
     int? ink,
+    int? grade,
   }) {
     final existing = _queue[key] ?? (_running?.key == key ? _running : null);
     if (existing != null) return existing.completer.future;
     // Already waiting in the background queue: now the reader wants it.
     final promoted = _background.remove(key);
-    final job = promoted ?? _Job(key, loadPage, hints, denoise, look, ink: ink);
+    final job = promoted ?? _Job(key, loadPage, hints, denoise, look, ink: ink, grade: grade);
     job.background = false;
     _queue[key] = job;
     _updateBackgroundLeft();
@@ -224,6 +236,7 @@ class ColorizeService {
     bool denoise = false,
     BookLook look = BookLook.none,
     int? ink,
+    int? grade,
     bool first = false,
   }) {
     final existing = _queue[key] ?? _background[key] ?? (_running?.key == key ? _running : null);
@@ -233,7 +246,7 @@ class ColorizeService {
       _updateBackgroundLeft();
       return existing.completer.future;
     }
-    final job = _Job(key, loadPage, hints, denoise, look, ink: ink)
+    final job = _Job(key, loadPage, hints, denoise, look, ink: ink, grade: grade)
       ..background = true
       ..wanted = true;
     first ? _toFront(key, job) : _background[key] = job;
@@ -306,7 +319,7 @@ class ColorizeService {
       }
       // With color e-ink processing, a page colorized before only needs that
       // processing (cheap) rather than the model again.
-      final post = job.ink > 0 || !job.look.isEmpty;
+      final post = job.ink > 0 || job.grade > 0 || !job.look.isEmpty;
       final plain = post && plainKey(job.key) != job.key ? await _readJpg(plainKey(job.key)) : null;
       final bytes = plain ?? await job.load();
       final id = _nextId++;
@@ -321,6 +334,7 @@ class ColorizeService {
         job.ink,
         plain != null,
         job.look.toMessage(),
+        job.grade,
       ]);
     } catch (e) {
       _running = null;
@@ -692,10 +706,11 @@ void _workerMain(List args) {
     final ink = m[4] as int;
     final inkOnly = m[5] as bool; // bytes are a colorized page: process only
     final look = BookLook.fromMessage(m[6] as List);
+    final grade = m.length > 7 ? m[7] as int : 0;
     try {
       if (inkOnly) {
         final sw = Stopwatch()..start();
-        final out = postProcess(bytes, look: look, ink: ink);
+        final out = postProcess(bytes, look: look, ink: ink, grade: grade);
         reply.send([
           id,
           TransferableTypedData.fromList([out]),
@@ -710,6 +725,7 @@ void _workerMain(List args) {
         hints: hints,
         denoiser: engine?.denoiserFor(wantDenoise),
         ink: ink,
+        grade: grade,
         look: look,
       );
       ColorizeResult r;

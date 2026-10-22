@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'art_grade.dart';
 import 'library_store.dart';
 import 'onnx_engine.dart';
 import 'pc_platform.dart';
@@ -32,6 +33,7 @@ Future<void> showReaderSettings(
           children: [
             if (text) ..._textSection(store),
             if (comic) ..._colorSection(store),
+            if (comic) ..._gradeSection(store),
             if (comic && isPc) ..._pcSection(store, engine),
             ..._screenSection(store, comic: comic),
             ..._turnSection(store, comic: comic),
@@ -274,6 +276,15 @@ List<Widget> _turnSection(LibraryStore s, {required bool comic}) => [
     const {0: '끔', 5: '5초', 10: '10초', 20: '20초', 30: '30초', 60: '1분'},
     s.autoTurnSeconds,
     (v) => s.update((s) => s.autoTurnSeconds = v),
+  ),
+];
+
+List<Widget> _gradeSection(LibraryStore s) => [
+  _header('색감 연출'),
+  _choices('그림자와 빛의 색', ArtGrade.levels, s.artGrade, (v) => s.update((s) => s.artGrade = v)),
+  const Text(
+    '채색한 페이지에 미술 기법의 색감을 입힙니다. 그림자는 검정과 회색 대신 짙은 남색·보라, 빛은 따뜻한 금빛과 아이보리, 피부 그림자는 로즈브라운과 모브 톤으로 표현하고 어두운 곳은 탁하지 않게 합니다. 종이와 말풍선은 흰색 그대로입니다. 원래 컬러인 책은 바꾸지 않습니다.',
+    style: TextStyle(fontSize: 12),
   ),
 ];
 

@@ -45,7 +45,8 @@ class InkColor {
   /// CIE chroma the strong colors of a page are brought to at [level]; the
   /// reference is a color image shown on the panel, whose colors look
   /// muted but clearly present at about 55.
-  static double targetChroma(int level) => const [0.0, 32.0, 44.0, 56.0, 68.0, 82.0][level.clamp(0, 5)];
+  static double targetChroma(int level) =>
+      const [0.0, 32.0, 44.0, 56.0, 68.0, 82.0][level.clamp(0, 5)];
 
   /// Gathers the color of a page into areas: the panel's color layer has
   /// about half the resolution of its black and white, so color that sits in
@@ -213,7 +214,10 @@ class InkColor {
 
   /// Applies a 33^3 RGB table ([buildTable]) to tightly packed RGB bytes in
   /// place, trilinearly.
-  static void applyTable(Uint8List table, Uint8List rgb) {
+  ///
+  /// With [grayBypass] false, gray pixels go through the table as well (a
+  /// table that gives gray tones a cast).
+  static void applyTable(Uint8List table, Uint8List rgb, {bool grayBypass = true}) {
     const n = _n, step = 255 / (n - 1);
     // Per channel value: lower grid index and weight of the upper one (0..256).
     final idx = Int32List(256), frac = Int32List(256);
@@ -231,8 +235,8 @@ class InkColor {
       // into the table over a few levels of channel spread (the table's
       // corners next to the gray axis are slightly colored).
       final int spread = math.max(r, math.max(g, b)) - math.min(r, math.min(g, b));
-      if (spread <= 3) continue;
-      final mix = spread >= 11 ? 256 : (spread - 3) * 32;
+      if (grayBypass && spread <= 3) continue;
+      final mix = !grayBypass || spread >= 11 ? 256 : (spread - 3) * 32;
       final fr = frac[r], fg = frac[g], fb = frac[b];
       final base = idx[r] * sr + idx[g] * sg + idx[b] * 3;
       for (var c = 0; c < 3; c++) {

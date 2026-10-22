@@ -156,6 +156,10 @@ class LibraryStore extends ChangeNotifier {
   /// 4 maximum.
   int inkColor = 3;
 
+  /// Color direction of colorized pages ([ArtGrade]): shadows in indigo
+  /// and violet, warm light, rose-brown skin shades. 0 off, 1..3.
+  int artGrade = 0;
+
   /// Turn the page by itself every this many seconds (0 = off).
   int autoTurnSeconds = 0;
 
@@ -195,7 +199,10 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// The E-ink mode processes colorized pages for color e-ink panels.
-  void _syncInk() => ColorizeService.ink = eink ? inkColor : 0;
+  void _syncInk() {
+    ColorizeService.ink = eink ? inkColor : 0;
+    ColorizeService.grade = artGrade;
+  }
 
   void _read() {
     final p = _prefs;
@@ -223,6 +230,7 @@ class LibraryStore extends ChangeNotifier {
     contrast = p.getDouble('contrast') ?? contrast;
     saturation = p.getDouble('saturation') ?? saturation;
     inkColor = p.getInt('inkColor') ?? inkColor;
+    artGrade = p.getInt('artGrade') ?? artGrade;
     // Build 45 raised the display saturation to 140% with the E-ink mode;
     // the color e-ink processing replaces that.
     if (p.getBool('inkMigrated') != true) {
@@ -352,6 +360,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setDouble('contrast', contrast);
     _prefs.setDouble('saturation', saturation);
     _prefs.setInt('inkColor', inkColor);
+    _prefs.setInt('artGrade', artGrade);
     _prefs.setInt('autoTurnSeconds', autoTurnSeconds);
     _prefs.setString('orientation', orientation);
     _prefs.setBool('showStatus', showStatus);
@@ -487,6 +496,7 @@ class LibraryStore extends ChangeNotifier {
     contrast = contrast.clamp(0.5, 2.5);
     saturation = saturation.clamp(0.0, 3.0);
     inkColor = inkColor.clamp(0, 5);
+    artGrade = artGrade.clamp(0, 3);
     prefetchPages = prefetchPages.clamp(1, 1000);
     textSize = textSize.clamp(10.0, 48.0);
     textLineHeight = textLineHeight.clamp(1.0, 3.0);
