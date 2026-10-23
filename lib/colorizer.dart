@@ -1031,32 +1031,47 @@ img.Image _predictRgb(
       var b = (pred[k * 3 + 2] * 255).round().clamp(0, 255);
 
       if (style == 'chromatic_novel') {
+        // [Pass 1] 576x832 AI 출력 버퍼 색상 교정 (Ultimate 8-layer pipeline)
+        // 오직 픽셀 색상값(r,g,b)과 휘도(luma)로만 처리 — 좌표 조건 없음
         final maxC = r > g ? (r > b ? r : b) : (g > b ? g : b);
         final minC = r < g ? (r < b ? r : b) : (g < b ? g : b);
         final chroma = maxC - minC;
+        final lumaApprox = (r * 77 + g * 150 + b * 29) >> 8; // ITU-R BT.601
 
-        // 1) 무채색 방치 영역(하얀 뼈/돌) -> 슬레이트 블루/인디고 착색
-        if (chroma < 35) {
-          r = (r * 180 + 55 * 76) >> 8;
-          g = (g * 180 + 75 * 76) >> 8;
-          b = (b * 180 + 115 * 76) >> 8;
+        // ① 스크린톤 구간(80 <= luma <= 218) 녹색 번짐 박멸 → 딥 바이올렛 72% Override
+        // ④ 풀밭 고채도(chroma>=115, G dominant) → 딥 올리브/틸 변환
+        // ⑤ 형광 노랑(Hue 45~62°) → 적갈색 롤오프
+        if (lumaApprox >= 80 && lumaApprox <= 218) {
+          if (g >= r && g >= b && chroma >= 115) {
+            // ④ 고채도 풀밭(sat>0.42, G dominant): 형광 연두 → 시네마틱 딥 올리브/틸
+            // R×0.72(노란기 제거), G 포레스트 보존, B+틸 가미
+            r = (r * 184) >> 8;                              // R ×0.72
+            g = (g * 215) >> 8;                              // G 95% 포레스트 그린
+            b = math.min(255, (b * 230 + 18) >> 8);          // B 틸 가미
+          } else if (g >= r && g >= b && chroma < 115) {
+            // ① 저~중채도 녹색 번짐(팔/모래/의복 오염) → 딥 바이올렛[82,64,128] 72% Override
+            final avgRB = (r + b) >> 1;
+            r = (avgRB * 72 + 82 * 184) >> 8;                // 28%원본 + 72%violet.R
+            g = (avgRB * 72 + 64 * 184) >> 8;                // 28%원본 + 72%violet.G
+            b = (avgRB * 72 + 128 * 184) >> 8;               // 28%원본 + 72%violet.B
+          }
         }
-        // 2) 녹색 번짐(팔/모래의 저~중채도 녹색) -> 네이비/모브 치환
-        else if (g >= r && g >= b && chroma < 115) {
-          final avgRB = (r + b) >> 1;
-          r = (avgRB * 180 + 85 * 76) >> 8;
-          g = (avgRB * 140 + 55 * 76) >> 8;
-          b = (avgRB * 190 + 110 * 76) >> 8;
+
+        // ⑤ 형광 노랑 롤오프: Hue 45°~62° 엄격 한정 (r>195, g>175, b<95, r>=g)
+        //    — Hue>=65° 연두/풀밭(g dominant + chroma>=115)은 이 조건에 해당 안 됨
+        if (r > 195 && g > 175 && b < 95 && r >= g) {
+          g = (g * 150) >> 8;   // G 41% 감쇠 → 적갈색/테라코타
+          b = (b * 180) >> 8;   // B 30% 감쇠
         }
-        // 3) 고채도 풀밭(형광 연두) -> 차분한 시네마틱 올리브/청록 톤다운
-        else if (g > r + 25 && chroma >= 115) {
-          g = (g * 215) >> 8;
-          b = (b * 220 + 35) > 255 ? 255 : (b * 220 + 35) >> 8;
-        }
-        // 4) 형광 노란색(가아라 머리 등) -> 적갈색/테라코타 롤오프
-        else if (r > 195 && g > 175 && b < 95 && r >= g) {
-          g = (g * 150) >> 8;
-          b = (b * 180) >> 8;
+
+        // ② 모래/거친 도트 박멸: 스크린톤 구간에서 붉은 점박이(r>b+25, 저채도)
+        //    → 망점 노이즈 억제 후 샌드 브라운으로 교정
+        if (lumaApprox >= 80 && lumaApprox <= 218 &&
+            r > b + 25 && chroma < 115 && r >= g) {
+          // 샌드 베이지/골든 브라운 [210,172,114] 방향으로 50% 교정
+          r = (r * 128 + 210 * 128) >> 8;
+          g = (g * 128 + 172 * 128) >> 8;
+          b = (b * 128 + 114 * 128) >> 8;
         }
       }
 
@@ -1118,40 +1133,88 @@ img.Image _composeRgbMultiply(
   final isChromaticNovel = style == 'chromatic_novel';
   final isEinkPantone = style == 'eink_pantone';
 
+  // chromatic_novel: 수직 대기 조명(Vertical Atmosphere Gradient)을 위한 이미지 치수
+  final imgWidth = src.width;
+  final imgHeight = src.height;
+
   for (var i = 0; i < s.length; i += 3) {
     if (isChromaticNovel) {
-      final y = _luma(s[i], s[i + 1], s[i + 2]);
-      final lineFactor = _lutLineFactor[y] >> 2;
-      final r = c[i];
-      final g = c[i + 1];
-      final b = c[i + 2];
+      // [Pass 2] 전체 해상도 시네마틱 합성 (Ultimate 8-layer pipeline)
+      final y = _luma(s[i], s[i + 1], s[i + 2]); // 원본 흑백 휘도
+      var cr = c[i];
+      var cg = c[i + 1];
+      var cb = c[i + 2];
+
+      // ⑥ 뼈/무기 강제 슬레이트 착색: 저채도 무채색(sat<14%), 100 < y < 236
+      final maxC2 = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
+      final minC2 = cr < cg ? (cr < cb ? cr : cb) : (cg < cb ? cg : cb);
+      final chroma2 = maxC2 - minC2;
+      if (chroma2 < 36 && y > 100 && y < 236) {
+        // slate_blue = [72, 90, 136], 68% override weight
+        // bone_depth = clip((236-y)/125, 0, 1)
+        final bd256 = ((236 - y) * 256 ~/ 125).clamp(0, 256);
+        final w = (bd256 * 174) >> 8; // 0.68 * bd256
+        final inv = 256 - w;
+        cr = ((cr * inv + 72 * w) >> 8).clamp(0, 255);
+        cg = ((cg * inv + 90 * w) >> 8).clamp(0, 255);
+        cb = ((cb * inv + 136 * w) >> 8).clamp(0, 255);
+      }
+
+      // ③ Split-Toning 3배 증폭 (골든 앰버 하이라이트 vs 딥 인디고 섀도우)
+      // 하이라이트 (185 < y < 240): +R+30, +G+18, -B-24
+      if (y > 185 && y < 240) {
+        final ht = ((y - 185) * 256 ~/ 55).clamp(0, 256);
+        cr = (cr + ((30 * ht) >> 8)).clamp(0, 255);
+        cg = (cg + ((18 * ht) >> 8)).clamp(0, 255);
+        cb = (cb - ((24 * ht) >> 8)).clamp(0, 255);
+      }
+      // 음영 스크린톤 (75 <= y <= 185): -R-26, -G-18, +B+38
+      if (y >= 75 && y <= 185) {
+        final dt = ((185 - y) * 256 ~/ 110).clamp(0, 256);
+        cr = (cr - ((26 * dt) >> 8)).clamp(0, 255);
+        cg = (cg - ((18 * dt) >> 8)).clamp(0, 255);
+        cb = (cb + ((38 * dt) >> 8)).clamp(0, 255);
+      }
+
+      // ⑦ 수직 시네마틱 공간 조명 (Vertical Atmosphere Gradient 20%)
+      // top_light=[1.10,1.04,0.94], bottom_dark=[0.86,0.90,1.14]
+      // 합산: r×(1.02-0.048t), g×(1.008-0.028t), b×(0.988+0.040t)  t∈[0,1]
+      // 256 정수: rScale=261-12t/256, gScale=258-7t/256, bScale=253+10t/256
+      final normY256 = imgHeight > 0 ? ((i ~/ 3 ~/ imgWidth) * 255 ~/ imgHeight) : 0;
+      final rScale = 261 - ((12 * normY256) >> 8);
+      final gScale = 258 - ((7  * normY256) >> 8);
+      final bScale = 253 + ((10 * normY256) >> 8);
+      cr = ((cr * rScale) >> 8).clamp(0, 255);
+      cg = ((cg * gScale) >> 8).clamp(0, 255);
+      cb = ((cb * bScale) >> 8).clamp(0, 255);
+
+      // 스크린톤 인디고 틴트 (tone band, 80 <= y <= 218)
+      // indigo_tint=[0.93,0.89,1.09], weight 0.26, peak at y=148
+      if (y >= 80 && y <= 218) {
+        final dist = (y - 148).abs();
+        if (dist < 68) {
+          final tb256 = ((68 - dist) * 256) ~/ 68; // 0..256
+          // r*(1-0.0182*tb), g*(1-0.0286*tb), b*(1+0.0234*tb)
+          // 256 정수: 5, 7, 6 각 채널 감쇠/증폭 계수
+          final indigoR = (256 - ((5 * tb256) >> 8)).clamp(240, 256);
+          final indigoG = (256 - ((7 * tb256) >> 8)).clamp(240, 256);
+          final indigoB = (256 + ((6 * tb256) >> 8)).clamp(256, 272);
+          cr = ((cr * indigoR) >> 8).clamp(0, 255);
+          cg = ((cg * indigoG) >> 8).clamp(0, 255);
+          cb = ((cb * indigoB) >> 8).clamp(0, 255);
+        }
+      }
+
+      // ① 먹선 100% 선명도 복원 + 말풍선 순백 보호 (원칙 1)
+      // gamma 0.70, Pure Black #000000 보장
       int outR, outG, outB;
-
       if (y >= 240) {
-        // 말풍선 및 하이라이트 절대 순백 보호 (누런 침범 방지)
-        outR = 255;
-        outG = 255;
-        outB = 255;
-      } else if (y < 85) {
-        // 먹선 및 암부: 2번(natural)과 동일한 날카로운 블랙 유지 (뿌연 현상 방지)
-        outR = (r * lineFactor) >> 8;
-        outG = (g * lineFactor) >> 8;
-        outB = (b * lineFactor) >> 8;
+        outR = 255; outG = 255; outB = 255; // 순백 절대 보호
       } else {
-        // 중간 스크린톤 구간(85 <= y < 240): 골든 하이라이트 & 딥 인디고 섀도우 Split-Toning
-        // y가 어두울수록 검은색 대신 인디고 암부(R:32, G:28, B:58)가 섞이게 보간
-        final shadowWeight = 240 - y; // 0 ~ 155
-        final baseWeight = 256 - shadowWeight;
-        final warmR = y > 190 ? 12 : 0;
-        final warmG = y > 190 ? 6 : 0;
-
-        final blendedR = ((r + warmR) * baseWeight + 32 * shadowWeight) >> 8;
-        final blendedG = ((g + warmG) * baseWeight + 28 * shadowWeight) >> 8;
-        final blendedB = (b * baseWeight + 58 * shadowWeight) >> 8;
-
-        outR = (blendedR * lineFactor) >> 8;
-        outG = (blendedG * lineFactor) >> 8;
-        outB = (blendedB * lineFactor) >> 8;
+        final lf = _lutLineFactor[y]; // 0..1024 (gamma 0.70)
+        outR = ((cr * lf) >> 10).clamp(0, 255);
+        outG = ((cg * lf) >> 10).clamp(0, 255);
+        outB = ((cb * lf) >> 10).clamp(0, 255);
       }
 
       if (blend) {
@@ -1160,9 +1223,7 @@ img.Image _composeRgbMultiply(
         outB = (s[i + 2] * (1.0 - blendRatio) + outB * blendRatio).round().clamp(0, 255);
       }
 
-      o[i] = outR.clamp(0, 255);
-      o[i + 1] = outG.clamp(0, 255);
-      o[i + 2] = outB.clamp(0, 255);
+      o[i] = outR; o[i + 1] = outG; o[i + 2] = outB;
       continue;
     }
 
