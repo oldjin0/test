@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'batch_colorizer.dart';
 import 'colorize_service.dart';
+import 'folder_watcher.dart';
 import 'gemini_settings_dialog.dart';
 import 'library_store.dart';
 import 'storage.dart';
@@ -31,11 +32,24 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
   bool _isSelectingFiles = false;
   bool _needsBatteryOptimizationExemption = false;
 
+  // 폴더 감시 모드 상태.
+  FolderWatcherModel? _watcher;
+  int _watchedNewCount = 0;
+  bool _watchToggleInFlight = false;
+  bool _autoStartInFlight = false;
+
   @override
   void initState() {
     super.initState();
     _engine = BatchColorizerEngine(colorizer: widget.colorizer);
     _checkBatteryOptimization();
+  }
+
+  @override
+  void dispose() {
+    _watcher?.dispose();
+    _watcher = null;
+    super.dispose();
   }
 
   Future<void> _checkBatteryOptimization() async {
@@ -152,6 +166,78 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
       }
     } finally {
       if (mounted) setState(() => _isSelectingFiles = false);
+    }
+  }
+
+  /// '폴더 감시' 스위치 토글. ON이면 폴더를 선택받아 감시를 시작하고,
+  /// OFF면 감시를 정리한다.
+  Future<void> _toggleFolderWatch(bool enable) async {
+    if (_watchToggleInFlight) return;
+    _watchToggleInFlight = true;
+    try {
+      if (enable) {
+        if (_watcher != null) return;
+        final path = await pickFolder();
+        if (path == null || _watcher != null) return; // 선택 취소 → 감시 안 함
+        final watcher = FolderWatcherModel(
+          paths: [path],
+          onNewItems: _onWatchedItems,
+        );
+        _watcher = watcher;
+        _watchedNewCount = 0;
+        await watcher.start();
+      } else {
+        _watcher?.dispose();
+        _watcher = null;
+      }
+      if (mounted) setState(() {});
+    } catch (e) {
+      _watcher?.dispose();
+      _watcher = null;
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('폴더 감시 오류: $e')));
+      }
+    } finally {
+      _watchToggleInFlight = false;
+    }
+  }
+
+  /// 감시 중인 폴더를 하나 더 추가한다.
+  Future<void> _addWatchFolder() async {
+    final watcher = _watcher;
+    if (watcher == null) return;
+    try {
+      final path = await pickFolder();
+      if (path == null) return;
+      await watcher.addPath(path);
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('감시 폴더 추가 오류: $e')));
+      }
+    }
+  }
+
+  /// 감시 중 새 파일이 발견되면 '폴더 추가' 버튼과 동일한 코드 경로
+  /// (_engine.addItem)로 큐에 넣고, 배치가 멈춰 있으면 자동으로 시작한다.
+  /// 이미 실행 중이면 그냥 큐에 적층된다(실행 루프가 큐를 계속 참조).
+  Future<void> _onWatchedItems(List<WatchItem> items) async {
+    for (final item in items) {
+      await _engine.addItem(item.path);
+    }
+    if (mounted) setState(() => _watchedNewCount += items.length);
+    await _autoStartBatchIfNeeded();
+  }
+
+  Future<void> _autoStartBatchIfNeeded() async {
+    if (_autoStartInFlight) return;
+    if (_engine.progress.value.isRunning) return; // 실행 중이면 큐에 적층됨
+    _autoStartInFlight = true;
+    try {
+      await _startBatchWithCheck();
+    } finally {
+      _autoStartInFlight = false;
     }
   }
 
@@ -581,6 +667,64 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
     );
   }
 
+  /// 작업 목록 영역의 '폴더 감시' 행. 스위치 + 감시 상태 + 감시 폴더 추가.
+  Widget _buildFolderWatchRow(BatchProgress prog) {
+    final watcher = _watcher;
+    final watching = watcher != null && watcher.isWatching;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: watching
+            ? Colors.green.withValues(alpha: 0.10)
+            : Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: watching
+              ? Colors.green.withValues(alpha: 0.4)
+              : Colors.white.withValues(alpha: 0.12),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.visibility,
+            size: 18,
+            color: watching ? Colors.greenAccent : Colors.grey,
+          ),
+          const SizedBox(width: 8),
+          const Text('폴더 감시', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+          const SizedBox(width: 2),
+          Switch(
+            value: watching,
+            onChanged: _watchToggleInFlight ? null : _toggleFolderWatch,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              watching
+                  ? '감시 중: 폴더 ${watcher.paths.length}개, 신규 ${_watchedNewCount}건 처리'
+                  : '켜면 선택한 폴더에 새 이미지·압축파일이 들어올 때 자동으로 채색합니다.',
+              style: TextStyle(
+                fontSize: 11,
+                color: watching ? Colors.greenAccent : Colors.grey,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (watching)
+            TextButton.icon(
+              icon: const Icon(Icons.create_new_folder_outlined, size: 16),
+              label: const Text('폴더 추가', style: TextStyle(fontSize: 12)),
+              onPressed: _addWatchFolder,
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildQueueCard(BatchProgress prog) {
     return Card(
       elevation: 1,
@@ -604,6 +748,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                   ),
               ],
             ),
+            _buildFolderWatchRow(prog),
             const SizedBox(height: 8),
             if (_isSelectingFiles)
               Padding(
