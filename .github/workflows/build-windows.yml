@@ -120,15 +120,18 @@ jobs:
       - name: The packaged program starts and stays up
         shell: pwsh
         run: |
-          # Unpack the zip the way the in-app updater does (the system tar) and
-          # start that copy: proves the archive itself is complete and readable.
+          # Unpack with .NET (locale-independent - bsdtar on en-US runners cannot
+          # decode the Korean launcher names in the UTF-8 zip) and start that
+          # copy: proves the archive itself is complete and readable.
           $viewerExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7LGE7IOJ67ew7Ja0LmV4ZQ=="))
           $autoExe = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("7Jik7Yag7LGE7IOJ6riwLmV4ZQ=="))
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
           New-Item -ItemType Directory unpacked | Out-Null
-          & "$env:SystemRoot/System32/tar.exe" -xf MangaViewer-windows.zip -C unpacked
-          if ($LASTEXITCODE -ne 0) { throw "tar could not unpack the release zip" }
+          [System.IO.Compression.ZipFile]::ExtractToDirectory(
+            (Resolve-Path "MangaViewer-windows.zip").Path,
+            (Resolve-Path "unpacked").Path)
           foreach ($f in 'manga_viewer.exe', $viewerExe, $autoExe, 'data/app.so', 'flutter_windows.dll', 'models/colorizer_fp32.onnx', 'vcruntime140_1.dll', 'version.json') {
-            if (-not (Test-Path "unpacked/$f")) { throw "missing in the zip: $f" }
+            if (-not (Test-Path (Join-Path "unpacked" $f))) { throw "missing in the zip: $f" }
           }
           $exe = (Resolve-Path "unpacked/manga_viewer.exe").Path
           $p = Start-Process $exe -PassThru
@@ -136,7 +139,7 @@ jobs:
           if ($p.HasExited) { throw "manga_viewer.exe exited with code $($p.ExitCode)" }
           Write-Output "running: $($p.MainWindowTitle)"
           Stop-Process $p -Force
-          $autoPath = (Resolve-Path "unpacked/$autoExe").Path
+          $autoPath = (Resolve-Path (Join-Path "unpacked" $autoExe)).Path
           $p2 = Start-Process $autoPath -PassThru
           Start-Sleep -Seconds 8
           if ($p2.HasExited) { throw "$autoExe exited with code $($p2.ExitCode)" }
