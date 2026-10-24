@@ -202,7 +202,9 @@ class LibraryStore extends ChangeNotifier {
   /// Gemini smart mode: 'palette' (cover/book smart palette) or 'hints' (scene region hints).
   String geminiMode = 'palette';
 
-  /// Active coloring preset: 'natural', 'soft_pastel', 'vivid_anime', 'cinematic_warm', 'retro_print', 'monochrome_accent'
+  /// Active coloring preset: 'natural', 'chromatic_novel', 'eink_pantone',
+  /// 'cel_shade', 'vivid_anime', 'warm_amber', 'soft_pastel', 'retro_print',
+  /// 'monochrome_accent'
   String colorPreset = 'natural';
 
   static Future<LibraryStore> load() async {

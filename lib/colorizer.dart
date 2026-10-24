@@ -7,6 +7,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'book_colors.dart';
 import 'art_grade.dart';
+import 'cel_shade.dart';
 import 'ink_color.dart';
 import 'xnnpack.dart';
 
@@ -411,7 +412,11 @@ ColorizeResult colorizePage(
   final ColorizeMode mode;
   final img.Image out;
   if (model != null) {
-    if (model.output == ModelOutput.rgb) {
+    if (model.output == ModelOutput.rgb && style == 'cel_shade') {
+      // 클린 셀 (팬컬러링): the model's colors are re-shaded as flat cel
+      // fills (cel_shade.dart) instead of the multiply composition.
+      out = celShadeImage(src, _predictRgb(src, model, hints, denoiser, look: look, style: style));
+    } else if (model.output == ModelOutput.rgb) {
       out = _composeRgbMultiply(
         src,
         _predictRgb(src, model, hints, denoiser, look: look, style: style),

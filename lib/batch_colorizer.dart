@@ -19,6 +19,7 @@ enum BatchPreset {
   natural('내추럴 (2번 표준 · 권장)', 'natural', 1.0, 1.0, 1.0),
   chromaticNovel('크로매틱 노블 (극장판 애니)', 'chromatic_novel', 1.0, 1.0, 1.0),
   einkPantone('모안 팬톤 (칼레이도3 전용)', 'eink_pantone', 1.0, 1.0, 1.0),
+  celShade('클린 셀 (팬컬러링)', 'cel_shade', 1.0, 1.0, 1.0),
   vividAnime('비비드 애니 (화사한 원색)', 'vivid_anime', 1.08, 1.35, 1.0),
   warmAmber('클래식 웜 (따뜻한 브라운)', 'warm_amber', 1.05, 1.10, 1.0),
   softPastel('소프트 파스텔 (수채화풍)', 'soft_pastel', 0.90, 0.85, 0.90),
@@ -302,8 +303,11 @@ class BatchColorizerEngine {
             if (_cancelRequested) break;
 
             final pageBytes = await book.page(pageIdx);
+            // Style is part of the key (like ColorizeService.keyFor) so
+            // pages colored with a different preset are not served from
+            // this run's cache.
             final pageKey =
-                'batch:${item.title}:$pageIdx-c${inkContrast.toStringAsFixed(2)}-s${saturation.toStringAsFixed(2)}';
+                'batch:${item.title}:$pageIdx-c${inkContrast.toStringAsFixed(2)}-s${saturation.toStringAsFixed(2)}${styleKey == 'natural' ? '' : '-$styleKey'}';
 
             List<ColorHint> pageHints = const [];
             if (apiMode == BatchApiMode.sceneHints && GeminiService.instance.hasKeys) {

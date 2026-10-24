@@ -666,6 +666,12 @@ class _ViewerPageState extends State<ViewerPage> {
         icon: Icons.chrome_reader_mode_outlined,
       ),
       (
+        id: 'cel_shade',
+        name: '클린 셀 (팬컬러링)',
+        desc: '선화를 살리고 면색을 균일하게 정리한 셀 애니메이션 팬컬러링 스타일',
+        icon: Icons.format_paint_outlined,
+      ),
+      (
         id: 'vivid_anime',
         name: '비비드 애니 (화사한 원색)',
         desc: '애니메이션 원화처럼 생생하고 화사한 원색 대비 + 딥블랙 먹선',
@@ -712,7 +718,7 @@ class _ViewerPageState extends State<ViewerPage> {
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Text(
-                    '독립 화풍 프리셋 (6종)',
+                    '독립 화풍 프리셋 (9종)',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                   ),
                 ),
