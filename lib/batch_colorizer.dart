@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -6,6 +7,7 @@ import 'dart:typed_data';
 import 'package:archive/archive_io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'book_colors.dart' show BookLook;
 import 'colorize_service.dart';
@@ -87,6 +89,29 @@ class BatchItem {
     }
     return '${(fileSizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
+
+  Map<String, Object?> toJson() => {
+    'path': path,
+    'title': title,
+    'isArchive': isArchive,
+    'totalPages': totalPages,
+    'completedPages': completedPages,
+    'completed': completed,
+    'fileSizeBytes': fileSizeBytes,
+  };
+
+  static BatchItem fromJson(Map<Object?, Object?> m) {
+    final item = BatchItem(
+      path: m['path'] as String? ?? '',
+      title: m['title'] as String? ?? '',
+      isArchive: m['isArchive'] as bool? ?? true,
+    );
+    item.totalPages = m['totalPages'] as int? ?? 0;
+    item.completedPages = m['completedPages'] as int? ?? 0;
+    item.completed = m['completed'] as bool? ?? false;
+    item.fileSizeBytes = m['fileSizeBytes'] as int? ?? 0;
+    return item;
+  }
 }
 
 class BatchProgress {
@@ -151,6 +176,94 @@ class BatchColorizerEngine {
   bool _cancelRequested = false;
   bool _pauseRequested = false;
 
+  /// Persisted queue + settings, so a stop, an app kill or an OS reclaim
+  /// does not lose the work: pages already colored live in the colorize
+  /// cache anyway, and the queue remembers how far each book got.
+  static const _queuePrefsKey = 'batchQueue3';
+
+  Map<String, Object?> _snapshot() => {
+    'settings': {
+      'presetName': preset.name,
+      'styleKey': styleKey,
+      'inkContrast': inkContrast,
+      'saturation': saturation,
+      'blendRatio': blendRatio,
+      'apiMode': apiMode.name,
+      'customOutputDir': customOutputDir,
+    },
+    'items': [for (final it in queue) it.toJson()],
+  };
+
+  Future<void> saveQueue() async {
+    if (queue.isEmpty) {
+      await clearSaved();
+      return;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_queuePrefsKey, jsonEncode(_snapshot()));
+    } catch (_) {}
+  }
+
+  /// Restores a queue saved by a previous run (call once at app start).
+  /// Items whose file is gone are kept, marked with an error, so the user
+  /// sees them and can remove them.
+  Future<void> restoreQueue() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_queuePrefsKey);
+      if (raw == null || raw.isEmpty) return;
+      final m = jsonDecode(raw) as Map<Object?, Object?>;
+      final st = (m['settings'] as Map?)?.cast<Object?, Object?>();
+      if (st != null) {
+        final pn = st['presetName'] as String?;
+        if (pn != null) {
+          for (final e in BatchPreset.values) {
+            if (e.name == pn) preset = e;
+          }
+        }
+        styleKey = st['styleKey'] as String? ?? styleKey;
+        inkContrast = (st['inkContrast'] as num?)?.toDouble() ?? inkContrast;
+        saturation = (st['saturation'] as num?)?.toDouble() ?? saturation;
+        blendRatio = (st['blendRatio'] as num?)?.toDouble() ?? blendRatio;
+        final am = st['apiMode'] as String?;
+        if (am != null) {
+          for (final e in BatchApiMode.values) {
+            if (e.name == am) apiMode = e;
+          }
+        }
+        customOutputDir = st['customOutputDir'] as String? ?? customOutputDir;
+      }
+      for (final jm in (m['items'] as List? ?? const [])) {
+        final item = BatchItem.fromJson((jm as Map).cast<Object?, Object?>());
+        if (item.completed) {
+          item.status = '완료';
+        } else {
+          final type = await FileSystemEntity.type(item.path);
+          final exists = type != FileSystemEntityType.notFound;
+          if (exists) {
+            item.status =
+                item.completedPages > 0
+                ? '이전 작업 (${item.completedPages}/${item.totalPages}쪽) — 시작을 누르면 이어서 채색'
+                : '준비됨';
+          } else {
+            item.error = '파일을 찾을 수 없음';
+            item.status = '파일 없음';
+          }
+        }
+        queue.add(item);
+      }
+      if (queue.isNotEmpty) _updateProgressOverview();
+    } catch (_) {}
+  }
+
+  Future<void> clearSaved() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_queuePrefsKey);
+    } catch (_) {}
+  }
+
   void applyPreset(BatchPreset p) {
     preset = p;
     styleKey = p.styleKey;
@@ -178,6 +291,7 @@ class BatchColorizerEngine {
 
     queue.add(item);
     _updateProgressOverview();
+    unawaited(saveQueue());
 
     try {
       final book = await ComicBook.open(path);
@@ -198,12 +312,14 @@ class BatchColorizerEngine {
     if (index >= 0 && index < queue.length) {
       queue.removeAt(index);
       _updateProgressOverview();
+      unawaited(saveQueue());
     }
   }
 
   void clearQueue() {
     queue.clear();
     _updateProgressOverview();
+    unawaited(clearSaved());
   }
 
   void _updateProgressOverview() {
@@ -250,6 +366,7 @@ class BatchColorizerEngine {
   void cancel() {
     _cancelRequested = true;
     _pauseRequested = false;
+    unawaited(saveQueue());
   }
 
   Future<void> start() async {
@@ -257,10 +374,11 @@ class BatchColorizerEngine {
 
     _cancelRequested = false;
     _pauseRequested = false;
+    unawaited(saveQueue());
 
     final service = await colorizer;
     final totalOverall = queue.fold<int>(0, (sum, i) => sum + i.totalPages);
-    var processedOverall = queue.fold<int>(0, (sum, i) => sum + i.completedPages);
+    final processedOverall = queue.fold<int>(0, (sum, i) => sum + i.completedPages);
 
     final stopwatch = Stopwatch()..start();
     var pagesProcessedInRun = 0;
@@ -319,40 +437,64 @@ class BatchColorizerEngine {
             } catch (_) {}
           }
 
-          for (var pageIdx = item.completedPages; pageIdx < book.length; pageIdx++) {
+          // The output zip/folder is always rebuilt from page 0: pages
+          // before completedPages come back from the colorize cache (fast,
+          // no model run), so a stop, a cancel or an app kill loses nothing
+          // and the finished file is complete.
+          for (var pageIdx = 0; pageIdx < book.length; pageIdx++) {
             while (_pauseRequested && !_cancelRequested) {
               await Future.delayed(const Duration(milliseconds: 200));
             }
             if (_cancelRequested) break;
 
-            final pageBytes = await book.page(pageIdx);
-            // Style is part of the key (like ColorizeService.keyFor) so
-            // pages colored with a different preset are not served from
-            // this run's cache. The 'b2' generation also drops entries
-            // written before styles joined the key, which could serve a
-            // chromatic_novel result as natural.
             final pageKey =
                 'b2:${item.title}:$pageIdx-c${inkContrast.toStringAsFixed(2)}-s${saturation.toStringAsFixed(2)}${styleKey == 'natural' ? '' : '-$styleKey'}';
 
-            List<ColorHint> pageHints = const [];
-            if (apiMode == BatchApiMode.sceneHints && GeminiService.instance.hasKeys) {
-              try {
-                final detected = await GeminiService.instance.extractSceneHints(pageBytes);
-                if (detected != null && detected.isNotEmpty) pageHints = detected;
-              } catch (_) {}
+            // Progress record ahead of the cache (saved right at an app
+            // kill): pull the resume point back and colorize for real.
+            if (pageIdx < item.completedPages && !service.isCached(pageKey)) {
+              item.completedPages = pageIdx;
             }
+            final isResumeFill = pageIdx < item.completedPages;
 
-            final ColorizeResult res = await service.colorize(
-              pageKey,
-              () async => pageBytes,
-              hints: pageHints,
-              denoise: false,
-              look: coverLook,
-              inkContrast: inkContrast,
-              saturation: saturation,
-              blendRatio: blendRatio,
-              style: styleKey,
-            );
+            Uint8List pageBytes = Uint8List(0);
+            List<ColorHint> pageHints = const [];
+            final ColorizeResult res;
+
+            if (isResumeFill) {
+              // Resume fill from the cache — the model does not run.
+              res = await service.colorize(
+                pageKey,
+                () => book.page(pageIdx),
+                denoise: false,
+                look: coverLook,
+                inkContrast: inkContrast,
+                saturation: saturation,
+                blendRatio: blendRatio,
+                style: styleKey,
+              );
+            } else {
+              pageBytes = await book.page(pageIdx);
+
+              if (apiMode == BatchApiMode.sceneHints && GeminiService.instance.hasKeys) {
+                try {
+                  final detected = await GeminiService.instance.extractSceneHints(pageBytes);
+                  if (detected != null && detected.isNotEmpty) pageHints = detected;
+                } catch (_) {}
+              }
+
+              res = await service.colorize(
+                pageKey,
+                () async => pageBytes,
+                hints: pageHints,
+                denoise: false,
+                look: coverLook,
+                inkContrast: inkContrast,
+                saturation: saturation,
+                blendRatio: blendRatio,
+                style: styleKey,
+              );
+            }
 
             final colorBytes = res.bytes;
             final originalName = pageIdx < book.names.length
@@ -371,12 +513,16 @@ class BatchColorizerEngine {
             }
 
             item.completedPages = pageIdx + 1;
-            processedOverall++;
-            pagesProcessedInRun++;
+            if (!isResumeFill) pagesProcessedInRun++;
+            unawaited(saveQueue());
 
+            // Recount from the items themselves: the resume fill re-adds
+            // pages already counted at start(), and a cache-miss rollback
+            // pulls completedPages back — a running counter would drift.
+            final processedOverall = queue.fold<int>(0, (sum, i) => sum + i.completedPages);
             final elapsedSec = stopwatch.elapsedMilliseconds / 1000.0;
             final secPerPage = pagesProcessedInRun > 0 ? elapsedSec / pagesProcessedInRun : 0.0;
-            final leftPages = totalOverall - processedOverall;
+            final leftPages = math.max(0, totalOverall - processedOverall);
             final eta = (leftPages * secPerPage).round();
 
             unawaited(
@@ -403,9 +549,12 @@ class BatchColorizerEngine {
               totalOverallPages: totalOverall,
               secondsPerItem: secPerPage,
               etaSeconds: eta,
-              latestOriginal: pageBytes,
+              latestOriginal: isResumeFill ? null : pageBytes,
               latestColorized: colorBytes,
-              statusMessage: '채색 중 (${pageIdx + 1} / ${book.length}쪽)',
+              statusMessage:
+                  isResumeFill
+                  ? '이전 분 복원 중 (${pageIdx + 1} / ${book.length}쪽)'
+                  : '채색 중 (${pageIdx + 1} / ${book.length}쪽)',
             );
           }
 
@@ -422,9 +571,10 @@ class BatchColorizerEngine {
       unawaited(AppPlatform.keepAlive(0));
     }
 
+    final processedAtEnd = queue.fold<int>(0, (sum, i) => sum + i.completedPages);
     final finishedStatus = _cancelRequested
-        ? '작업 취소됨'
-        : '모든 채색 작업 완료 ($processedOverall / $totalOverall 쪽)';
+        ? '작업 취소됨 ($processedAtEnd / $totalOverall 쪽 완료 — 시작을 누르면 이어서 채색)'
+        : '모든 채색 작업 완료 ($processedAtEnd / $totalOverall 쪽)';
 
     progress.value = BatchProgress(
       isRunning: false,
@@ -434,7 +584,7 @@ class BatchColorizerEngine {
       currentItemTitle: '',
       currentPageInItem: 0,
       totalPagesInItem: 0,
-      totalProcessedPages: processedOverall,
+      totalProcessedPages: processedAtEnd,
       totalOverallPages: totalOverall,
       secondsPerItem: 0.0,
       etaSeconds: 0,

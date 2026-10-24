@@ -38,10 +38,21 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
   bool _watchToggleInFlight = false;
   bool _autoStartInFlight = false;
 
+  /// True once the saved queue has been restored (or was absent). Settings
+  /// stay inert until then so a hasty tap is not overwritten by the restore.
+  bool _restored = false;
+
   @override
   void initState() {
     super.initState();
     _engine = BatchColorizerEngine(colorizer: widget.colorizer);
+    // Bring back a queue saved by a previous run (stop, cancel or app kill):
+    // progress and settings survive, 시작을 누르면 이어서 채색된다.
+    _engine.restoreQueue().then((_) {
+      if (mounted) {
+        setState(() => _restored = true);
+      }
+    });
     _checkBatteryOptimization();
   }
 
@@ -471,6 +482,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
   }
 
   Widget _buildSettingsCard(bool isRunning) {
+    final busy = isRunning || !_restored;
     return Card(
       elevation: 1,
       child: Padding(
@@ -534,7 +546,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                   ChoiceChip(
                     label: Text(p.label),
                     selected: _engine.preset == p,
-                    onSelected: isRunning
+                    onSelected: busy
                         ? null
                         : (_) {
                             setState(() => _engine.applyPreset(p));
@@ -549,7 +561,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                 Text('먹선 선명도 (잉크 대비): ${(_engine.inkContrast * 100).round()}%'),
                 if (_engine.inkContrast != 1.0)
                   TextButton(
-                    onPressed: isRunning ? null : () => setState(() => _engine.inkContrast = 1.0),
+                    onPressed: busy ? null : () => setState(() => _engine.inkContrast = 1.0),
                     child: const Text('기본값'),
                   ),
               ],
@@ -559,7 +571,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
               min: 0.5,
               max: 1.5,
               divisions: 20,
-              onChanged: isRunning
+              onChanged: busy
                   ? null
                   : (v) {
                       setState(() {
@@ -574,7 +586,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                 Text('색채 채도 (선명도): ${(_engine.saturation * 100).round()}%'),
                 if (_engine.saturation != 1.0)
                   TextButton(
-                    onPressed: isRunning ? null : () => setState(() => _engine.saturation = 1.0),
+                    onPressed: busy ? null : () => setState(() => _engine.saturation = 1.0),
                     child: const Text('기본값'),
                   ),
               ],
@@ -584,7 +596,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
               min: 0.5,
               max: 2.0,
               divisions: 30,
-              onChanged: isRunning
+              onChanged: busy
                   ? null
                   : (v) {
                       setState(() {
@@ -599,7 +611,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                 Text('채색 강도 (합성 비율): ${(_engine.blendRatio * 100).round()}%'),
                 if (_engine.blendRatio != 1.0)
                   TextButton(
-                    onPressed: isRunning ? null : () => setState(() => _engine.blendRatio = 1.0),
+                    onPressed: busy ? null : () => setState(() => _engine.blendRatio = 1.0),
                     child: const Text('기본값'),
                   ),
               ],
@@ -609,7 +621,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
               min: 0.0,
               max: 1.0,
               divisions: 20,
-              onChanged: isRunning
+              onChanged: busy
                   ? null
                   : (v) {
                       setState(() {
@@ -633,7 +645,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                   ChoiceChip(
                     label: Text(mode.label),
                     selected: _engine.apiMode == mode,
-                    onSelected: isRunning
+                    onSelected: busy
                         ? null
                         : (_) {
                             setState(() => _engine.apiMode = mode);
@@ -656,7 +668,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                   ),
                 ),
                 TextButton(
-                  onPressed: isRunning ? null : _pickOutputDir,
+                  onPressed: busy ? null : _pickOutputDir,
                   child: const Text('위치 변경'),
                 ),
               ],
