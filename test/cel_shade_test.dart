@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:manga_viewer/cel_shade.dart';
 
-Uint8List grayOf(List<int> rows) {
+Uint8List grayOf(List<List<int>> rows) {
   final g = Uint8List(rows.length * rows.first.length);
   var i = 0;
   for (final row in rows) {
