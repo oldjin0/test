@@ -377,7 +377,7 @@ void _ringShrink(Uint8List lines, int w, int h, Int32List labels, Float64List co
   for (var i = 0; i < n; i++) {
     open[i] = lines[i] == 0 && labels[i] != 0 ? 1 : 0;
   }
-  // Separable 7-wide min (erosion) of `open`, then ring = open & !eroded.
+  // Separable 5-wide min (erosion) of `open`, then ring = open & !eroded.
   // 3 px border: the flat-cel look must read even at fit-width zoom.
   final tmp = Uint8List(n);
   for (var y = 0; y < h; y++) {
