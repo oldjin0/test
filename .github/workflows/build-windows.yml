@@ -107,8 +107,16 @@ jobs:
           Copy-Item "$rel/manga_viewer.exe" "$rel/$autoExe"
           Set-Content -Path "$rel/README.txt" -Encoding utf8 -Value "Manga Viewer & Auto Colorizer Windows Release`n`n- manga_viewer.exe: Default launcher`n- ${viewerExe}: Manga Viewer launcher`n- ${autoExe}: Standalone Auto Colorizer launcher"
           Get-ChildItem $rel | Format-Table Name, Length
-          & "$env:SystemRoot/System32/tar.exe" -a -cf MangaViewer-windows.zip -C $rel *
-          "{0:N0} MB" -f ((Get-Item MangaViewer-windows.zip).Length / 1MB)
+          # bsdtar 로 만들면 조용히 종료코드 1로 실패하는 사례가 반복되어(한글 파일명
+          # 처리) .NET ZipFile API 로 교체 - 한글 이름은 UTF-8 플래그로 보존되며
+          # 탐색기·앱 업데이터(bsdtar) 모두 정상 읽는다.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zipPath = Join-Path (Get-Location) "MangaViewer-windows.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path $rel).Path, $zipPath,
+            [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          "{0:N0} MB" -f ((Get-Item $zipPath).Length / 1MB)
       - name: The packaged program starts and stays up
         shell: pwsh
         run: |
