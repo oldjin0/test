@@ -305,9 +305,11 @@ class BatchColorizerEngine {
             final pageBytes = await book.page(pageIdx);
             // Style is part of the key (like ColorizeService.keyFor) so
             // pages colored with a different preset are not served from
-            // this run's cache.
+            // this run's cache. The 'b2' generation also drops entries
+            // written before styles joined the key, which could serve a
+            // chromatic_novel result as natural.
             final pageKey =
-                'batch:${item.title}:$pageIdx-c${inkContrast.toStringAsFixed(2)}-s${saturation.toStringAsFixed(2)}${styleKey == 'natural' ? '' : '-$styleKey'}';
+                'b2:${item.title}:$pageIdx-c${inkContrast.toStringAsFixed(2)}-s${saturation.toStringAsFixed(2)}${styleKey == 'natural' ? '' : '-$styleKey'}';
 
             List<ColorHint> pageHints = const [];
             if (apiMode == BatchApiMode.sceneHints && GeminiService.instance.hasKeys) {

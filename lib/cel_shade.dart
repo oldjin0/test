@@ -199,9 +199,9 @@ Uint8List _median5(Uint8List src, int w, int h) {
     colCnt.fillRange(0, 5, 0);
     // window for x=0: columns 0..2 (borders without replication; the two
     // outer columns of a page have no tones worth keeping anyway)
-    addColumn(0, y);
-    addColumn(1, y);
-    addColumn(2, y);
+    if (w > 0) addColumn(0, y);
+    if (w > 1) addColumn(1, y);
+    if (w > 2) addColumn(2, y);
     med = 0;
     below = 0;
     while (below + hist[med] < half && med < 255) {
@@ -238,11 +238,13 @@ Uint8List _median5(Uint8List src, int w, int h) {
   return dst;
 }
 
-/// Separable 3x3 gaussian, sigma 0.8 (cv2-compatible kernel).
-Float64List _gauss3(Uint8List src, int w, int h) {
+/// Separable 3x3 gaussian, sigma 0.8 (cv2-compatible kernel). Float32 to
+/// keep peak memory low on large pages — the inputs are integers below 256
+/// so the sums stay exact.
+Float32List _gauss3(Uint8List src, int w, int h) {
   const k0 = 0.239, k1 = 0.522, k2 = 0.239;
-  final tmp = Float64List(w * h);
-  final out = Float64List(w * h);
+  final tmp = Float32List(w * h);
+  final out = Float32List(w * h);
   for (var y = 0; y < h; y++) {
     final row = y * w;
     for (var x = 0; x < w; x++) {
@@ -290,7 +292,7 @@ Float64List _buildSoftCel() {
     final pos = (v - band) / 64.0;
     var s = ((pos - 0.5) * 64.0 / 28.0 + 0.5).clamp(0.0, 1.0);
     s = s * s * (3 - 2 * s);
-    t[v] = (qLow * (1 - s) + (qLow + 64.0) * s) / 255.0;
+    t[v] = ((qLow * (1 - s) + (qLow + 64.0) * s) / 255.0).clamp(0.0, 1.0);
   }
   return t;
 }
@@ -299,9 +301,9 @@ Float64List _buildSoftCel() {
 // line lock
 
 /// Labels the page area separated by ink. Matches the reference, which
-/// labels `~dilate2x2(ink)` — a pixel is open only when it and its left and
-/// upper neighbors are ink-free (the 2x2 dilation of the ink mask with its
-/// anchor).
+/// labels `~dilate2x2(ink)` — cv2's 2x2 dilation with its default anchor
+/// (1,1) reaches the upper-left diagonal too, so a pixel is open only when
+/// it, its left, upper and upper-left neighbors are all ink-free.
 int _labelRegions(Uint8List lines, int w, int h, Int32List labels) {
   final open = Uint8List(w * h);
   for (var y = 0; y < h; y++) {
@@ -310,6 +312,7 @@ int _labelRegions(Uint8List lines, int w, int h, Int32List labels) {
       if (lines[i] != 0) continue;
       if (x > 0 && lines[i - 1] != 0) continue;
       if (y > 0 && lines[i - w] != 0) continue;
+      if (x > 0 && y > 0 && lines[i - w - 1] != 0) continue;
       open[i] = 1;
     }
   }
