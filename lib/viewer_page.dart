@@ -662,7 +662,7 @@ class _ViewerPageState extends State<ViewerPage> {
       (
         id: 'eink_pantone',
         name: '모안 팬톤 (칼레이도3 전용)',
-        desc: '300PPI 순수 흑백 먹선 분리 + 채도 2.0배 증폭 (전자잉크 물빠짐 보상)',
+        desc: '300PPI 순수 흑백 먹선 분리 + 채도 3.0배 증폭 (전자잉크 물빠짐 보상)',
         icon: Icons.chrome_reader_mode_outlined,
       ),
       (
@@ -676,18 +676,6 @@ class _ViewerPageState extends State<ViewerPage> {
         name: '비비드 애니 (화사한 원색)',
         desc: '애니메이션 원화처럼 생생하고 화사한 원색 대비 + 딥블랙 먹선',
         icon: Icons.palette,
-      ),
-      (
-        id: 'warm_amber',
-        name: '클래식 웜 (따뜻한 브라운)',
-        desc: '과거 인기 버전의 따뜻한 브라운·골드 색조를 자연스럽게 정돈한 감성 톤',
-        icon: Icons.wb_incandescent_outlined,
-      ),
-      (
-        id: 'soft_pastel',
-        name: '소프트 파스텔 (수채화 감성)',
-        desc: '은은하고 부드러운 수채화톤 + 연필/목탄 느낌의 부드러운 선화',
-        icon: Icons.wb_sunny_outlined,
       ),
       (
         id: 'retro_print',
@@ -718,7 +706,7 @@ class _ViewerPageState extends State<ViewerPage> {
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Text(
-                    '독립 화풍 프리셋 (9종)',
+                    '독립 화풍 프리셋 (7종)',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                   ),
                 ),

@@ -21,8 +21,8 @@ enum BatchPreset {
   einkPantone('모안 팬톤 (칼레이도3 전용)', 'eink_pantone', 1.0, 1.0, 1.0),
   celShade('클린 셀 (팬컬러링)', 'cel_shade', 1.0, 1.0, 1.0),
   vividAnime('비비드 애니 (화사한 원색)', 'vivid_anime', 1.08, 1.35, 1.0),
-  warmAmber('클래식 웜 (따뜻한 브라운)', 'warm_amber', 1.05, 1.10, 1.0),
-  softPastel('소프트 파스텔 (수채화풍)', 'soft_pastel', 0.90, 0.85, 0.90),
+  warmAmber('클래식 웜 (따뜻한 브라운)', 'warm_amber', 1.05, 1.10, 1.0, hidden: true),
+  softPastel('소프트 파스텔 (수채화풍)', 'soft_pastel', 0.90, 0.85, 0.90, hidden: true),
   retroPrint('레트로 코믹스 (빈티지 인쇄)', 'retro_print', 0.95, 1.00, 1.0),
   monochromeAccent('모노크롬 포인트 (수묵 포인트)', 'monochrome_accent', 1.20, 1.30, 1.0),
   custom('사용자 직접 조절', 'custom', 1.0, 1.0, 1.0);
@@ -32,7 +32,30 @@ enum BatchPreset {
   final double inkContrast;
   final double saturation;
   final double blendRatio;
-  const BatchPreset(this.label, this.styleKey, this.inkContrast, this.saturation, this.blendRatio);
+
+  /// Kept for stored preferences and old caches but not offered in the
+  /// pickers: too close to [retroPrint] to read as a distinct style.
+  final bool hidden;
+  const BatchPreset(
+    this.label,
+    this.styleKey,
+    this.inkContrast,
+    this.saturation,
+    this.blendRatio, {
+    this.hidden = false,
+  });
+
+  /// The presets the pickers show.
+  static const visible = [
+    natural,
+    chromaticNovel,
+    einkPantone,
+    celShade,
+    vividAnime,
+    retroPrint,
+    monochromeAccent,
+    custom,
+  ];
 }
 
 enum BatchApiMode {

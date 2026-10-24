@@ -20,58 +20,59 @@ const _whiteThr = 248.0; // descreened luminance that counts as paper
 
 /// Composes [srcGray8] (page luminance, width*height bytes, 0..255) with
 /// [colorRgb] (model color at the same size, width*height*3 bytes) into the
-/// final RGB bytes (width*height*3).
+/// final RGB bytes (width*height*3). [colorRgb] is copied internally and
+/// never modified.
 Uint8List celShadeCompose(Uint8List srcGray8, Uint8List colorRgb, int width, int height) {
   final n = width * height;
   final out = Uint8List(n * 3);
+  final col = Uint8List.fromList(colorRgb); // ring shrink mutates the color
 
   // 1) Descreen: full-resolution 5x5 median, then 3x3 gaussian (sigma 0.8).
   final med = _median5(srcGray8, width, height);
   final yd = _gauss3(med, width, height); // Float64List
 
-  // 2) Compose with the shading curve
-  //    f = lut70 * 0.70 + softCel * (255/256) * 0.30
-  for (var i = 0; i < n; i++) {
-    final v = yd[i];
-    var idx = v.toInt(); // truncate, like the Python reference's int cast
-    if (idx < 0) idx = 0;
-    if (idx > 255) idx = 255;
-    final f = _lut70[idx] * 0.70 + _softCelLut[idx] * 0.30 * (255.0 / 256.0);
-    final k = i * 3;
-    out[k] = (colorRgb[k] * f).round().clamp(0, 255);
-    out[k + 1] = (colorRgb[k + 1] * f).round().clamp(0, 255);
-    out[k + 2] = (colorRgb[k + 2] * f).round().clamp(0, 255);
-  }
-
-  // 3) Line lock: label the area separated by ink (ink dilated by 2x2).
+  // 2) Line lock FIRST: label the area separated by ink (ink dilated by
+  //    2x2), then shrink the *model color* to its region mean on the ring
+  //    pixels — not the shaded result. Region means of a banded result would
+  //    mix cel bands into a wrong intermediate color; shrinking the flat
+  //    model color keeps the bleed off the lines while the cel bands then
+  //    apply across the whole region, lines included.
   final lines = Uint8List(n);
   for (var i = 0; i < n; i++) {
     if (srcGray8[i] < _lineThr) lines[i] = 1;
   }
   final labels = Int32List(n); // 0 = ink/adjacent, 1.. = regions
   final nLabels = _labelRegions(lines, width, height, labels);
-
-  // 4) Per-region mean of the composed color (ring pixels included, as in
-  //    the reference).
   final sums = Float64List(nLabels * 3 + 3);
   final counts = Float64List(nLabels + 1);
   for (var i = 0; i < n; i++) {
     final l = labels[i];
     if (l == 0) continue;
     final k = i * 3, s = l * 3;
-    sums[s] += out[k];
-    sums[s + 1] += out[k + 1];
-    sums[s + 2] += out[k + 2];
+    sums[s] += col[k];
+    sums[s + 1] += col[k + 1];
+    sums[s + 2] += col[k + 2];
     counts[l] += 1;
   }
+  _ringShrink(lines, width, height, labels, counts, sums, col);
 
-  // 5) Ring shrink: open pixels within 2 px of ink (their region's 5x5
-  //    erosion border) take the region mean color — kills the bleed the
-  //    upscaled model color leaves across line edges.
-  _ringShrink(lines, width, height, labels, counts, sums, out);
+  // 3) Compose with the shading curve over the shrunk model color
+  //    f = lut70 * 0.64 + softCel * (255/256) * 0.36
+  for (var i = 0; i < n; i++) {
+    final v = yd[i];
+    var idx = v.toInt(); // truncate, like the Python reference's int cast
+    if (idx < 0) idx = 0;
+    if (idx > 255) idx = 255;
+    final f = _lut70[idx] * 0.64 + _softCelLut[idx] * 0.36 * (255.0 / 256.0);
+    final k = i * 3;
+    out[k] = (col[k] * f).round().clamp(0, 255);
+    out[k + 1] = (col[k + 1] * f).round().clamp(0, 255);
+    out[k + 2] = (col[k + 2] * f).round().clamp(0, 255);
+  }
 
-  // 6) Paper white where the model itself stays achromatic; ink lines come
-  //    back from the original page untouched.
+  // 4) Paper white where the model itself stays achromatic (conservative:
+  //    skin highlights must not be eaten); ink lines come back from the
+  //    original page untouched.
   for (var i = 0; i < n; i++) {
     final k = i * 3;
     if (lines[i] != 0) {
@@ -81,14 +82,34 @@ Uint8List celShadeCompose(Uint8List srcGray8, Uint8List colorRgb, int width, int
       continue;
     }
     if (yd[i] >= _whiteThr) {
+      // achromatic test on the ORIGINAL model color (before ring shrink),
+      // matching the Python reference
       final mx = math.max(colorRgb[k], math.max(colorRgb[k + 1], colorRgb[k + 2]));
       final mn = math.min(colorRgb[k], math.min(colorRgb[k + 1], colorRgb[k + 2]));
-      if (mx - mn < 8) {
+      if (mx - mn < 6) {
         out[k] = 255;
         out[k + 1] = 255;
         out[k + 2] = 255;
       }
     }
+  }
+
+  // 5) Green-lean suppression (shared with the natural preset): in tone
+  //    areas the model leans olive; pull a green-dominant color 18% toward
+  //    neutral. Applied last, over paper and ink.
+  for (var i = 0; i < n; i++) {
+    if (lines[i] != 0) continue;
+    final k = i * 3;
+    final r = out[k], g = out[k + 1], b = out[k + 2];
+    // tone range on the ORIGINAL gray (not descreened), like the reference;
+    // paper pixels (already forced white) are excluded
+    final yv = srcGray8[i];
+    if (yv < 40 || yv > 205) continue;
+    if (g <= r || g <= b) continue;
+    final mx = math.max(r, math.max(g, b)), mn = math.min(r, math.min(g, b));
+    if (mx - mn <= 12) continue;
+    final target = (r + b) / 2.0;
+    out[k + 1] = (g + (target - g) * 0.18).round().clamp(0, 255);
   }
   return out;
 }
@@ -356,7 +377,8 @@ void _ringShrink(Uint8List lines, int w, int h, Int32List labels, Float64List co
   for (var i = 0; i < n; i++) {
     open[i] = lines[i] == 0 && labels[i] != 0 ? 1 : 0;
   }
-  // Separable 5-wide min (erosion) of `open`, then ring = open & !eroded.
+  // Separable 7-wide min (erosion) of `open`, then ring = open & !eroded.
+  // 3 px border: the flat-cel look must read even at fit-width zoom.
   final tmp = Uint8List(n);
   for (var y = 0; y < h; y++) {
     final row = y * w;

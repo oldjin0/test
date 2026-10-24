@@ -175,8 +175,6 @@ List<Widget> _colorSection(BuildContext context, LibraryStore s) => [
       'eink_pantone': '모안 팬톤 (칼레이도3)',
       'cel_shade': '클린 셀 (팬컬러링)',
       'vivid_anime': '비비드 애니',
-      'warm_amber': '클래식 웜 (브라운)',
-      'soft_pastel': '소프트 파스텔',
       'retro_print': '레트로 코믹스',
       'monochrome_accent': '모노크롬 포인트',
     },

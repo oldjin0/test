@@ -1250,12 +1250,13 @@ img.Image _composeRgbMultiply(
         outG = bw;
         outB = bw;
       } else {
-        // 115 < y < 232: 채도 2.0배 증폭 & 고명도 유지 (전자잉크 물빠짐 보상)
+        // 115 < y < 232: 채도 3.0배 증폭 & 고명도 유지 (칼레이도3 패널이 실제로
+        // 표시할 수 있는 채도까지 끌어올림 — 전자잉크 물빠짐 보상)
         final avg = (r + g + b) ~/ 3;
-        final boostR = (avg + ((r - avg) << 1)).clamp(0, 255);
-        final boostG = (avg + ((g - avg) << 1)).clamp(0, 255);
-        final boostB = (avg + ((b - avg) << 1)).clamp(0, 255);
-        final liftY = 160 + ((y * 95) >> 8); // 어두워지지 않게 하한선 고정
+        final boostR = (avg + (r - avg) * 3).clamp(0, 255);
+        final boostG = (avg + (g - avg) * 3).clamp(0, 255);
+        final boostB = (avg + (b - avg) * 3).clamp(0, 255);
+        final liftY = 175 + ((y * 81) >> 8); // 어두워지지 않게 하한선 고정
         outR = (boostR * liftY) >> 8;
         outG = (boostG * liftY) >> 8;
         outB = (boostB * liftY) >> 8;
@@ -1282,9 +1283,14 @@ img.Image _composeRgbMultiply(
     // 1. Style-specific color transformations
     if (isVividAnime) {
       // S-curve contrast boost on colors for punchy anime cel look
-      cr = ((cr - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
-      cg = ((cg - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
-      cb = ((cb - 128.0) * 1.30 + 128.0).clamp(0.0, 255.0);
+      cr = ((cr - 128.0) * 1.60 + 128.0).clamp(0.0, 255.0);
+      cg = ((cg - 128.0) * 1.60 + 128.0).clamp(0.0, 255.0);
+      cb = ((cb - 128.0) * 1.60 + 128.0).clamp(0.0, 255.0);
+      // a touch of extra saturation so the vivid look reads at fit-width zoom
+      final vg = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+      cr = (vg + (cr - vg) * 1.15).clamp(0.0, 255.0);
+      cg = (vg + (cg - vg) * 1.15).clamp(0.0, 255.0);
+      cb = (vg + (cb - vg) * 1.15).clamp(0.0, 255.0);
     } else if (isWarmAmber) {
       // Moderate the previous heavy brown cast to a pleasing warm amber/sepia tone
       final normY = (gray / 255.0).clamp(0.0, 1.0);
@@ -1333,6 +1339,17 @@ img.Image _composeRgbMultiply(
     var r = ((cr * lf + 512) / 1024).round().clamp(0, 255);
     var g = ((cg * lf + 512) / 1024).round().clamp(0, 255);
     var b = ((cb * lf + 512) / 1024).round().clamp(0, 255);
+
+    // Natural only: heavy-tone areas lean olive/green with this model; pull a
+    // green-dominant color slightly toward neutral so dense tones read cleaner.
+    if (style == 'natural' && y >= 40 && y <= 205) {
+      final mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      final mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      if (g > r && g > b && mx - mn > 12) {
+        final target = (r + b) / 2.0;
+        g = (g + (target - g) * 0.18).round().clamp(0, 255);
+      }
+    }
 
     // 3. Style-specific paper / background tone
     if (isRetroPrint) {

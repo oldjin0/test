@@ -444,7 +444,7 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
               spacing: 8,
               runSpacing: 6,
               children: [
-                for (final p in BatchPreset.values)
+                for (final p in BatchPreset.visible)
                   ChoiceChip(
                     label: Text(p.label),
                     selected: _engine.preset == p,
