@@ -788,6 +788,7 @@ class _OnnxEngine implements _Engine {
       );
       model = r.model;
       gpuProblem = r.gpuProblem;
+      device = r.device;
     } catch (e) {
       error = '$e';
     }
@@ -802,6 +803,9 @@ class _OnnxEngine implements _Engine {
   ColorModel? model;
   @override
   String? error;
+
+  /// The device the timed comparison kept (cpu or directml).
+  OnnxDevice? device;
 
   /// Why the graphics card was not used, if it was not.
   String? gpuProblem;

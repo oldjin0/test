@@ -110,4 +110,21 @@ void main() {
     }
     expect(r.model.predict(pageInput()).length, w * h * 3);
   }, skip: skip);
+
+  group('PC 성능 자동 선택 헬퍼', () {
+    test('pcCpuThreads는 물리코어 추정치(4~16)를 반환한다', () {
+      final t = pcCpuThreads();
+      expect(t, inInclusiveRange(4, 16));
+      final logical = Platform.numberOfProcessors;
+      if (logical >= 8) {
+        expect(t, logical ~/ 2); // 물리코어 = 논리코어 절반 (하이퍼스레딩 제외)
+      }
+    });
+
+    test('fasterDevice는 임계값에서 CPU를 우선한다', () {
+      expect(fasterDevice(3.93, 3.35), OnnxDevice.cpu); // CPU가 빠르면 CPU
+      expect(fasterDevice(5.45, 5.85), OnnxDevice.directml); // GPU가 빠르면 GPU
+      expect(fasterDevice(3.40, 3.40), OnnxDevice.cpu); // 동률은 CPU
+    });
+  });
 }

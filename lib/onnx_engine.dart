@@ -221,10 +221,26 @@ class OnnxDenoiser implements PageDenoiser {
   void close() => _session.release();
 }
 
-/// Opens the best working engine for the PC: DirectML on [gpuModel] when
-/// [gpu] is allowed and it passes a check run, otherwise the CPU with
-/// [cpuModel]. Never throws for a bad GPU: that falls back to the CPU.
-({OnnxColorModel model, String? gpuProblem}) openPcModel({
+/// The CPU session's intra-op thread count: the physical core count (logical
+/// threads hurt - measured 5.89s at 16 logical vs 3.35s at 8 physical on a
+/// 16-thread machine), clamped to a sane range for small machines.
+int pcCpuThreads() {
+  final logical = Platform.numberOfProcessors;
+  final physical = (logical / 2).round();
+  return physical.clamp(4, 16);
+}
+
+/// The device a timed comparison picks: the faster one wins; ties go to the
+/// CPU (less VRAM pressure, the GPU stays free for the desktop).
+OnnxDevice fasterDevice(double gpuSeconds, double cpuSeconds) =>
+    cpuSeconds <= gpuSeconds ? OnnxDevice.cpu : OnnxDevice.directml;
+
+/// Opens the fastest working engine for the PC: when the graphics card is
+/// allowed and passes a check run, both devices are timed with one real run
+/// each and the faster one is kept (measured: integrated GPUs can lose to the
+/// CPU at small sizes while winning at large ones). Never throws for a bad
+/// GPU: that falls back to the CPU.
+({OnnxColorModel model, String? gpuProblem, OnnxDevice device}) openPcModel({
   required String? gpuModel,
   required String cpuModel,
   required int width,
@@ -235,6 +251,7 @@ class OnnxDenoiser implements PageDenoiser {
   String? problem;
   if (gpu && gpuModel != null) {
     OnnxColorModel? m;
+    var gpuSeconds = double.infinity;
     try {
       m = OnnxColorModel.open(
         gpuModel,
@@ -243,12 +260,15 @@ class OnnxDenoiser implements PageDenoiser {
         device: OnnxDevice.directml,
         gpuId: gpuId,
       );
-      // A check run: the GPU path must produce sane colors, not just load.
+      // A check run that doubles as the GPU timing run: the GPU path must
+      // produce sane colors, not just load.
       final probe = Float32List(width * height * 5);
       for (var i = 0; i < width * height; i++) {
         probe[i * 5] = 1.0;
       }
+      final t0 = Stopwatch()..start();
       final r = m.predict(probe);
+      gpuSeconds = t0.elapsedMicroseconds / 1e6;
       var sum = 0.0;
       for (final v in r) {
         sum += v;
@@ -264,10 +284,47 @@ class OnnxDenoiser implements PageDenoiser {
       m?.close();
       m = null;
     }
-    if (m != null) return (model: m, gpuProblem: null);
+    if (m != null) {
+      // Time the CPU with the same single run, then keep the faster device.
+      OnnxColorModel? c;
+      try {
+        c = OnnxColorModel.open(
+          cpuModel,
+          width: width,
+          height: height,
+          device: OnnxDevice.cpu,
+          threads: pcCpuThreads(),
+        );
+        final probe = Float32List(width * height * 5);
+        for (var i = 0; i < width * height; i++) {
+          probe[i * 5] = 1.0;
+        }
+        final t0 = Stopwatch()..start();
+        c.predict(probe);
+        final cpuSeconds = t0.elapsedMicroseconds / 1e6;
+        final keep = fasterDevice(gpuSeconds, cpuSeconds);
+        if (keep == OnnxDevice.cpu) {
+          m.close();
+          return (model: c, gpuProblem: null, device: OnnxDevice.cpu);
+        }
+        c.close();
+        return (model: m, gpuProblem: null, device: OnnxDevice.directml);
+      } catch (e) {
+        // The CPU could not open (unlikely): keep the working GPU model.
+        c?.close();
+        return (model: m, gpuProblem: null, device: OnnxDevice.directml);
+      }
+    }
   }
   return (
-    model: OnnxColorModel.open(cpuModel, width: width, height: height, device: OnnxDevice.cpu),
+    model: OnnxColorModel.open(
+      cpuModel,
+      width: width,
+      height: height,
+      device: OnnxDevice.cpu,
+      threads: pcCpuThreads(),
+    ),
     gpuProblem: problem,
+    device: OnnxDevice.cpu,
   );
 }
