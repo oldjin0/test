@@ -1,0 +1,4 @@
+interface:
+  display_name: "Clone WebGL Runtime"
+  short_description: "Mirror interactive WebGL sites with local QA"
+  default_prompt: "Use $clone-webgl-runtime to mirror an authorized interactive WebGL website into a local app and verify it."

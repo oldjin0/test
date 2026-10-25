@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Script-generated analysis outputs (regenerate per-target; never commit)
+functions.txt
+bl_targets.txt
+bl_calls.txt
+pool_xref.txt
+pool_by_ref.txt
+pool_deserialized.json
+function_triage.txt
+strings_utf16.txt
+cjk_strings.txt
+*_patched.so
+patches.json
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
