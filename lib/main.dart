@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'archive_tar.dart';
+import 'auto_colorizer_page.dart';
 import 'color_learner.dart';
 import 'colorize_service.dart';
 import 'comic_loader.dart' show isComicFile;
@@ -23,6 +24,27 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await LibraryStore.load();
 
+  // The standalone auto colorizer: the packaged copy of this executable named
+  // 오토채색기.exe (or auto_colorizer.exe) opens the batch colorizer only,
+  // without the reader.
+  if (isPc && isStandaloneColorizerExe(Platform.resolvedExecutable)) {
+    await pcWindowInit(title: '오토채색기');
+    unawaited(pruneExtractedArchives());
+    final colorizer = startColorizer(store);
+    unawaited(colorizer.then(keepAliveWhileColoring));
+    runApp(
+      ListenableBuilder(
+        listenable: store,
+        builder: (context, _) => MaterialApp(
+          title: '오토채색기',
+          theme: store.eink ? einkTheme : ThemeData.dark(useMaterial3: true),
+          home: AutoColorizerPage(store: store, colorizer: colorizer, isStandalone: true),
+        ),
+      ),
+    );
+    return;
+  }
+
   if (isPc) {
     await pcWindowInit(title: '채색 뷰어');
     unawaited(pruneExtractedArchives());
@@ -38,6 +60,14 @@ Future<void> main(List<String> args) async {
       openOnStart: isPc ? bookFromArguments(args) : null,
     ),
   );
+}
+
+/// True when [exePath]'s file name marks the copy that must open the batch
+/// colorizer only (the packaging renames a copy of the viewer executable to
+/// 오토채색기.exe; auto_colorizer.exe is the ASCII spelling for scripts).
+bool isStandaloneColorizerExe(String exePath) {
+  final name = p.basename(exePath).toLowerCase();
+  return name.contains('auto_colorizer') || name.contains('오토채색');
 }
 
 /// Keeps the app alive (screen off, other apps in front) while background
