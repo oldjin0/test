@@ -65,8 +65,9 @@ Future<void> main(List<String> args) async {
 /// True when [exePath]'s file name marks the copy that must open the batch
 /// colorizer only (the packaging renames a copy of the viewer executable to
 /// 오토채색기.exe; auto_colorizer.exe is the ASCII spelling for scripts).
+/// Both path separators are normalized so the check works on any host.
 bool isStandaloneColorizerExe(String exePath) {
-  final name = p.basename(exePath).toLowerCase();
+  final name = p.basename(exePath.replaceAll('\\', '/')).toLowerCase();
   return name.contains('auto_colorizer') || name.contains('오토채색');
 }
 
