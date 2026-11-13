@@ -151,7 +151,7 @@ class ColorizeService {
 
   /// Names how the model's colors are put on the page (see
   /// `_composeChroma` and `_composeRgbMultiply`); part of the cache keys.
-  static const composeTag = '-v4universal';
+  static const composeTag = '-v5universal';
 
   /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.
@@ -638,10 +638,24 @@ class ColorizeService {
   /// steps (book colors, color e-ink: remade from their plain copy in a
   /// moment) go first, oldest first; then the least recently used of the
   /// rest, whose model run is what takes time.
+  static final _obsoleteComposeTag = RegExp(r'-v\d+[a-z0-9]*');
+
   static Future<void> pruneCache(Directory dir, {required int maxBytes}) async {
     try {
       final files = await dir.list().where((e) => e is File).cast<File>().toList();
-      final stats = {for (final f in files) f: await f.stat()};
+      final remaining = <File>[];
+      for (final f in files) {
+        final name = p.basenameWithoutExtension(f.path);
+        final m = _obsoleteComposeTag.firstMatch(name);
+        if (m != null && m.group(0) != composeTag) {
+          try {
+            await f.delete();
+            continue;
+          } catch (_) {}
+        }
+        remaining.add(f);
+      }
+      final stats = {for (final f in remaining) f: await f.stat()};
       var total = stats.values.fold<int>(0, (s, st) => s + st.size);
       if (total <= maxBytes) return;
       bool cheap(File f) {
@@ -649,7 +663,7 @@ class ColorizeService {
         return plainKey(name) != name;
       }
 
-      final order = files
+      final order = remaining
         ..sort((a, b) {
           final c = (cheap(a) ? 0 : 1).compareTo(cheap(b) ? 0 : 1);
           return c != 0 ? c : stats[a]!.modified.compareTo(stats[b]!.modified);

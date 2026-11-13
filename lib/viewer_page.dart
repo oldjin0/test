@@ -229,6 +229,8 @@ class _ViewerPageState extends State<ViewerPage> {
   ColorizeService? _service;
   bool _showUi = true;
   bool _showOriginal = false; // while the page is long-pressed
+  bool _splitCompare = false; // side-by-side split slider between original and colored
+  double _splitRatio = 0.5;
   final _curlKey = GlobalKey<CurlPageViewState>();
   final _vScroll = ItemScrollController();
   final _vPositions = ItemPositionsListener.create();
@@ -1025,6 +1027,15 @@ class _ViewerPageState extends State<ViewerPage> {
                   ),
                   onPressed: _toggleColorize,
                 ),
+                if (_store.colorize)
+                  IconButton(
+                    tooltip: _splitCompare ? '분할 비교 끄기' : '원본/채색 분할 비교',
+                    icon: Icon(
+                      Icons.compare,
+                      color: _splitCompare ? Colors.amber : null,
+                    ),
+                    onPressed: () => setState(() => _splitCompare = !_splitCompare),
+                  ),
                 PopupMenuButton<String>(
                   tooltip: '보기 설정',
                   onSelected: (v) => switch (v) {
@@ -1302,6 +1313,49 @@ class _ViewerPageState extends State<ViewerPage> {
             child: pager,
           ),
         ),
+        if (_splitCompare && _store.colorize && !_showOriginal)
+          Positioned.fill(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final w = constraints.maxWidth;
+                final lineX = (w * _splitRatio).clamp(12.0, w - 12.0);
+                return Stack(
+                  children: [
+                    Positioned(
+                      left: lineX - 1,
+                      top: 0,
+                      bottom: 0,
+                      child: IgnorePointer(
+                        child: Container(width: 2, color: Colors.amber),
+                      ),
+                    ),
+                    Positioned(
+                      left: lineX - 22,
+                      top: constraints.maxHeight * 0.5 - 22,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onHorizontalDragUpdate: (d) {
+                          setState(() {
+                            _splitRatio = (_splitRatio + d.delta.dx / w).clamp(0.05, 0.95);
+                          });
+                        },
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: Colors.black87,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.amber, width: 2),
+                          ),
+                          child: const Icon(Icons.compare_arrows, color: Colors.amber, size: 22),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
         if (_store.brightness < 1)
           Positioned.fill(
             child: IgnorePointer(
@@ -1391,6 +1445,19 @@ class _ViewerPageState extends State<ViewerPage> {
     Widget content;
     if (colored == null) {
       content = image(original);
+    } else if (_splitCompare && !_showOriginal) {
+      content = Stack(
+        alignment: Alignment.center,
+        children: [
+          image(colored.bytes, fallback: image(original)),
+          Positioned.fill(
+            child: ClipRect(
+              clipper: _LeftFractionClipper(_splitRatio),
+              child: image(original),
+            ),
+          ),
+        ],
+      );
     } else {
       final strength = _showOriginal ? 0.0 : _store.colorStrength;
       if (strength >= 0.999) {
@@ -1661,4 +1728,15 @@ class _Chip extends StatelessWidget {
       ),
     );
   }
+}
+
+class _LeftFractionClipper extends CustomClipper<Rect> {
+  const _LeftFractionClipper(this.fraction);
+  final double fraction;
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTWH(0, 0, size.width * fraction, size.height);
+
+  @override
+  bool shouldReclip(_LeftFractionClipper oldClipper) => oldClipper.fraction != fraction;
 }

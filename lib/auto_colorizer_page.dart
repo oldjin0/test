@@ -313,11 +313,35 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !widget.isStandalone,
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.palette_outlined, color: Colors.amber),
-            SizedBox(width: 8),
-            Text('오토채색기'),
+            const Icon(Icons.palette_outlined, color: Colors.amber),
+            const SizedBox(width: 8),
+            const Text('오토채색기'),
+            const SizedBox(width: 8),
+            FutureBuilder<ColorizeService>(
+              future: widget.colorizer,
+              builder: (context, snap) {
+                final backend = snap.data?.backend ?? '';
+                if (backend.isEmpty) return const SizedBox.shrink();
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Colors.amber.withValues(alpha: 0.45)),
+                  ),
+                  child: Text(
+                    backend.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.amber,
+                    ),
+                  ),
+                );
+              },
+            ),
           ],
         ),
         actions: [
@@ -753,10 +777,27 @@ class _AutoColorizerPageState extends State<AutoColorizerPage> {
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                 ),
                 if (_engine.queue.isNotEmpty && !prog.isRunning)
-                  TextButton.icon(
-                    icon: const Icon(Icons.delete_sweep, size: 16),
-                    label: const Text('목록 비우기'),
-                    onPressed: () => setState(() => _engine.clearQueue()),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_engine.failedCount > 0)
+                        TextButton.icon(
+                          icon: const Icon(Icons.refresh, size: 16, color: Colors.orangeAccent),
+                          label: Text(
+                            '실패 ${_engine.failedCount}건 재시도',
+                            style: const TextStyle(color: Colors.orangeAccent),
+                          ),
+                          onPressed: () {
+                            setState(() {});
+                            _engine.retryFailed();
+                          },
+                        ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.delete_sweep, size: 16),
+                        label: const Text('목록 비우기'),
+                        onPressed: () => setState(() => _engine.clearQueue()),
+                      ),
+                    ],
                   ),
               ],
             ),

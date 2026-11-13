@@ -902,7 +902,6 @@ img.Image _composeChroma(
 
   final bool adjustSat = (saturation - 1.0).abs() > 0.02;
   final bool blend = (blendRatio - 1.0).abs() > 0.01;
-  final bool customInk = (inkContrast - 1.0).abs() > 0.02;
 
   final isSoftPastel = style == 'soft_pastel';
   final isVividAnime = style == 'vivid_anime';
@@ -1083,6 +1082,33 @@ img.Image _predictRgb(
       color.setPixelRgb(x, y, r.clamp(0, 255), g.clamp(0, 255), b.clamp(0, 255));
     }
   }
+  if (style == 'chromatic_novel' && pw > 2 && ph > 2) {
+    // 576x832 버퍼 단계 경량 망점 스무딩: 저~중채도 스크린톤/모래(chroma < 95)만
+    // 4-이웃 평균과 50% 블렌딩해 잔여 점박이 억제 (원본 먹선은 Pass 2에서 100% 복원).
+    final raw = Uint8List.fromList(color.getBytes(order: img.ChannelOrder.rgb));
+    final dst = color.getBytes(order: img.ChannelOrder.rgb);
+    final stride = pw * 3;
+    for (var y = 1; y < ph - 1; y++) {
+      for (var x = 1; x < pw - 1; x++) {
+        final idx = (y * pw + x) * 3;
+        final cr = raw[idx], cg = raw[idx + 1], cb = raw[idx + 2];
+        final maxC = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
+        final minC = cr < cg ? (cr < cb ? cr : cb) : (cg < cb ? cg : cb);
+        if (maxC - minC < 95) {
+          final luma = (cr * 77 + cg * 150 + cb * 29) >> 8;
+          if (luma >= 75 && luma <= 220) {
+            final l = idx - 3, rIdx = idx + 3, u = idx - stride, d = idx + stride;
+            final ar = (raw[l] + raw[rIdx] + raw[u] + raw[d]) >> 2;
+            final ag = (raw[l + 1] + raw[rIdx + 1] + raw[u + 1] + raw[d + 1]) >> 2;
+            final ab = (raw[l + 2] + raw[rIdx + 2] + raw[u + 2] + raw[d + 2]) >> 2;
+            dst[idx] = (cr + ar) >> 1;
+            dst[idx + 1] = (cg + ag) >> 1;
+            dst[idx + 2] = (cb + ab) >> 1;
+          }
+        }
+      }
+    }
+  }
   if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints);
   return color;
 }
@@ -1128,7 +1154,6 @@ img.Image _composeRgbMultiply(
 
   final bool adjustSat = (saturation - 1.0).abs() > 0.02;
   final bool blend = (blendRatio - 1.0).abs() > 0.01;
-  final bool customInk = (inkContrast - 1.0).abs() > 0.02;
 
   final isSoftPastel = style == 'soft_pastel';
   final isVividAnime = style == 'vivid_anime';
@@ -1137,6 +1162,18 @@ img.Image _composeRgbMultiply(
   final isMonochromeAccent = style == 'monochrome_accent';
   final isChromaticNovel = style == 'chromatic_novel';
   final isEinkPantone = style == 'eink_pantone';
+
+  // Precompute inkContrast LUT once per page instead of calling math.pow per pixel.
+  final bool customInk = (inkContrast - 1.0).abs() > 0.02;
+  Uint16List? customInkLut;
+  if (customInk) {
+    customInkLut = Uint16List(160);
+    for (var iy = 0; iy < 160; iy++) {
+      final factor = math.pow(iy / 160.0, inkContrast - 1.0);
+      customInkLut[iy] = (_lutLineFactor[iy] * factor).round().clamp(0, 1024);
+    }
+  }
+  final int sat256 = (saturation * 256.0).round();
 
   // chromatic_novel: 수직 대기 조명(Vertical Atmosphere Gradient)을 위한 이미지 치수
   final imgWidth = src.width;
@@ -1210,13 +1247,21 @@ img.Image _composeRgbMultiply(
         }
       }
 
+      // 사용자 채도 슬라이더 연동 (chromatic_novel)
+      if (adjustSat) {
+        final cgGray = (cr * 77 + cg * 150 + cb * 29) >> 8;
+        cr = (cgGray + (((cr - cgGray) * sat256) >> 8)).clamp(0, 255);
+        cg = (cgGray + (((cg - cgGray) * sat256) >> 8)).clamp(0, 255);
+        cb = (cgGray + (((cb - cgGray) * sat256) >> 8)).clamp(0, 255);
+      }
+
       // ① 먹선 100% 선명도 복원 + 말풍선 순백 보호 (원칙 1)
-      // gamma 0.70, Pure Black #000000 보장
+      // gamma 0.70, Pure Black #000000 보장 + 사용자 먹선 대비 연동
       int outR, outG, outB;
       if (y >= 240) {
         outR = 255; outG = 255; outB = 255; // 순백 절대 보호
       } else {
-        final lf = _lutLineFactor[y]; // 0..1024 (gamma 0.70)
+        final lf = (customInkLut != null && y < 160) ? customInkLut[y] : _lutLineFactor[y];
         outR = ((cr * lf) >> 10).clamp(0, 255);
         outG = ((cg * lf) >> 10).clamp(0, 255);
         outB = ((cb * lf) >> 10).clamp(0, 255);
@@ -1260,6 +1305,12 @@ img.Image _composeRgbMultiply(
         outR = (boostR * liftY) >> 8;
         outG = (boostG * liftY) >> 8;
         outB = (boostB * liftY) >> 8;
+        if (adjustSat) {
+          final eGray = (outR * 77 + outG * 150 + outB * 29) >> 8;
+          outR = (eGray + (((outR - eGray) * sat256) >> 8)).clamp(0, 255);
+          outG = (eGray + (((outG - eGray) * sat256) >> 8)).clamp(0, 255);
+          outB = (eGray + (((outB - eGray) * sat256) >> 8)).clamp(0, 255);
+        }
       }
 
       if (blend) {
@@ -1331,9 +1382,8 @@ img.Image _composeRgbMultiply(
     } else if (isVividAnime) {
       // Crisp deep black line art
       if (y < 180) lf = (lf * 0.88).round().clamp(0, 1024);
-    } else if (customInk && y < 160) {
-      final factor = math.pow(y / 160.0, inkContrast - 1.0);
-      lf = (lf * factor).round().clamp(0, 1024);
+    } else if (customInkLut != null && y < 160) {
+      lf = customInkLut[y];
     }
 
     var r = ((cr * lf + 512) / 1024).round().clamp(0, 255);

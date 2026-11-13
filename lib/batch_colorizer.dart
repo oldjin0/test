@@ -316,6 +316,23 @@ class BatchColorizerEngine {
     }
   }
 
+  int get failedCount => queue.where((item) => !item.completed && item.error != null).length;
+
+  Future<void> retryFailed() async {
+    var changed = false;
+    for (final item in queue) {
+      if (!item.completed && item.error != null) {
+        item.error = null;
+        item.status = '대기 중';
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    _updateProgressOverview();
+    await saveQueue();
+    await start();
+  }
+
   void clearQueue() {
     queue.clear();
     _updateProgressOverview();
