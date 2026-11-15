@@ -55,6 +55,14 @@ jobs:
         env:
           PYTHONPATH: /tmp/mcv2
         run: python convert_manga.py --weights /tmp/mcv2/networks/generator.zip --width 448 --out ../../assets/models/colorizer.tflite
+      - name: Convert the high-detail pair (576 wide; the app's optional setting)
+        working-directory: tools/model
+        env:
+          PYTHONPATH: /tmp/mcv2
+        run: |
+          python convert_denoiser.py --weights /tmp/dn.bin --width 576 --out ../../assets/models/denoiser576.tflite
+          python convert_manga.py --weights /tmp/mcv2/networks/generator.zip --width 576 --out ../../assets/models/colorizer576.tflite
+          ls -l ../../assets/models
       - name: Preview on sample images (plain, and screentoned with/without denoise)
         working-directory: tools/model
         run: |
@@ -66,7 +74,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add assets/models/colorizer.tflite assets/models/denoiser.tflite docs/colorize_preview.png docs/denoise_preview.png
+          git add assets/models/colorizer.tflite assets/models/denoiser.tflite assets/models/colorizer576.tflite assets/models/denoiser576.tflite docs/colorize_preview.png docs/denoise_preview.png
           git diff --cached --quiet || git commit -m "Add converted colorizer (with hint input), denoiser and previews"
           # The branch may have moved on while the models were converting.
           git pull --rebase origin "${{ github.ref_name }}"
