@@ -1000,6 +1000,181 @@ img.Image _toneFilter(img.Image src) {
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
 }
 
+/// How a style finishes the model's colors (see [_finishColor]).
+class _Finish {
+  const _Finish({
+    this.vibrance = 0.55,
+    this.saturation = 1.0,
+    this.contrast = 1.0,
+    this.accentOnly = false,
+    this.agedPaper = false,
+  });
+
+  /// Extra saturation for faint colors (fades out as a color gets strong).
+  final double vibrance;
+
+  /// Saturation of every color.
+  final double saturation;
+
+  /// Contrast of the color's own shading around a light gray.
+  final double contrast;
+
+  /// Only strong colors stay; the rest becomes gray ink.
+  final bool accentOnly;
+
+  /// Cream paper, faded colors, shading that never reaches white or black.
+  final bool agedPaper;
+}
+
+const _finishStyles = <String, _Finish>{
+  'natural': _Finish(),
+  'soft_pastel': _Finish(),
+  'warm_amber': _Finish(),
+  'cinematic_warm': _Finish(),
+  'vivid_anime': _Finish(vibrance: 0.9, saturation: 1.45, contrast: 1.18),
+  'retro_print': _Finish(vibrance: 0.2, saturation: 0.72, agedPaper: true),
+  'monochrome_accent': _Finish(vibrance: 0.0, saturation: 1.5, accentOnly: true),
+};
+
+double _smoothStep(double a, double b, double x) {
+  final t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+  return t * t * (3 - 2 * t);
+}
+
+/// Cleans up the model's colors ([color], with the model's input [gray] of
+/// stride [iw]) the way a colorist would before shading: the tint the model
+/// lays over the paper is taken out so paper is white, colors are evened out
+/// within an area (not across line art or a change of tone), faint blotches
+/// on paper are dropped, and pale colors are strengthened. Then the style's
+/// own look is applied. The color's shading (its luma) is kept.
+void _finishColor(img.Image color, Float32List gray, int iw, _Finish f) {
+  final w = color.width, h = color.height, n = w * h;
+  if (n == 0) return;
+  final src = color.getBytes(order: img.ChannelOrder.rgb);
+  final g = Uint8List(n);
+  final yy = Float32List(n);
+  var cb = Float32List(n), cr = Float32List(n);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      final i = y * w + x, j = i * 3;
+      final r = src[j], gg = src[j + 1], b = src[j + 2];
+      g[i] = (gray[y * iw + x] * 255).round().clamp(0, 255);
+      yy[i] = 0.299 * r + 0.587 * gg + 0.114 * b;
+      cb[i] = -0.168736 * r - 0.331264 * gg + 0.5 * b;
+      cr[i] = 0.5 * r - 0.418688 * gg - 0.081312 * b;
+    }
+  }
+
+  // The paper's tint: the median color of the bright pixels.
+  final hb = Int32List(256), hr = Int32List(256);
+  var bright = 0;
+  for (var i = 0; i < n; i++) {
+    if (g[i] < 225) continue;
+    bright++;
+    hb[(cb[i] + 128).round().clamp(0, 255)]++;
+    hr[(cr[i] + 128).round().clamp(0, 255)]++;
+  }
+  var castB = 0.0, castR = 0.0;
+  if (bright * 50 >= n) {
+    double median(Int32List hist) {
+      var acc = 0;
+      for (var v = 0; v < 256; v++) {
+        acc += hist[v];
+        if (acc * 2 >= bright) return v - 128.0;
+      }
+      return 0;
+    }
+
+    castB = median(hb);
+    castR = median(hr);
+    final m = math.sqrt(castB * castB + castR * castR);
+    if (m > 30) {
+      castB *= 30 / m;
+      castR *= 30 / m;
+    }
+  }
+  final wbLut = Float32List(256), paperLut = Float32List(256);
+  for (var v = 0; v < 256; v++) {
+    wbLut[v] = _smoothStep(150, 235, v.toDouble());
+    paperLut[v] = _smoothStep(200, 240, v.toDouble());
+  }
+  for (var i = 0; i < n; i++) {
+    final k = wbLut[g[i]];
+    cb[i] -= castB * k;
+    cr[i] -= castR * k;
+  }
+
+  // Even the colors out among neighbors of a similar gray.
+  final near = Float32List(256);
+  for (var d = 0; d < 256; d++) {
+    final t = (1 - d / 20.0).clamp(0.0, 1.0);
+    near[d] = t * t;
+  }
+  for (var pass = 0; pass < 2; pass++) {
+    final nb = Float32List(n), nr = Float32List(n);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final i = y * w + x, gi = g[i];
+        var sb = 0.0, sr = 0.0, sw = 0.0;
+        for (var dy = -4; dy <= 4; dy += 2) {
+          final y2 = (y + dy).clamp(0, h - 1) * w;
+          for (var dx = -4; dx <= 4; dx += 2) {
+            final k = y2 + (x + dx).clamp(0, w - 1);
+            final wt = near[(g[k] - gi).abs()];
+            sb += wt * cb[k];
+            sr += wt * cr[k];
+            sw += wt;
+          }
+        }
+        nb[i] = sb / sw;
+        nr[i] = sr / sw;
+      }
+    }
+    cb = nb;
+    cr = nr;
+  }
+
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      final i = y * w + x;
+      var b = cb[i].toDouble(), r = cr[i].toDouble(), l = yy[i].toDouble();
+      final m = math.sqrt(b * b + r * r);
+      var gain = f.saturation * (1 + f.vibrance * (1 - m / 64.0).clamp(0.0, 1.0));
+      gain *= 1 - paperLut[g[i]] * (1 - _smoothStep(8, 22, m));
+      if (f.accentOnly) gain *= _smoothStep(22, 40, m);
+      b *= gain;
+      r *= gain;
+      if (f.contrast != 1.0) l = ((l - 150) * f.contrast + 150).clamp(0.0, 255.0);
+      if (f.agedPaper) {
+        l = 30 + l * 202 / 255;
+        final t = l / 255;
+        b -= 18 * t;
+        r += 7 * t;
+      }
+      // Back to RGB; a color outside the range loses saturation, not hue.
+      final dr = 1.402 * r, dg = -0.344136 * b - 0.714136 * r, db = 1.772 * b;
+      var fit = 1.0;
+      for (final d in [dr, dg, db]) {
+        if (d > 0) {
+          final t = (255 - l) / d;
+          if (t < fit) fit = t;
+        } else if (d < 0) {
+          final t = -l / d;
+          if (t < fit) fit = t;
+        }
+      }
+      if (fit < 0) fit = 0;
+      color.setPixelRgb(
+        x,
+        y,
+        (l + dr * fit).round().clamp(0, 255),
+        (l + dg * fit).round().clamp(0, 255),
+        (l + db * fit).round().clamp(0, 255),
+      );
+    }
+  }
+}
+
 /// The model's colors for the page area, and the gray the model colored
 /// them from ([base], same size): the colors already carry that shading, so
 /// the composition adds only what the full-size page has beyond it.
@@ -1122,6 +1297,7 @@ _RgbPrediction _predictRgb(
       }
     }
   }
+  if (_finishStyles.containsKey(style)) _finishColor(color, gray, iw, _finishStyles[style]!);
   if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints, base);
   return (color: color, base: base);
 }
@@ -1157,15 +1333,22 @@ const _inkKnee = 96;
 /// twice and turns its colors muddy; this adds only the detail the
 /// full-size page has beyond the model's input (thin lines, screentone
 /// dots). Brightening stops where the color's largest channel [maxChannel]
-/// would clip, which keeps the hue.
-int _pageFactor(int y, int modelGray, double maxChannel) {
+/// would clip, which keeps the hue. Below [knee] the ink goes to black, or
+/// to [inkFloor] of the color for a faded-ink look.
+int _pageFactor(
+  int y,
+  int modelGray,
+  double maxChannel, {
+  int knee = _inkKnee,
+  double inkFloor = 0.0,
+}) {
   var k = (y + 8) / (modelGray + 8);
   if (k > 1.0) {
     if (k > _pageFactorMax) k = _pageFactorMax;
     final room = maxChannel > 1.0 ? 255.0 / maxChannel : _pageFactorMax;
     if (k > room) k = room < 1.0 ? 1.0 : room;
   }
-  if (y < _inkKnee) k *= y / _inkKnee;
+  if (y < knee) k *= inkFloor + (1.0 - inkFloor) * (y / knee);
   return (k * 1024).round();
 }
 
@@ -1209,7 +1392,6 @@ img.Image _composeRgbMultiply(
   final isVividAnime = style == 'vivid_anime';
   final isWarmAmber = style == 'warm_amber' || style == 'cinematic_warm';
   final isRetroPrint = style == 'retro_print';
-  final isMonochromeAccent = style == 'monochrome_accent';
   final isChromaticNovel = style == 'chromatic_novel';
   final isEinkPantone = style == 'eink_pantone';
 
@@ -1382,17 +1564,7 @@ img.Image _composeRgbMultiply(
     final gray = 0.299 * cr + 0.587 * cg + 0.114 * cb;
 
     // 1. Style-specific color transformations
-    if (isVividAnime) {
-      // S-curve contrast boost on colors for punchy anime cel look
-      cr = ((cr - 128.0) * 1.60 + 128.0).clamp(0.0, 255.0);
-      cg = ((cg - 128.0) * 1.60 + 128.0).clamp(0.0, 255.0);
-      cb = ((cb - 128.0) * 1.60 + 128.0).clamp(0.0, 255.0);
-      // a touch of extra saturation so the vivid look reads at fit-width zoom
-      final vg = 0.299 * cr + 0.587 * cg + 0.114 * cb;
-      cr = (vg + (cr - vg) * 1.15).clamp(0.0, 255.0);
-      cg = (vg + (cg - vg) * 1.15).clamp(0.0, 255.0);
-      cb = (vg + (cb - vg) * 1.15).clamp(0.0, 255.0);
-    } else if (isWarmAmber) {
+    if (isWarmAmber) {
       // Moderate the previous heavy brown cast to a pleasing warm amber/sepia tone
       final normY = (gray / 255.0).clamp(0.0, 1.0);
       cr = (cr + 14.0 * normY).clamp(0.0, 255.0);
@@ -1402,18 +1574,6 @@ img.Image _composeRgbMultiply(
       cr = (gray * 0.2 + cr * 0.8).clamp(0.0, 255.0);
       cg = (gray * 0.2 + cg * 0.8).clamp(0.0, 255.0);
       cb = (gray * 0.2 + cb * 0.8).clamp(0.0, 255.0);
-    } else if (isMonochromeAccent) {
-      // Accent mode: keep background and muted areas as pure monochrome ink,
-      // only let distinct saturated colors pop through
-      final chromaDist = math.sqrt(
-        (cr - gray) * (cr - gray) + (cg - gray) * (cg - gray) + (cb - gray) * (cb - gray),
-      );
-      if (chromaDist < 26.0) {
-        final t = (chromaDist / 26.0).clamp(0.0, 1.0);
-        cr = gray + (cr - gray) * t;
-        cg = gray + (cg - gray) * t;
-        cb = gray + (cb - gray) * t;
-      }
     }
 
     if (adjustSat) {
@@ -1426,7 +1586,13 @@ img.Image _composeRgbMultiply(
     int lf;
     if (bl != null) {
       final mx = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
-      lf = _pageFactor(y, bl[i], mx);
+      lf = _pageFactor(
+        y,
+        bl[i],
+        mx,
+        knee: isVividAnime ? 128 : _inkKnee,
+        inkFloor: isRetroPrint ? 0.16 : 0.0,
+      );
       if (customInk && y > 0 && y < 160 && !isSoftPastel && !isVividAnime) {
         lf = (lf * math.pow(y / 160.0, inkContrast - 1.0)).round().clamp(0, 2048);
       }
@@ -1441,7 +1607,7 @@ img.Image _composeRgbMultiply(
     if (isSoftPastel) {
       // Soft line art: lines don't drop to harsh pitch black, soft charcoal/pencil feel
       lf = math.max(120, (lf * 0.92).round());
-    } else if (isVividAnime) {
+    } else if (isVividAnime && bl == null) {
       // Crisp deep black line art
       if (y < 180) lf = (lf * 0.88).round().clamp(0, 2048);
     }
@@ -1458,17 +1624,6 @@ img.Image _composeRgbMultiply(
       if (g > r && g > b && mx - mn > 12) {
         final target = (r + b) / 2.0;
         g = (g + (target - g) * 0.18).round().clamp(0, 255);
-      }
-    }
-
-    // 3. Style-specific paper / background tone
-    if (isRetroPrint) {
-      // Vintage newsprint/comic book cream paper tint
-      if (y > 190) {
-        final weight = ((y - 190) / 65.0).clamp(0.0, 1.0);
-        r = (r * (1.0 - weight * 0.03)).round().clamp(0, 255);
-        g = (g * (1.0 - weight * 0.06)).round().clamp(0, 255);
-        b = (b * (1.0 - weight * 0.16)).round().clamp(0, 255);
       }
     }
 

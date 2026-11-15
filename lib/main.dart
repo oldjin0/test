@@ -46,7 +46,7 @@ Future<void> main(List<String> args) async {
   }
 
   if (isPc) {
-    await pcWindowInit(title: '채색 뷰어');
+    await pcWindowInit(title: '올드진뷰어');
     unawaited(pruneExtractedArchives());
   }
   final colorizer = startColorizer(store);
@@ -186,7 +186,7 @@ class MangaViewerApp extends StatelessWidget {
     return ListenableBuilder(
       listenable: store,
       builder: (context, _) => MaterialApp(
-        title: '채색 뷰어',
+        title: '올드진뷰어',
         theme: store.eink ? einkTheme : ThemeData.dark(useMaterial3: true),
         home: HomePage(store: store, colorizer: colorizer, openOnStart: openOnStart),
       ),

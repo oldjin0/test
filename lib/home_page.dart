@@ -282,7 +282,7 @@ class _HomePageState extends State<HomePage> {
       listenable: _store,
       builder: (context, _) => Scaffold(
         appBar: AppBar(
-          title: const Text('채색 뷰어'),
+          title: const Text('올드진뷰어'),
           actions: [
             IconButton(tooltip: '파일 열기', icon: const Icon(Icons.file_open), onPressed: _import),
             PopupMenuButton<String>(

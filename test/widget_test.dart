@@ -282,6 +282,22 @@ void main() {
       expect(line.r + line.g + line.b, lessThan(90), reason: 'ink stays black');
     });
 
+    test('RGB model: the presets give clearly different colors', () {
+      final im = img.Image(width: 64, height: 96, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(128, 128, 128));
+      final page = img.encodePng(im);
+      int warmth(String style) {
+        final r = colorizePage(page, ShadedRgbModel(), style: style);
+        final px = img.decodeImage(r.bytes)!.getPixel(32, 48);
+        return (px.r - px.b).round();
+      }
+
+      final natural = warmth('natural'), vivid = warmth('vivid_anime');
+      expect(vivid, greaterThan(natural + 20), reason: 'vivid is stronger');
+      expect(warmth('monochrome_accent').abs(), lessThan(14), reason: 'faint color becomes ink');
+      expect(warmth('retro_print'), lessThan(natural), reason: 'retro is faded');
+    });
+
     test('hint model: hints are painted where the reader put them', () {
       final model = FakeRgbModel(inChannels: 5);
       final im = img.Image(width: 200, height: 100, numChannels: 3);

@@ -5,7 +5,7 @@ import 'package:window_manager/window_manager.dart';
 import 'pc_platform.dart';
 
 /// Window setup for the PC version: title, a sensible minimum size.
-Future<void> pcWindowInit({String title = '채색 뷰어'}) async {
+Future<void> pcWindowInit({String title = '올드진뷰어'}) async {
   if (!isPc) return;
   try {
     await windowManager.ensureInitialized();
