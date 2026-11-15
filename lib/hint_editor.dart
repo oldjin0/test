@@ -24,6 +24,8 @@ class HintEditorPage extends StatefulWidget {
     required this.loadPage,
     required this.initial,
     required this.preview,
+    this.sheet = const [],
+    this.onSheetChanged,
   });
 
   final String title;
@@ -33,13 +35,22 @@ class HintEditorPage extends StatefulWidget {
   /// Colorizes the page with the given hints.
   final Future<ColorizeResult> Function(List<ColorHint> hints) preview;
 
+  /// The book's color sheet (0xRRGGBB): the reader's own colors for its
+  /// characters, shown before the stock colors on every page of the book.
+  final List<int> sheet;
+
+  /// Called with the new sheet when a color is added or removed; without
+  /// it the sheet cannot be changed.
+  final void Function(List<int> sheet)? onSheetChanged;
+
   @override
   State<HintEditorPage> createState() => _HintEditorPageState();
 }
 
 class _HintEditorPageState extends State<HintEditorPage> {
   late final List<ColorHint> _hints = [...widget.initial];
-  int _color = hintPalette.first;
+  late final List<int> _sheet = [...widget.sheet];
+  late int _color = widget.sheet.isNotEmpty ? widget.sheet.first : hintPalette.first;
   Uint8List? _original;
   Size? _pageSize;
   Uint8List? _shown; // last preview, or the original
@@ -97,6 +108,79 @@ class _HintEditorPageState extends State<HintEditorPage> {
       change();
       _dirty = true;
     });
+  }
+
+  void _sheetChanged() => widget.onSheetChanged?.call([..._sheet]);
+
+  /// Lets the reader mix a color (starting from the selected one) and adds
+  /// it to the book's sheet.
+  Future<void> _addSheetColor() async {
+    var hsv = HSVColor.fromColor(Color(0xFF000000 | _color));
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) {
+          Widget slider(String label, double value, double max, HSVColor Function(double) apply) {
+            return Row(
+              children: [
+                SizedBox(width: 44, child: Text(label)),
+                Expanded(
+                  child: Slider(
+                    value: value.clamp(0.0, max),
+                    max: max,
+                    onChanged: (v) => setLocal(() => hsv = apply(v)),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          return AlertDialog(
+            title: const Text('이 책의 색 추가'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  key: const ValueKey('sheet-color-preview'),
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: hsv.toColor(),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                slider('색상', hsv.hue, 360, (v) => hsv.withHue(v.clamp(0.0, 359.9))),
+                slider('채도', hsv.saturation, 1, hsv.withSaturation),
+                slider('밝기', hsv.value, 1, hsv.withValue),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('취소')),
+              FilledButton(
+                key: const ValueKey('sheet-color-add'),
+                onPressed: () => Navigator.pop(context, hsv.toColor().toARGB32() & 0xFFFFFF),
+                child: const Text('추가'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (!_sheet.contains(picked)) _sheet.add(picked);
+      _color = picked;
+    });
+    _sheetChanged();
+  }
+
+  void _removeSheetColor(int c) {
+    setState(() {
+      _sheet.remove(c);
+      if (_color == c) _color = _sheet.isNotEmpty ? _sheet.first : hintPalette.first;
+    });
+    _sheetChanged();
   }
 
   /// Where the page is drawn inside [box] (BoxFit.contain, centered).
@@ -160,7 +244,8 @@ class _HintEditorPageState extends State<HintEditorPage> {
               children: [
                 const Expanded(
                   child: Text(
-                    '색을 고르고 칠할 곳을 누르세요. 점을 다시 누르면 지워집니다.',
+                    '색을 고르고 칠할 곳을 누르세요. 점을 다시 누르면 지워집니다. '
+                    '＋로 이 책의 색(인물 색 시트)을 저장하고, 길게 눌러 뺍니다.',
                     style: TextStyle(color: Colors.white70, fontSize: 12),
                   ),
                 ),
@@ -216,6 +301,34 @@ class _HintEditorPageState extends State<HintEditorPage> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         children: [
+          // The book's own sheet first (squares), then the stock colors.
+          for (final c in _sheet)
+            GestureDetector(
+              key: ValueKey('sheet-color-$c'),
+              onTap: () => setState(() => _color = c),
+              onLongPress: widget.onSheetChanged == null ? null : () => _removeSheetColor(c),
+              child: Container(
+                width: 36,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  color: Color(0xFF000000 | c),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: c == _color ? Colors.white : Colors.white24,
+                    width: c == _color ? 3 : 1,
+                  ),
+                ),
+              ),
+            ),
+          if (widget.onSheetChanged != null)
+            IconButton(
+              key: const ValueKey('sheet-color-new'),
+              tooltip: '이 책의 색 추가',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 40, height: 36),
+              icon: const Icon(Icons.add_circle_outline, color: Colors.white70),
+              onPressed: _addSheetColor,
+            ),
           for (final c in hintPalette)
             GestureDetector(
               key: ValueKey('hint-color-$c'),

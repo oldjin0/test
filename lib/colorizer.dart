@@ -14,6 +14,11 @@ import 'xnnpack.dart';
 const modelAsset = 'assets/models/colorizer.tflite';
 const denoiserAsset = 'assets/models/denoiser.tflite';
 
+/// The same models with a 576-wide input (the "high detail" setting): small
+/// faces and props get colors of their own, for about 1.6 times the work.
+const modelAsset576 = 'assets/models/colorizer576.tflite';
+const denoiserAsset576 = 'assets/models/denoiser576.tflite';
+
 /// Long side cap for the colorized output. Pages larger than this are scaled
 /// down first; phone screens do not show more detail than this anyway.
 const maxOutputSide = 2400;

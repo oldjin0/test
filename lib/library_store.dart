@@ -79,6 +79,10 @@ class LibraryStore extends ChangeNotifier {
   /// Per book: the main colors of its color pages (empty: it has none).
   final Map<String, List<int>> _palettes = {};
 
+  /// The reader's own color sheet per book (0xRRGGBB): the colors of its
+  /// characters, offered first when hints are placed.
+  final Map<String, List<int>> _sheets = {};
+
   /// Colorized pages follow the colors of the book's own color pages.
   bool bookPalette = true;
 
@@ -125,6 +129,10 @@ class LibraryStore extends ChangeNotifier {
   /// Clean screentone dots before colorizing, as the model's own pipeline
   /// does: printed pages get fuller color, for ~20% more time per page.
   bool denoise = true;
+
+  /// Colorize with the 576-wide model: finer colors, slower pages. Read when
+  /// the colorizer starts, so a change applies from the next start.
+  bool hiDetail = false;
 
   /// Pages colorized ahead of the reader.
   int prefetchPages = 10;
@@ -242,6 +250,7 @@ class LibraryStore extends ChangeNotifier {
     keepScreenOn = p.getBool('keepScreenOn') ?? keepScreenOn;
     brightness = p.getDouble('brightness') ?? brightness;
     denoise = p.getBool('denoise') ?? denoise;
+    hiDetail = p.getBool('hiDetail') ?? hiDetail;
     prefetchPages = p.getInt('prefetchPages') ?? prefetchPages;
     eink = p.getBool('eink') ?? eink;
     volumeKeys = p.getBool('volumeKeys') ?? volumeKeys;
@@ -282,6 +291,14 @@ class LibraryStore extends ChangeNotifier {
       if (raw != null) {
         for (final MapEntry(:key, :value) in (jsonDecode(raw) as Map).entries) {
           _palettes['$key'] = [for (final c in value as List) (c as num).toInt()];
+        }
+      }
+    } catch (_) {}
+    try {
+      final raw = p.getString('colorSheets');
+      if (raw != null) {
+        for (final MapEntry(:key, :value) in (jsonDecode(raw) as Map).entries) {
+          _sheets['$key'] = [for (final c in value as List) (c as num).toInt()];
         }
       }
     } catch (_) {}
@@ -372,6 +389,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setBool('keepScreenOn', keepScreenOn);
     _prefs.setDouble('brightness', brightness);
     _prefs.setBool('denoise', denoise);
+    _prefs.setBool('hiDetail', hiDetail);
     _prefs.setInt('prefetchPages', prefetchPages);
     _prefs.setBool('eink', eink);
     _prefs.setBool('volumeKeys', volumeKeys);
@@ -400,6 +418,7 @@ class LibraryStore extends ChangeNotifier {
     _prefs.setString('colorPreset', colorPreset);
     _prefs.setString('hints', jsonEncode(_hintsJson()));
     _prefs.setString('palettes', jsonEncode(_palettes));
+    _prefs.setString('colorSheets', jsonEncode(_sheets));
     _prefs.setBool('bookPalette', bookPalette);
     _prefs.setString(
       'bookRefs',
@@ -593,6 +612,18 @@ class LibraryStore extends ChangeNotifier {
   // Color hints
 
   List<ColorHint> hintsOf(String path, int page) => _hints[path]?[page] ?? const [];
+
+  /// The reader's color sheet of [path] (empty when none was made).
+  List<int> colorSheetOf(String path) => _sheets[path] ?? const [];
+
+  void setColorSheet(String path, List<int> colors) {
+    if (colors.isEmpty) {
+      _sheets.remove(path);
+    } else {
+      _sheets[path] = List.unmodifiable(colors);
+    }
+    _changed();
+  }
 
   /// The colors of [path]'s color pages, or null when not looked for yet.
   List<int>? paletteOf(String path) => _palettes[path];

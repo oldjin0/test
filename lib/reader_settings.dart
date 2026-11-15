@@ -205,6 +205,12 @@ List<Widget> _colorSection(BuildContext context, LibraryStore s) => [
   ),
   _switch('스크린톤 정리 후 채색', s.denoise, s.setDenoise, subtitle: '인쇄 만화의 망점을 정리해 색이 선명해집니다'),
   _switch(
+    '고정밀 채색 (576폭 모델)',
+    s.hiDetail,
+    (v) => s.update((s) => s.hiDetail = v),
+    subtitle: '작은 얼굴과 소품까지 더 세밀하게 칠합니다. 한 장에 1.5배쯤 더 걸리며, 앱을 다시 시작하면 적용됩니다',
+  ),
+  _switch(
     '컬러 페이지에서 책의 색 배우기',
     s.bookPalette,
     (v) => s.update((s) => s.bookPalette = v),

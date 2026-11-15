@@ -20,6 +20,9 @@ import 'pc_platform.dart';
 /// the page cache, so stale copies are replaced.
 const modelVersion = 'mcv2-448-hint-v2';
 
+/// The cache tag of pages colored with the 576-wide model.
+const modelVersion576 = 'mcv2-576-hint-v2';
+
 /// Extracts the bundled model [asset] to app storage once so the worker can
 /// memory-map it. Returns null when it is not bundled.
 Future<String?> ensureModelFile({String asset = modelAsset}) async {

@@ -923,6 +923,8 @@ class _ViewerPageState extends State<ViewerPage> {
           title: '${page + 1}페이지 색 지정',
           loadPage: () => book.page(page),
           initial: _store.hintsOf(widget.path, page),
+          sheet: _store.colorSheetOf(widget.path),
+          onSheetChanged: (sheet) => _store.setColorSheet(widget.path, sheet),
           preview: (hints) => service.colorize(
             ColorizeService.keyFor(
               widget.path,

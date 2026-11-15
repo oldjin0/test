@@ -10,7 +10,7 @@ import 'auto_colorizer_page.dart';
 import 'color_learner.dart';
 import 'colorize_service.dart';
 import 'comic_loader.dart' show isComicFile;
-import 'colorizer.dart' show denoiserAsset;
+import 'colorizer.dart' show denoiserAsset, denoiserAsset576, modelAsset576;
 import 'onnx_engine.dart';
 import 'pc_platform.dart';
 import 'pc_window.dart';
@@ -167,11 +167,21 @@ Future<ColorizeService> startColorizer([LibraryStore? store]) async {
       },
     );
   }
-  return ColorizeService.start(
-    modelPath: await ensureModelFile(),
-    denoiserPath: await ensureModelFile(asset: denoiserAsset),
-    cacheDir: cache,
-  );
+  // The high-detail (576-wide) pair when the setting asks for it and the
+  // build has it; the standard pair otherwise.
+  String? modelPath, denoiserPath;
+  if (store?.hiDetail ?? false) {
+    modelPath = await ensureModelFile(asset: modelAsset576);
+    if (modelPath != null) {
+      denoiserPath = await ensureModelFile(asset: denoiserAsset576);
+      ColorizeService.cacheTag = modelVersion576;
+    }
+  }
+  if (modelPath == null) {
+    modelPath = await ensureModelFile();
+    denoiserPath = await ensureModelFile(asset: denoiserAsset);
+  }
+  return ColorizeService.start(modelPath: modelPath, denoiserPath: denoiserPath, cacheDir: cache);
 }
 
 class MangaViewerApp extends StatelessWidget {
