@@ -1008,8 +1008,8 @@ img.Image _toneFilter(img.Image src) {
 /// How a style finishes the model's colors (see [_finishColor]).
 class _Finish {
   const _Finish({
-    this.vibrance = 0.55,
-    this.saturation = 1.0,
+    this.vibrance = 0.9,
+    this.saturation = 1.1,
     this.contrast = 1.0,
     this.accentOnly = false,
     this.agedPaper = false,
@@ -1036,7 +1036,7 @@ const _finishStyles = <String, _Finish>{
   'soft_pastel': _Finish(),
   'warm_amber': _Finish(),
   'cinematic_warm': _Finish(),
-  'vivid_anime': _Finish(vibrance: 0.9, saturation: 1.45, contrast: 1.18),
+  'vivid_anime': _Finish(vibrance: 1.1, saturation: 1.5, contrast: 1.18),
   'retro_print': _Finish(vibrance: 0.2, saturation: 0.72, agedPaper: true),
   'monochrome_accent': _Finish(vibrance: 0.0, saturation: 1.5, accentOnly: true),
 };
@@ -1145,7 +1145,8 @@ void _finishColor(img.Image color, Float32List gray, int iw, _Finish f) {
       var b = cb[i].toDouble(), r = cr[i].toDouble(), l = yy[i].toDouble();
       final m = math.sqrt(b * b + r * r);
       var gain = f.saturation * (1 + f.vibrance * (1 - m / 64.0).clamp(0.0, 1.0));
-      gain *= 1 - paperLut[g[i]] * (1 - _smoothStep(8, 22, m));
+      // Only the faintest tints go: pale walls, skies and skin keep theirs.
+      gain *= 1 - paperLut[g[i]] * (1 - _smoothStep(3, 10, m));
       if (f.accentOnly) gain *= _smoothStep(22, 40, m);
       b *= gain;
       r *= gain;
