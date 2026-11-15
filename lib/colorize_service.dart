@@ -151,7 +151,7 @@ class ColorizeService {
 
   /// Names how the model's colors are put on the page (see
   /// `_composeChroma` and `_composeRgbMultiply`); part of the cache keys.
-  static const composeTag = '-v5universal';
+  static const composeTag = '-v6ratio';
 
   /// Color e-ink processing level ([InkColor]; 0 = off, 1..4). Part of the
   /// cache keys; the library settings set it from the E-ink mode.
@@ -638,7 +638,9 @@ class ColorizeService {
   /// steps (book colors, color e-ink: remade from their plain copy in a
   /// moment) go first, oldest first; then the least recently used of the
   /// rest, whose model run is what takes time.
-  static final _obsoleteComposeTag = RegExp(r'-v\d+[a-z0-9]*');
+  // Letters after the number: the model tag before it ends in a bare "-v2",
+  // and matching that made every cached page look obsolete and get deleted.
+  static final _obsoleteComposeTag = RegExp(r'-v\d+[a-z][a-z0-9]*');
 
   static Future<void> pruneCache(Directory dir, {required int maxBytes}) async {
     try {

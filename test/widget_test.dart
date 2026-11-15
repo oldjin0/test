@@ -98,6 +98,36 @@ class FakeRgbModel implements ColorModel {
   void close() {}
 }
 
+/// RGB model that, like the real one, keeps the input's shading in its
+/// colors: a warm tint of the input gray.
+class ShadedRgbModel implements ColorModel {
+  @override
+  int get inChannels => 1;
+  @override
+  int get inWidth => 64;
+  @override
+  int get inHeight => 96;
+  @override
+  int get outWidth => 64;
+  @override
+  int get outHeight => 96;
+  @override
+  ModelOutput get output => ModelOutput.rgb;
+  @override
+  Float32List predict(Float32List input) {
+    final out = Float32List(64 * 96 * 3);
+    for (var i = 0; i < 64 * 96; i++) {
+      out[i * 3] = input[i];
+      out[i * 3 + 1] = input[i] * 0.8;
+      out[i * 3 + 2] = input[i] * 0.6;
+    }
+    return out;
+  }
+
+  @override
+  void close() {}
+}
+
 /// Gray manga-like page: white paper, a black frame line, a mid-gray fill.
 Uint8List grayPage({int w = 120, int h = 160, int tint = 0}) {
   final im = img.Image(width: w, height: h, numChannels: 3);
@@ -235,6 +265,21 @@ void main() {
         final px = out.getPixel(pt.x, pt.y);
         expect(px.r - px.b, greaterThan(30), reason: 'orange at $pt, no blue padding');
       }
+    });
+
+    test('RGB model: a toned area keeps the model color, not darkened twice', () {
+      // Mid-gray page with a black line. The model's color already has the
+      // gray's shading; the page's gray must not be multiplied in again.
+      final im = img.Image(width: 64, height: 96, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(128, 128, 128));
+      img.fillRect(im, x1: 30, y1: 0, x2: 33, y2: 95, color: img.ColorRgb8(0, 0, 0));
+      final r = colorizePage(img.encodePng(im), ShadedRgbModel());
+      final out = img.decodeImage(r.bytes)!;
+      final tone = out.getPixel(10, 48);
+      expect(tone.r, closeTo(128, 10), reason: 'as bright as the model painted it');
+      expect(tone.r - tone.b, greaterThan(30), reason: 'and in its color');
+      final line = out.getPixel(31, 48);
+      expect(line.r + line.g + line.b, lessThan(90), reason: 'ink stays black');
     });
 
     test('hint model: hints are painted where the reader put them', () {

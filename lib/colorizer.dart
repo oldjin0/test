@@ -415,11 +415,16 @@ ColorizeResult colorizePage(
     if (model.output == ModelOutput.rgb && style == 'cel_shade') {
       // 클린 셀 (팬컬러링): the model's colors are re-shaded as flat cel
       // fills (cel_shade.dart) instead of the multiply composition.
-      out = celShadeImage(src, _predictRgb(src, model, hints, denoiser, look: look, style: style));
+      out = celShadeImage(
+        src,
+        _predictRgb(src, model, hints, denoiser, look: look, style: style).color,
+      );
     } else if (model.output == ModelOutput.rgb) {
+      final pred = _predictRgb(src, model, hints, denoiser, look: look, style: style);
       out = _composeRgbMultiply(
         src,
-        _predictRgb(src, model, hints, denoiser, look: look, style: style),
+        pred.color,
+        base: pred.base,
         inkContrast: inkContrast,
         saturation: saturation ?? 1.0,
         blendRatio: blendRatio,
@@ -995,8 +1000,13 @@ img.Image _toneFilter(img.Image src) {
   return img.Image.fromBytes(width: src.width, height: src.height, bytes: o.buffer, numChannels: 3);
 }
 
+/// The model's colors for the page area, and the gray the model colored
+/// them from ([base], same size): the colors already carry that shading, so
+/// the composition adds only what the full-size page has beyond it.
+typedef _RgbPrediction = ({img.Image color, img.Image base});
+
 /// Predicts full RGB directly from the manga model and crops to the page area.
-img.Image _predictRgb(
+_RgbPrediction _predictRgb(
   img.Image src,
   ColorModel model,
   List<ColorHint> hints,
@@ -1027,9 +1037,12 @@ img.Image _predictRgb(
 
   final ow = model.outWidth;
   final color = img.Image(width: pw, height: ph, numChannels: 3);
+  final base = img.Image(width: pw, height: ph, numChannels: 3);
   for (var y = 0; y < ph; y++) {
     for (var x = 0; x < pw; x++) {
       final k = y * ow + x;
+      final bv = (gray[y * iw + x] * 255).round().clamp(0, 255);
+      base.setPixelRgb(x, y, bv, bv, bv);
       var r = (pred[k * 3] * 255).round().clamp(0, 255);
       var g = (pred[k * 3 + 1] * 255).round().clamp(0, 255);
       var b = (pred[k * 3 + 2] * 255).round().clamp(0, 255);
@@ -1109,8 +1122,8 @@ img.Image _predictRgb(
       }
     }
   }
-  if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints);
-  return color;
+  if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints, base);
+  return (color: color, base: base);
 }
 
 /// Precomputed line factor with shadow & heavy screentone lifting:
@@ -1131,12 +1144,38 @@ final Uint16List _lutLineFactor = () {
   return list;
 }();
 
+/// How much brighter than the model's own shading a page pixel may get
+/// (the white between screentone dots), and the page gray below which ink
+/// is pulled to black whatever the model painted there.
+const _pageFactorMax = 1.2;
+const _inkKnee = 96;
+
+/// The factor (x1024) for the model's color at one page pixel: the page's
+/// gray [y] relative to the gray the model colored from ([modelGray], both
+/// 0..255). The model's color already has that shading in it, so
+/// multiplying it by the page's gray once more darkens every toned area
+/// twice and turns its colors muddy; this adds only the detail the
+/// full-size page has beyond the model's input (thin lines, screentone
+/// dots). Brightening stops where the color's largest channel [maxChannel]
+/// would clip, which keeps the hue.
+int _pageFactor(int y, int modelGray, double maxChannel) {
+  var k = (y + 8) / (modelGray + 8);
+  if (k > 1.0) {
+    if (k > _pageFactorMax) k = _pageFactorMax;
+    final room = maxChannel > 1.0 ? 255.0 / maxChannel : _pageFactorMax;
+    if (k > room) k = room < 1.0 ? 1.0 : room;
+  }
+  if (y < _inkKnee) k *= y / _inkKnee;
+  return (k * 1024).round();
+}
+
 /// Composites the model's full RGB color with the high-resolution original scan
 /// using shadow and screentone lifting so colors clearly show up across shaded areas
 /// and ink lines are 100% crisp, without artificial white bleaching.
 img.Image _composeRgbMultiply(
   img.Image src,
   img.Image color, {
+  img.Image? base,
   double inkContrast = 1.0,
   double saturation = 1.0,
   double blendRatio = 1.0,
@@ -1151,6 +1190,17 @@ img.Image _composeRgbMultiply(
   final s = src.getBytes(order: img.ChannelOrder.rgb);
   final c = up.getBytes(order: img.ChannelOrder.rgb);
   final o = Uint8List(s.length);
+  // The gray the model saw, at page size (see [_pageFactor]).
+  final Uint8List? bl = base == null
+      ? null
+      : img
+            .copyResize(
+              base,
+              width: src.width,
+              height: src.height,
+              interpolation: img.Interpolation.linear,
+            )
+            .getBytes(order: img.ChannelOrder.rgb);
 
   final bool adjustSat = (saturation - 1.0).abs() > 0.02;
   final bool blend = (blendRatio - 1.0).abs() > 0.01;
@@ -1373,7 +1423,19 @@ img.Image _composeRgbMultiply(
     }
 
     final y = _luma(s[i], s[i + 1], s[i + 2]);
-    var lf = _lutLineFactor[y];
+    int lf;
+    if (bl != null) {
+      final mx = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb);
+      lf = _pageFactor(y, bl[i], mx);
+      if (customInk && y > 0 && y < 160 && !isSoftPastel && !isVividAnime) {
+        lf = (lf * math.pow(y / 160.0, inkContrast - 1.0)).round().clamp(0, 2048);
+      }
+    } else {
+      lf = _lutLineFactor[y];
+      if (customInkLut != null && y < 160 && !isSoftPastel && !isVividAnime) {
+        lf = customInkLut[y];
+      }
+    }
 
     // 2. Style-specific line factor / ink handling
     if (isSoftPastel) {
@@ -1381,9 +1443,7 @@ img.Image _composeRgbMultiply(
       lf = math.max(120, (lf * 0.92).round());
     } else if (isVividAnime) {
       // Crisp deep black line art
-      if (y < 180) lf = (lf * 0.88).round().clamp(0, 1024);
-    } else if (customInkLut != null && y < 160) {
-      lf = customInkLut[y];
+      if (y < 180) lf = (lf * 0.88).round().clamp(0, 2048);
     }
 
     var r = ((cr * lf + 512) / 1024).round().clamp(0, 255);
@@ -1431,8 +1491,9 @@ void _fillRgbHints(
   int iw,
   int pw,
   int ph,
-  List<ColorHint> hints,
-) {
+  List<ColorHint> hints, [
+  img.Image? base,
+]) {
   final cw = color.width, ch = color.height;
   for (final h in hints) {
     final mask = hintFillMask(gray, iw, pw, ph, h.x, h.y);
@@ -1450,6 +1511,12 @@ void _fillRgbHints(
           (p.g + (hg - p.g) * w).round(),
           (p.b + (hb - p.b) * w).round(),
         );
+        // A flat fill has no shading of its own: the page supplies all of it.
+        if (base != null) {
+          final bv = base.getPixel(x, y).r;
+          final nb = (bv + (255 - bv) * w).round();
+          base.setPixelRgb(x, y, nb, nb, nb);
+        }
       }
     }
   }
