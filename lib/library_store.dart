@@ -12,12 +12,12 @@ import 'book_colors.dart';
 import 'form_colors.dart';
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
+import 'gemini_service.dart';
 
 /// The build made for the Moaan Pantone 7 (a 7" E Ink Kaleido 3 reader):
 /// it starts in E-ink mode with the Moaan Pantone coloring preset, and
 /// updates itself from its own APK.
 const pantoneBuild = bool.fromEnvironment('PANTONE');
-import 'gemini_service.dart';
 
 class ReadProgress {
   ReadProgress(this.path, this.title, this.page, this.total, this.updatedAt);
