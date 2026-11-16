@@ -298,6 +298,25 @@ void main() {
       expect(warmth('retro_print'), lessThan(natural), reason: 'retro is faded');
     });
 
+    test('Moaan Pantone preset: screentone dots go, strokes and color stay', () {
+      // White page, a field of 2x2 dots every 4 px (a 25% tone) and a thick stroke.
+      final im = img.Image(width: 256, height: 384, numChannels: 3);
+      img.fill(im, color: img.ColorRgb8(255, 255, 255));
+      for (var y = 40; y < 340; y += 4) {
+        for (var x = 20; x < 100; x += 4) {
+          img.fillRect(im, x1: x, y1: y, x2: x + 1, y2: y + 1, color: img.ColorRgb8(0, 0, 0));
+        }
+      }
+      img.fillRect(im, x1: 160, y1: 20, x2: 167, y2: 360, color: img.ColorRgb8(0, 0, 0));
+      final r = colorizePage(img.encodePng(im), ShadedRgbModel(), style: 'eink_pantone');
+      final out = img.decodeImage(r.bytes)!;
+      final dot = out.getPixel(60, 200); // on a dot
+      expect(dot.r, greaterThan(140), reason: 'the dot is gone');
+      expect(dot.r - dot.b, greaterThan(20), reason: 'the tone is a color');
+      final stroke = out.getPixel(163, 200);
+      expect(stroke.r + stroke.g + stroke.b, lessThan(90), reason: 'the stroke is black');
+    });
+
     test('hint model: hints are painted where the reader put them', () {
       final model = FakeRgbModel(inChannels: 5);
       final im = img.Image(width: 200, height: 100, numChannels: 3);

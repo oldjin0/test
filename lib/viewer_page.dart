@@ -131,7 +131,7 @@ const colorPresets = <({String id, String name, String desc, IconData icon})>[
   (
     id: 'eink_pantone',
     name: '모안 팬톤 (칼레이도3 전용)',
-    desc: '300PPI 순수 흑백 먹선 분리 + 채도 3.0배 증폭 (전자잉크 물빠짐 보상)',
+    desc: '망점을 지워 색 얼룩(무아레)을 없애고, 넓고 고른 면에 진하고 밝은 색 · 먹선은 순흑, 종이는 순백',
     icon: Icons.chrome_reader_mode_outlined,
   ),
   (

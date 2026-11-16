@@ -425,7 +425,7 @@ ColorizeResult colorizePage(
         _predictRgb(src, model, hints, denoiser, look: look, style: style).color,
       );
     } else if (model.output == ModelOutput.rgb) {
-      final pred = _predictRgb(src, model, hints, denoiser, look: look, style: style);
+      final pred = _predictRgb(src, model, hints, denoiser, look: look, style: style, ink: ink);
       out = _composeRgbMultiply(
         src,
         pred.color,
@@ -454,7 +454,8 @@ ColorizeResult colorizePage(
   final jpg = img.encodeJpg(out, quality: 88);
   if ((ink > 0 || grade > 0 || !look.isEmpty) && mode == ColorizeMode.ai) {
     final rgb = Uint8List.fromList(out.getBytes(order: img.ChannelOrder.rgb));
-    _postProcess(rgb, out.width, out.height, look, ink, grade);
+    // The Moaan Pantone preset does its own panel color (see [_finishStyles]).
+    _postProcess(rgb, out.width, out.height, look, style == 'eink_pantone' ? 0 : ink, grade);
     return ColorizeResult(
       img.encodeJpg(
         img.Image.fromBytes(
@@ -508,7 +509,7 @@ img.Image _predictChroma(
   final iw = model.inWidth, ih = model.inHeight;
   final s = math.min(iw / src.width, ih / src.height);
   final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
-  final small = img.copyResize(src, width: pw, height: ph, interpolation: img.Interpolation.linear);
+  final small = _shrink(src, pw, ph);
   final sb = small.getBytes(order: img.ChannelOrder.rgb);
   final lab = model.output == ModelOutput.lab;
   var gray = Float32List(iw * ih)..fillRange(0, iw * ih, 1.0); // white paper
@@ -1013,6 +1014,12 @@ class _Finish {
     this.contrast = 1.0,
     this.accentOnly = false,
     this.agedPaper = false,
+    this.smoothRadius = 4,
+    this.smoothPasses = 2,
+    this.smoothLimit = 20.0,
+    this.coreLow = 3,
+    this.coreHigh = 10,
+    this.gamma = 1.0,
   });
 
   /// Extra saturation for faint colors (fades out as a color gets strong).
@@ -1029,6 +1036,19 @@ class _Finish {
 
   /// Cream paper, faded colors, shading that never reaches white or black.
   final bool agedPaper;
+
+  /// How far (model pixels), how often and across how much gray difference
+  /// colors are evened out.
+  final int smoothRadius;
+  final int smoothPasses;
+  final double smoothLimit;
+
+  /// On paper, tints fainter than [coreLow] go and those above [coreHigh] stay.
+  final double coreLow;
+  final double coreHigh;
+
+  /// Gamma of the color's shading; below 1 lifts the mid tones.
+  final double gamma;
 }
 
 const _finishStyles = <String, _Finish>{
@@ -1039,7 +1059,25 @@ const _finishStyles = <String, _Finish>{
   'vivid_anime': _Finish(vibrance: 1.1, saturation: 1.5, contrast: 1.18),
   'retro_print': _Finish(vibrance: 0.2, saturation: 0.72, agedPaper: true),
   'monochrome_accent': _Finish(vibrance: 0.0, saturation: 1.5, accentOnly: true),
+  // Moaan Pantone 7 (7" E Ink Kaleido 3): the color layer has half the
+  // resolution (150 ppi) and 16 levels per channel, and its filter dims and
+  // weakens every color. So: color in large even areas, nothing faint left
+  // on the paper, strong color, mid tones lifted.
+  'eink_pantone': _Finish(
+    vibrance: 1.2,
+    saturation: 1.7,
+    smoothRadius: 6,
+    smoothPasses: 3,
+    smoothLimit: 24.0,
+    coreLow: 6,
+    coreHigh: 16,
+    gamma: 0.78,
+  ),
 };
+
+/// Color strength of the Moaan Pantone preset for the reader's e-ink color
+/// level (0 off ... 5); level 3 is the preset as designed.
+double _einkStrength(int level) => const [1.0, 0.7, 0.85, 1.0, 1.2, 1.4][level.clamp(0, 5)];
 
 double _smoothStep(double a, double b, double x) {
   final t = ((x - a) / (b - a)).clamp(0.0, 1.0);
@@ -1052,7 +1090,7 @@ double _smoothStep(double a, double b, double x) {
 /// within an area (not across line art or a change of tone), faint blotches
 /// on paper are dropped, and pale colors are strengthened. Then the style's
 /// own look is applied. The color's shading (its luma) is kept.
-void _finishColor(img.Image color, Float32List gray, int iw, _Finish f) {
+void _finishColor(img.Image color, Float32List gray, int iw, _Finish f, {double strength = 1.0}) {
   final w = color.width, h = color.height, n = w * h;
   if (n == 0) return;
   final src = color.getBytes(order: img.ChannelOrder.rgb);
@@ -1112,27 +1150,28 @@ void _finishColor(img.Image color, Float32List gray, int iw, _Finish f) {
   // Even the colors out among neighbors of a similar gray.
   final near = Float32List(256);
   for (var d = 0; d < 256; d++) {
-    final t = (1 - d / 20.0).clamp(0.0, 1.0);
+    final t = (1 - d / f.smoothLimit).clamp(0.0, 1.0);
     near[d] = t * t;
   }
-  for (var pass = 0; pass < 2; pass++) {
+  final sr = f.smoothRadius;
+  for (var pass = 0; pass < f.smoothPasses; pass++) {
     final nb = Float32List(n), nr = Float32List(n);
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         final i = y * w + x, gi = g[i];
-        var sb = 0.0, sr = 0.0, sw = 0.0;
-        for (var dy = -4; dy <= 4; dy += 2) {
+        var sb = 0.0, sc = 0.0, sw = 0.0;
+        for (var dy = -sr; dy <= sr; dy += 2) {
           final y2 = (y + dy).clamp(0, h - 1) * w;
-          for (var dx = -4; dx <= 4; dx += 2) {
+          for (var dx = -sr; dx <= sr; dx += 2) {
             final k = y2 + (x + dx).clamp(0, w - 1);
             final wt = near[(g[k] - gi).abs()];
             sb += wt * cb[k];
-            sr += wt * cr[k];
+            sc += wt * cr[k];
             sw += wt;
           }
         }
         nb[i] = sb / sw;
-        nr[i] = sr / sw;
+        nr[i] = sc / sw;
       }
     }
     cb = nb;
@@ -1144,13 +1183,14 @@ void _finishColor(img.Image color, Float32List gray, int iw, _Finish f) {
       final i = y * w + x;
       var b = cb[i].toDouble(), r = cr[i].toDouble(), l = yy[i].toDouble();
       final m = math.sqrt(b * b + r * r);
-      var gain = f.saturation * (1 + f.vibrance * (1 - m / 64.0).clamp(0.0, 1.0));
+      var gain = f.saturation * strength * (1 + f.vibrance * (1 - m / 64.0).clamp(0.0, 1.0));
       // Only the faintest tints go: pale walls, skies and skin keep theirs.
-      gain *= 1 - paperLut[g[i]] * (1 - _smoothStep(3, 10, m));
+      gain *= 1 - paperLut[g[i]] * (1 - _smoothStep(f.coreLow, f.coreHigh, m));
       if (f.accentOnly) gain *= _smoothStep(22, 40, m);
       b *= gain;
       r *= gain;
       if (f.contrast != 1.0) l = ((l - 150) * f.contrast + 150).clamp(0.0, 255.0);
+      if (f.gamma != 1.0) l = 255 * math.pow((l / 255).clamp(0.0, 1.0), f.gamma).toDouble();
       if (f.agedPaper) {
         l = 30 + l * 202 / 255;
         final t = l / 255;
@@ -1194,11 +1234,12 @@ _RgbPrediction _predictRgb(
   PageDenoiser? denoiser, {
   BookLook look = BookLook.none,
   String style = 'natural',
+  int ink = 0,
 }) {
   final iw = model.inWidth, ih = model.inHeight;
   final s = math.min(iw / src.width, ih / src.height);
   final pw = math.max(1, (src.width * s).round()), ph = math.max(1, (src.height * s).round());
-  final small = img.copyResize(src, width: pw, height: ph, interpolation: img.Interpolation.linear);
+  final small = _shrink(src, pw, ph);
   final sb = small.getBytes(order: img.ChannelOrder.rgb);
   var gray = Float32List(iw * ih)..fillRange(0, iw * ih, 1.0); // white padding
   for (var y = 0; y < ph; y++) {
@@ -1303,7 +1344,16 @@ _RgbPrediction _predictRgb(
       }
     }
   }
-  if (_finishStyles.containsKey(style)) _finishColor(color, gray, iw, _finishStyles[style]!);
+  final finish = _finishStyles[style];
+  if (finish != null) {
+    _finishColor(
+      color,
+      gray,
+      iw,
+      finish,
+      strength: style == 'eink_pantone' ? _einkStrength(ink) : 1.0,
+    );
+  }
   if (hints.isNotEmpty) _fillRgbHints(color, gray, iw, pw, ph, hints, base);
   return (color: color, base: base);
 }
@@ -1358,6 +1408,165 @@ int _pageFactor(
   return (k * 1024).round();
 }
 
+/// [src] reduced to [w] x [h] by averaging the pixels each new pixel covers.
+/// A resize that samples single points turns screentone dots into coarse
+/// noise, which the model then cannot color.
+img.Image _shrink(img.Image src, int w, int h) {
+  if (w >= src.width || h >= src.height) {
+    return img.copyResize(src, width: w, height: h, interpolation: img.Interpolation.linear);
+  }
+  final sw = src.width, sh = src.height;
+  final s = src.getBytes(order: img.ChannelOrder.rgb);
+  final out = img.Image(width: w, height: h, numChannels: 3);
+  for (var y = 0; y < h; y++) {
+    final y0 = y * sh ~/ h;
+    var y1 = (y + 1) * sh ~/ h;
+    if (y1 <= y0) y1 = y0 + 1;
+    for (var x = 0; x < w; x++) {
+      final x0 = x * sw ~/ w;
+      var x1 = (x + 1) * sw ~/ w;
+      if (x1 <= x0) x1 = x0 + 1;
+      var r = 0, g = 0, b = 0;
+      for (var yy = y0; yy < y1; yy++) {
+        var i = (yy * sw + x0) * 3;
+        for (var xx = x0; xx < x1; xx++, i += 3) {
+          r += s[i];
+          g += s[i + 1];
+          b += s[i + 2];
+        }
+      }
+      final n = (y1 - y0) * (x1 - x0);
+      out.setPixelRgb(x, y, r ~/ n, g ~/ n, b ~/ n);
+    }
+  }
+  return out;
+}
+
+/// The luma of a page ([rgb], [w] x [h]) without its screentone dots, line
+/// art kept.
+///
+/// On a Kaleido panel every 300 ppi pixel sits under one red, green or blue
+/// filter, and a fine dot pattern beats against that grid into colored
+/// noise. Here a dot is whatever dark thing is shorter than a few pixels in
+/// every direction: a brightness closing along a short line removes it, and
+/// a stroke survives the closing along its own direction, so the darkest of
+/// four directions keeps strokes and loses dots. Only toned areas are
+/// touched (the local mean says which), so lettering on white paper stays.
+/// The work is done on a copy about as wide as the panel (1264 px).
+Uint8List _descreenLuma(Uint8List rgb, int w, int h) {
+  final n = w * h;
+  final g = Uint8List(n);
+  for (var i = 0, j = 0; i < n; i++, j += 3) {
+    g[i] = _luma(rgb[j], rgb[j + 1], rgb[j + 2]);
+  }
+  final f = math.max(1, (w / 1300).ceil());
+  final rw = w ~/ f, rh = h ~/ f;
+  if (rw < 64 || rh < 64) return g;
+  final gs = Uint8List(rw * rh);
+  for (var y = 0; y < rh; y++) {
+    for (var x = 0; x < rw; x++) {
+      var sum = 0;
+      for (var yy = 0; yy < f; yy++) {
+        final row = (y * f + yy) * w + x * f;
+        for (var xx = 0; xx < f; xx++) {
+          sum += g[row + xx];
+        }
+      }
+      gs[y * rw + x] = sum ~/ (f * f);
+    }
+  }
+
+  final mean = _boxMean(gs, rw, rh, math.max(3, (rw / 156).round()));
+  final half = rw >= 1100 ? 3 : 2;
+  const dxs = [1, 0, 1, 1], dys = [0, 1, 1, -1];
+  final kept = Uint8List(rw * rh)..fillRange(0, rw * rh, 255);
+  for (var d = 0; d < 4; d++) {
+    final closed = _lineExtreme(
+      _lineExtreme(gs, rw, rh, dxs[d], dys[d], half, true),
+      rw,
+      rh,
+      dxs[d],
+      dys[d],
+      half,
+      false,
+    );
+    for (var i = 0; i < closed.length; i++) {
+      if (closed[i] < kept[i]) kept[i] = closed[i];
+    }
+  }
+  // How much brighter each pixel gets, only inside toned areas.
+  final lift = Uint8List(rw * rh);
+  for (var i = 0; i < lift.length; i++) {
+    final d = kept[i] - gs[i];
+    if (d <= 0) continue;
+    lift[i] = (d * (1 - _smoothStep(215, 238, mean[i]))).round().clamp(0, 255);
+  }
+
+  final out = Uint8List(n);
+  for (var y = 0, i = 0; y < h; y++) {
+    final fy = ((y + 0.5) / f - 0.5).clamp(0.0, rh - 1.0);
+    final y0 = fy.floor(), y1 = math.min(rh - 1, y0 + 1);
+    final ty = fy - y0;
+    for (var x = 0; x < w; x++, i++) {
+      final fx = ((x + 0.5) / f - 0.5).clamp(0.0, rw - 1.0);
+      final x0 = fx.floor(), x1 = math.min(rw - 1, x0 + 1);
+      final tx = fx - x0;
+      final v =
+          (lift[y0 * rw + x0] * (1 - tx) + lift[y0 * rw + x1] * tx) * (1 - ty) +
+          (lift[y1 * rw + x0] * (1 - tx) + lift[y1 * rw + x1] * tx) * ty;
+      out[i] = (g[i] + v).round().clamp(0, 255);
+    }
+  }
+  return out;
+}
+
+/// The brightest ([brightest]) or darkest value of [src] along a line of
+/// [half] pixels to either side in direction ([dx], [dy]).
+Uint8List _lineExtreme(Uint8List src, int w, int h, int dx, int dy, int half, bool brightest) {
+  final out = Uint8List(w * h);
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var v = src[y * w + x];
+      for (var t = -half; t <= half; t++) {
+        if (t == 0) continue;
+        final xx = x + t * dx, yy = y + t * dy;
+        if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
+        final s = src[yy * w + xx];
+        if (brightest ? s > v : s < v) v = s;
+      }
+      out[y * w + x] = v;
+    }
+  }
+  return out;
+}
+
+/// The mean of [src] over a square of [r] pixels to every side.
+Float32List _boxMean(Uint8List src, int w, int h, int r) {
+  final tmp = Float32List(w * h), out = Float32List(w * h);
+  final k = 2 * r + 1;
+  for (var y = 0; y < h; y++) {
+    var sum = 0.0;
+    for (var x = -r; x <= r; x++) {
+      sum += src[y * w + x.clamp(0, w - 1)];
+    }
+    for (var x = 0; x < w; x++) {
+      tmp[y * w + x] = sum / k;
+      sum += src[y * w + (x + r + 1).clamp(0, w - 1)] - src[y * w + (x - r).clamp(0, w - 1)];
+    }
+  }
+  for (var x = 0; x < w; x++) {
+    var sum = 0.0;
+    for (var y = -r; y <= r; y++) {
+      sum += tmp[y.clamp(0, h - 1) * w + x];
+    }
+    for (var y = 0; y < h; y++) {
+      out[y * w + x] = sum / k;
+      sum += tmp[(y + r + 1).clamp(0, h - 1) * w + x] - tmp[(y - r).clamp(0, h - 1) * w + x];
+    }
+  }
+  return out;
+}
+
 /// Composites the model's full RGB color with the high-resolution original scan
 /// using shadow and screentone lifting so colors clearly show up across shaded areas
 /// and ink lines are 100% crisp, without artificial white bleaching.
@@ -1400,6 +1609,7 @@ img.Image _composeRgbMultiply(
   final isRetroPrint = style == 'retro_print';
   final isChromaticNovel = style == 'chromatic_novel';
   final isEinkPantone = style == 'eink_pantone';
+  final Uint8List? einkLuma = isEinkPantone ? _descreenLuma(s, src.width, src.height) : null;
 
   // Precompute inkContrast LUT once per page instead of calling math.pow per pixel.
   final bool customInk = (inkContrast - 1.0).abs() > 0.02;
@@ -1515,34 +1725,30 @@ img.Image _composeRgbMultiply(
       continue;
     }
 
-    if (isEinkPantone) {
-      final y = _luma(s[i], s[i + 1], s[i + 2]);
-      final r = c[i];
-      final g = c[i + 1];
-      final b = c[i + 2];
+    if (isEinkPantone && bl != null && einkLuma != null) {
+      // The model's finished color carries the tone (the dots are gone from
+      // [einkLuma]); strokes go to pure black and paper stays pure white,
+      // the two things the panel shows at its full 300 ppi.
+      final y = einkLuma[i ~/ 3];
+      final r = c[i], g = c[i + 1], b = c[i + 2];
+      final mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
       int outR, outG, outB;
-
-      if (y >= 232) {
+      if (y >= 236 && mn > 236) {
         outR = 255;
         outG = 255;
-        outB = 255; // 순백 여백 확장
-      } else if (y <= 115) {
-        // 300PPI 흑백 먹선 완전 분리 (컬러 0% 차단으로 글씨/펜선 선명도 극대화)
-        final bw = _lutLineFactor[y] >> 2;
-        outR = bw;
-        outG = bw;
-        outB = bw;
+        outB = 255;
       } else {
-        // 115 < y < 232: 채도 3.0배 증폭 & 고명도 유지 (칼레이도3 패널이 실제로
-        // 표시할 수 있는 채도까지 끌어올림 — 전자잉크 물빠짐 보상)
-        final avg = (r + g + b) ~/ 3;
-        final boostR = (avg + (r - avg) * 3).clamp(0, 255);
-        final boostG = (avg + (g - avg) * 3).clamp(0, 255);
-        final boostB = (avg + (b - avg) * 3).clamp(0, 255);
-        final liftY = 175 + ((y * 81) >> 8); // 어두워지지 않게 하한선 고정
-        outR = (boostR * liftY) >> 8;
-        outG = (boostG * liftY) >> 8;
-        outB = (boostB * liftY) >> 8;
+        final mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        var k = (y + 8) / (bl[i] + 8);
+        if (k > 1.0) {
+          if (k > 1.25) k = 1.25;
+          final room = mx > 1 ? 255.0 / mx : 1.25;
+          if (k > room) k = room < 1.0 ? 1.0 : room;
+        }
+        k *= _smoothStep(30, 125, y.toDouble());
+        outR = (r * k).round().clamp(0, 255);
+        outG = (g * k).round().clamp(0, 255);
+        outB = (b * k).round().clamp(0, 255);
         if (adjustSat) {
           final eGray = (outR * 77 + outG * 150 + outB * 29) >> 8;
           outR = (eGray + (((outR - eGray) * sat256) >> 8)).clamp(0, 255);
@@ -1557,9 +1763,9 @@ img.Image _composeRgbMultiply(
         outB = (s[i + 2] * (1.0 - blendRatio) + outB * blendRatio).round().clamp(0, 255);
       }
 
-      o[i] = outR.clamp(0, 255);
-      o[i + 1] = outG.clamp(0, 255);
-      o[i + 2] = outB.clamp(0, 255);
+      o[i] = outR;
+      o[i + 1] = outG;
+      o[i + 2] = outB;
       continue;
     }
 

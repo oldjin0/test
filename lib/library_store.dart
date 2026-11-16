@@ -12,6 +12,11 @@ import 'book_colors.dart';
 import 'form_colors.dart';
 import 'colorize_service.dart' show ColorizeService;
 import 'colorizer.dart' show ColorHint;
+
+/// The build made for the Moaan Pantone 7 (a 7" E Ink Kaleido 3 reader):
+/// it starts in E-ink mode with the Moaan Pantone coloring preset, and
+/// updates itself from its own APK.
+const pantoneBuild = bool.fromEnvironment('PANTONE');
 import 'gemini_service.dart';
 
 class ReadProgress {
@@ -138,7 +143,7 @@ class LibraryStore extends ChangeNotifier {
   int prefetchPages = 10;
 
   /// E-ink screens: instant turns, white paper, no animations.
-  bool eink = false;
+  bool eink = pantoneBuild;
 
   /// Volume (and e-reader page) buttons turn pages.
   bool volumeKeys = true;
@@ -180,7 +185,7 @@ class LibraryStore extends ChangeNotifier {
 
   /// E-ink: flash the screen black every this many turns to clear ghosting
   /// (0 = never).
-  int refreshEvery = 0;
+  int refreshEvery = pantoneBuild ? 10 : 0;
 
   /// Folder lists: 'name' or 'date' (newest first).
   String sortBy = 'name';
@@ -213,7 +218,7 @@ class LibraryStore extends ChangeNotifier {
   /// Active coloring preset: 'natural', 'chromatic_novel', 'eink_pantone',
   /// 'cel_shade', 'vivid_anime', 'warm_amber', 'soft_pastel', 'retro_print',
   /// 'monochrome_accent'
-  String colorPreset = 'natural';
+  String colorPreset = pantoneBuild ? 'eink_pantone' : 'natural';
 
   static Future<LibraryStore> load() async {
     final s = LibraryStore._(await SharedPreferences.getInstance());

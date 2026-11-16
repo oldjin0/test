@@ -98,6 +98,9 @@ jobs:
           # Standalone Auto Colorizer APK (arm64)
           flutter build apk --release $VER --target-platform android-arm64 -t lib/main_auto_colorizer.dart -PappIdSuffix=.autocolorizer -PappName="오토채색기"
           cp build/app/outputs/flutter-apk/app-release.apk dist/auto-colorizer-arm64.apk
+          # Moaan Pantone 7 edition (7" E Ink Kaleido 3): its own app, defaults and updater asset
+          flutter build apk --release $VER --target-platform android-arm64 --dart-define=PANTONE=true -PappIdSuffix=.pantone -PappName="올드진뷰어 팬톤"
+          cp build/app/outputs/flutter-apk/app-release.apk dist/oldjin-viewer-pantone-arm64.apk
           ls -l dist
       - name: Verify the APKs (persistent signing key, version code)
         run: |

@@ -14,7 +14,9 @@ import 'pc_platform.dart';
 /// a release `build-<N>` after the build and the emulator test both pass.
 const updateRepo = 'oldjin0/test';
 
-const _arm64Apk = 'manga-viewer-arm64.apk';
+const _arm64Apk = bool.fromEnvironment('PANTONE')
+    ? 'oldjin-viewer-pantone-arm64.apk'
+    : 'manga-viewer-arm64.apk';
 const _universalApk = 'manga-viewer-universal.apk';
 const _checksums = 'SHA256SUMS';
 const _windowsZip = 'MangaViewer-windows.zip';
